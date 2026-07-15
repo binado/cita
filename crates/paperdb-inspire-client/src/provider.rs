@@ -1,10 +1,10 @@
+use crate::{
+    Client, Error as ClientError, LiteratureId, LiteratureMetadata, LiteratureRecord,
+    PublicationInfo,
+};
 use async_trait::async_trait;
 use paperdb_core::{
     Locator, MetadataProvider, ProviderError, Publication, ResolvedPaper, strip_arxiv_version,
-};
-use paperdb_inspire_client::{
-    Client, Error as ClientError, LiteratureId, LiteratureMetadata, LiteratureRecord,
-    PublicationInfo,
 };
 
 pub struct InspireProvider {

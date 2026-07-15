@@ -103,8 +103,16 @@ pub fn strip_arxiv_version(id: &str) -> &str {
     id
 }
 
-pub(crate) fn normalize_arxiv(value: &str) -> String {
+/// Normalize an arXiv id for identity comparison: strip a trailing version
+/// and ASCII-lowercase the result.
+pub fn normalize_arxiv(value: &str) -> String {
     strip_arxiv_version(value).to_ascii_lowercase()
+}
+
+/// Normalize a DOI for identity comparison: trim whitespace and
+/// ASCII-lowercase (DOIs are case-insensitive by specification).
+pub fn normalize_doi(doi: &str) -> String {
+    doi.trim().to_ascii_lowercase()
 }
 
 fn parse_doi(value: &str) -> Option<String> {

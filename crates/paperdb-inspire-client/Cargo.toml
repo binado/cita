@@ -1,6 +1,6 @@
 [package]
 name = "paperdb-inspire-client"
-description = "A small asynchronous client for the INSPIRE literature API"
+description = "INSPIRE metadata provider for PaperDB, built on a reusable async INSPIRE literature API client"
 readme = "../../README.md"
 keywords = ["inspirehep", "literature", "physics", "api"]
 categories = ["api-bindings", "science"]
@@ -12,6 +12,8 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+async-trait.workspace = true
+paperdb-core = { path = "../paperdb-core" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -1,5 +1,6 @@
-use crate::locator::normalize_arxiv;
-use crate::{Paper, ResolvedPaper, fallback_key, validate_key};
+use paperdb_core::{
+    Paper, ResolvedPaper, fallback_key, normalize_arxiv, normalize_doi, validate_key,
+};
 use serde::Deserialize;
 use std::{
     collections::{HashMap, HashSet},
@@ -356,14 +357,14 @@ fn find_selector(papers: &[Paper], selector: &str) -> Option<usize> {
     if let Some(index) = papers.iter().position(|paper| paper.key == selector) {
         return Some(index);
     }
-    let locator = selector.parse::<crate::Locator>().ok()?;
+    let locator = selector.parse::<paperdb_core::Locator>().ok()?;
     papers.iter().position(|paper| match &locator {
-        crate::Locator::Inspire(id) => paper.inspire_id == Some(*id),
-        crate::Locator::Arxiv(id) => paper
+        paperdb_core::Locator::Inspire(id) => paper.inspire_id == Some(*id),
+        paperdb_core::Locator::Arxiv(id) => paper
             .arxiv_ids
             .iter()
             .any(|value| normalize_arxiv(value) == normalize_arxiv(id)),
-        crate::Locator::Doi(doi) => paper
+        paperdb_core::Locator::Doi(doi) => paper
             .dois
             .iter()
             .any(|value| normalize_doi(value) == normalize_doi(doi)),
@@ -412,10 +413,6 @@ fn validate_papers(papers: &[Paper]) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-fn normalize_doi(doi: &str) -> String {
-    doi.trim().to_ascii_lowercase()
 }
 
 #[cfg(test)]

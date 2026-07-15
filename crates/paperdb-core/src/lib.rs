@@ -1,15 +1,12 @@
-//! Provider-neutral types, manifest management, citation keys, and BibTeX.
+//! Provider-neutral vocabulary for PaperDB: paper models, locators,
+//! citation-key helpers, and the `MetadataProvider` trait.
 
-mod bibtex;
 mod key;
 mod locator;
-mod manifest;
 mod model;
 mod provider;
 
-pub use bibtex::export_bibtex;
 pub use key::{fallback_key, validate_key};
-pub use locator::{Locator, strip_arxiv_version};
-pub use manifest::{AddOutcome, Manifest};
+pub use locator::{Locator, normalize_arxiv, normalize_doi, strip_arxiv_version};
 pub use model::{Paper, Publication, ResolvedPaper};
 pub use provider::{MetadataProvider, ProviderError};

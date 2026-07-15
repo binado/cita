@@ -1,4 +1,4 @@
-use crate::Paper;
+use paperdb_core::Paper;
 
 pub fn export_bibtex(papers: &[Paper]) -> String {
     let mut papers = papers.iter().collect::<Vec<_>>();
@@ -64,7 +64,7 @@ fn field(output: &mut String, name: &str, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Publication;
+    use paperdb_core::Publication;
 
     #[test]
     fn produces_stable_sorted_tex_preserving_output() {

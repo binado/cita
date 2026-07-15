@@ -11,7 +11,7 @@ pub trait MetadataProvider: Send + Sync {
 pub enum ProviderError {
     #[error("invalid locator: {0}")]
     InvalidLocator(String),
-    #[error("no INSPIRE record found for {0}; it may be new or outside INSPIRE coverage")]
+    #[error("no record found for {0}")]
     NotFound(String),
     #[error("metadata provider request failed: {0}")]
     Request(String),

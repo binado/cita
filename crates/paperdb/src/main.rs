@@ -1,9 +1,10 @@
 mod git;
-mod inspire;
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand};
-use paperdb_core::{AddOutcome, Locator, Manifest, MetadataProvider, export_bibtex};
+use paperdb_core::{Locator, MetadataProvider};
+use paperdb_inspire_client::InspireProvider;
+use paperdb_manifest::{AddOutcome, Manifest, export_bibtex};
 use std::{
     env,
     io::Write,
@@ -92,7 +93,7 @@ async fn add(cwd: &Path, key: Option<&str>, values: &[String]) -> Result<()> {
     }
     let path = find_manifest(cwd)?;
     let mut manifest = Manifest::load(&path)?;
-    let provider = inspire::InspireProvider::new()?;
+    let provider = InspireProvider::new()?;
     let outcomes = if let Some(key) = key {
         let locator = values[0].parse::<Locator>()?;
         let paper = provider.resolve(&locator).await?;

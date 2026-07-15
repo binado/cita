@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
-use paperdb_core::{Manifest, Paper};
+use paperdb_core::Paper;
+use paperdb_manifest::Manifest;
 use std::{
     collections::BTreeMap,
     fs,
