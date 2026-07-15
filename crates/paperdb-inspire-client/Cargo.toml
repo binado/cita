@@ -1,0 +1,22 @@
+[package]
+name = "paperdb-inspire-client"
+description = "A small asynchronous client for the INSPIRE literature API"
+readme = "../../README.md"
+keywords = ["inspirehep", "literature", "physics", "api"]
+categories = ["api-bindings", "science"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

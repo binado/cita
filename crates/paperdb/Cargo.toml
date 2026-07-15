@@ -1,0 +1,29 @@
+[package]
+name = "paperdb"
+description = "A Git-friendly bibliography database"
+readme = "../../README.md"
+keywords = ["bibliography", "bibtex", "citations", "inspirehep"]
+categories = ["command-line-utilities", "science"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "paperdb"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+clap.workspace = true
+paperdb-core = { path = "../paperdb-core" }
+paperdb-inspire-client = { path = "../paperdb-inspire-client" }
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+toml.workspace = true
