@@ -1,10 +1,11 @@
-use async_trait::async_trait;
-use paperdb_core::{
-    Locator, MetadataProvider, ProviderError, Publication, ResolvedPaper, strip_arxiv_version,
-};
-use paperdb_inspire_client::{
+use crate::{
     Client, Error as ClientError, LiteratureId, LiteratureMetadata, LiteratureRecord,
     PublicationInfo,
+};
+use async_trait::async_trait;
+use paperdb_core::{
+    INSPIRE_SOURCE, Locator, MetadataProvider, PaperRecord, ProviderError, Publication,
+    ResolvedPaper, strip_arxiv_version,
 };
 
 pub struct InspireProvider {
@@ -55,7 +56,7 @@ fn map_record(record: LiteratureRecord) -> Result<ResolvedPaper, ProviderError> 
         .map(|value| value.title.trim().to_owned())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| ProviderError::Malformed("record has no title".into()))?;
-    let inspire_id = id.as_deref().and_then(|id| id.parse().ok());
+    let inspire_id: Option<u64> = id.as_deref().and_then(|id| id.parse().ok());
     let publication_info = select_publication(&metadata);
     let publication = publication_info.map(to_publication);
     let arxiv_ids = metadata
@@ -90,39 +91,41 @@ fn map_record(record: LiteratureRecord) -> Result<ResolvedPaper, ProviderError> 
 
     Ok(ResolvedPaper {
         suggested_key: metadata.texkeys.first().cloned(),
-        title,
-        authors: metadata
-            .authors
-            .iter()
-            .filter(|author| {
-                author.role.is_empty()
-                    || author
-                        .role
-                        .iter()
-                        .any(|role| role.to_ascii_lowercase().contains("author"))
-            })
-            .map(|author| author.full_name.clone())
-            .collect(),
-        collaborations: metadata
-            .collaborations
-            .iter()
-            .map(|item| item.value.clone())
-            .collect(),
-        year,
-        document_types: metadata.document_types,
-        url,
-        inspire_id,
-        arxiv_ids,
-        dois: metadata
-            .dois
-            .into_iter()
-            .map(|item| item.value.to_ascii_lowercase())
-            .collect(),
-        primary_category,
-        source: "inspire".into(),
-        source_updated,
-        preprint_date: metadata.preprint_date,
-        publication,
+        record: PaperRecord {
+            title,
+            authors: metadata
+                .authors
+                .iter()
+                .filter(|author| {
+                    author.role.is_empty()
+                        || author
+                            .role
+                            .iter()
+                            .any(|role| role.to_ascii_lowercase().contains("author"))
+                })
+                .map(|author| author.full_name.clone())
+                .collect(),
+            collaborations: metadata
+                .collaborations
+                .iter()
+                .map(|item| item.value.clone())
+                .collect(),
+            year,
+            document_types: metadata.document_types,
+            url,
+            source: INSPIRE_SOURCE.into(),
+            source_id: inspire_id.map(|id| id.to_string()),
+            arxiv_ids,
+            dois: metadata
+                .dois
+                .into_iter()
+                .map(|item| item.value.to_ascii_lowercase())
+                .collect(),
+            primary_category,
+            source_updated,
+            preprint_date: metadata.preprint_date,
+            publication,
+        },
     })
 }
 
@@ -207,12 +210,17 @@ mod tests {
         })).unwrap();
         let paper = map_record(record).unwrap();
         assert_eq!(paper.suggested_key.as_deref(), Some("Aad:2012tfa"));
-        assert_eq!(paper.title, "First title");
-        assert_eq!(paper.authors, ["Aad, Georges", "Writer, Will"]);
-        assert_eq!(paper.year, Some(2012));
-        assert_eq!(paper.arxiv_ids, ["1207.7214"]);
-        assert_eq!(paper.primary_category.as_deref(), Some("hep-ex"));
-        assert_eq!(paper.publication.unwrap().pages.as_deref(), Some("1-29"));
+        assert_eq!(paper.record.title, "First title");
+        assert_eq!(paper.record.authors, ["Aad, Georges", "Writer, Will"]);
+        assert_eq!(paper.record.year, Some(2012));
+        assert_eq!(paper.record.source, INSPIRE_SOURCE);
+        assert_eq!(paper.record.source_id.as_deref(), Some("1124337"));
+        assert_eq!(paper.record.arxiv_ids, ["1207.7214"]);
+        assert_eq!(paper.record.primary_category.as_deref(), Some("hep-ex"));
+        assert_eq!(
+            paper.record.publication.unwrap().pages.as_deref(),
+            Some("1-29")
+        );
     }
 
     #[test]

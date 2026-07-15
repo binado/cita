@@ -611,11 +611,10 @@ name = "paperdb"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "clap",
  "paperdb-core",
  "paperdb-inspire-client",
- "serde_json",
+ "paperdb-manifest",
  "tempfile",
  "tokio",
  "toml",
@@ -627,11 +626,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "serde",
- "tempfile",
  "thiserror",
- "tokio",
- "toml",
- "toml_edit",
  "unicode-normalization",
 ]
 
@@ -639,12 +634,26 @@ dependencies = [
 name = "paperdb-inspire-client"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "paperdb-core",
  "reqwest",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "paperdb-manifest"
+version = "0.1.0"
+dependencies = [
+ "paperdb-core",
+ "serde",
+ "tempfile",
+ "thiserror",
+ "toml",
+ "toml_edit",
 ]
 
 [[package]]

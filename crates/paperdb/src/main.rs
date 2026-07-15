@@ -1,9 +1,10 @@
 mod git;
-mod inspire;
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand};
-use paperdb_core::{AddOutcome, Locator, Manifest, MetadataProvider, export_bibtex};
+use paperdb_core::{Locator, MetadataProvider};
+use paperdb_inspire_client::InspireProvider;
+use paperdb_manifest::{AddOutcome, Manifest, export_bibtex};
 use std::{
     env,
     io::Write,
@@ -92,7 +93,7 @@ async fn add(cwd: &Path, key: Option<&str>, values: &[String]) -> Result<()> {
     }
     let path = find_manifest(cwd)?;
     let mut manifest = Manifest::load(&path)?;
-    let provider = inspire::InspireProvider::new()?;
+    let provider = InspireProvider::new()?;
     let outcomes = if let Some(key) = key {
         let locator = values[0].parse::<Locator>()?;
         let paper = provider.resolve(&locator).await?;
@@ -117,33 +118,32 @@ async fn add(cwd: &Path, key: Option<&str>, values: &[String]) -> Result<()> {
 fn remove(cwd: &Path, selectors: &[String]) -> Result<()> {
     let path = find_manifest(cwd)?;
     let mut manifest = Manifest::load(&path)?;
-    for paper in manifest.remove_batch(selectors)? {
-        println!("Removed {}", paper.key);
+    for (key, _) in manifest.remove_batch(selectors)? {
+        println!("Removed {key}");
     }
     Ok(())
 }
 
 fn list(cwd: &Path) -> Result<()> {
     let manifest = Manifest::load(find_manifest(cwd)?)?;
-    let mut papers = manifest.papers().iter().collect::<Vec<_>>();
-    papers.sort_by(|a, b| a.key.cmp(&b.key));
-    if papers.is_empty() {
+    if manifest.papers().is_empty() {
         return Ok(());
     }
-    let rows = papers
+    let rows = manifest
+        .papers()
         .iter()
-        .map(|paper| {
-            let author = paper
+        .map(|(key, record)| {
+            let author = record
                 .authors
                 .first()
-                .or_else(|| paper.collaborations.first())
+                .or_else(|| record.collaborations.first())
                 .map(String::as_str)
                 .unwrap_or("—");
             [
-                paper.key.clone(),
-                paper.year.map_or_else(|| "—".into(), |y| y.to_string()),
+                key.clone(),
+                record.year.map_or_else(|| "—".into(), |y| y.to_string()),
                 author.into(),
-                paper.title.clone(),
+                record.title.clone(),
             ]
         })
         .collect::<Vec<_>>();
