@@ -1,3 +1,4 @@
+use crate::locator::normalize_arxiv;
 use crate::{Paper, ResolvedPaper, fallback_key, validate_key};
 use serde::Deserialize;
 use std::{
@@ -121,6 +122,8 @@ impl Manifest {
     ) -> Result<Vec<AddOutcome>, Error> {
         if let Some(key) = explicit_key {
             validate_key(key).map_err(Error::InvalidKey)?;
+            // The CLI (`main::add`) also checks this so it can fail before any
+            // network resolution; keep this message in sync with that one.
             if resolved.len() != 1 {
                 return Err(Error::InvalidKey(
                     "--key can only be used with one locator".into(),
@@ -410,17 +413,6 @@ fn validate_papers(papers: &[Paper]) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-fn normalize_arxiv(id: &str) -> String {
-    let id = id.trim();
-    if let Some(index) = id.rfind('v')
-        && !id[index + 1..].is_empty()
-        && id[index + 1..].bytes().all(|c| c.is_ascii_digit())
-    {
-        return id[..index].to_ascii_lowercase();
-    }
-    id.to_ascii_lowercase()
 }
 
 fn normalize_doi(doi: &str) -> String {

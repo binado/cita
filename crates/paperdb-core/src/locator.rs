@@ -83,15 +83,23 @@ fn parse_arxiv(value: &str) -> Option<String> {
     (modern || legacy).then_some(normalized)
 }
 
-fn normalize_arxiv(value: &str) -> String {
-    let value = value.trim();
-    if let Some(index) = value.rfind('v')
-        && !value[index + 1..].is_empty()
-        && value[index + 1..].bytes().all(|c| c.is_ascii_digit())
+/// Strip a trailing `v<digits>` version suffix from an arXiv id, preserving case.
+///
+/// Case is preserved so the result is still suitable for storage; use
+/// [`normalize_arxiv`] when comparing ids for equality.
+pub fn strip_arxiv_version(id: &str) -> &str {
+    let id = id.trim();
+    if let Some(index) = id.rfind('v')
+        && !id[index + 1..].is_empty()
+        && id[index + 1..].bytes().all(|c| c.is_ascii_digit())
     {
-        return value[..index].to_ascii_lowercase();
+        return &id[..index];
     }
-    value.to_ascii_lowercase()
+    id
+}
+
+pub(crate) fn normalize_arxiv(value: &str) -> String {
+    strip_arxiv_version(value).to_ascii_lowercase()
 }
 
 fn parse_doi(value: &str) -> Option<String> {

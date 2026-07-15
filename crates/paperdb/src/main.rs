@@ -87,6 +87,8 @@ fn init(cwd: &Path) -> Result<()> {
 }
 
 async fn add(cwd: &Path, key: Option<&str>, values: &[String]) -> Result<()> {
+    // Fail fast before any network resolution. `Manifest::add_batch` enforces
+    // the same invariant defensively; keep the message in sync with it.
     if key.is_some() && values.len() != 1 {
         bail!("--key can only be used with one locator");
     }
@@ -141,10 +143,15 @@ fn list(cwd: &Path) -> Result<()> {
         })
         .collect::<Vec<_>>();
     let headers = ["KEY", "YEAR", "AUTHOR/COLLABORATION", "TITLE"];
-    let mut widths = headers.map(str::len);
+    // Only the first three columns are padded; the trailing title column is
+    // printed unpadded, so its width never needs to be tracked.
+    let mut widths = [0usize; 3];
+    for (width, header) in widths.iter_mut().zip(headers) {
+        *width = header.chars().count();
+    }
     for row in &rows {
-        for (index, value) in row.iter().enumerate() {
-            widths[index] = widths[index].max(value.chars().count());
+        for (width, value) in widths.iter_mut().zip(&row[..3]) {
+            *width = (*width).max(value.chars().count());
         }
     }
     println!(

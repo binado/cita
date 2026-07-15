@@ -219,8 +219,8 @@ fn validate_arxiv(id: &str) -> Result<(), Error> {
 
 fn strip_version(id: &str) -> &str {
     if let Some(index) = id.rfind('v')
-        && id[index + 1..].bytes().all(|c| c.is_ascii_digit())
         && !id[index + 1..].is_empty()
+        && id[index + 1..].bytes().all(|c| c.is_ascii_digit())
     {
         return &id[..index];
     }
