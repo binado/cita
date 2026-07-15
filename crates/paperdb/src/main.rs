@@ -93,12 +93,19 @@ async fn add(cwd: &Path, key: Option<&str>, values: &[String]) -> Result<()> {
     let path = find_manifest(cwd)?;
     let mut manifest = Manifest::load(&path)?;
     let provider = inspire::InspireProvider::new()?;
-    let mut resolved = Vec::with_capacity(values.len());
-    for value in values {
-        let locator = value.parse::<Locator>()?;
-        resolved.push(provider.resolve(&locator).await?);
-    }
-    for outcome in manifest.add_batch(resolved, key)? {
+    let outcomes = if let Some(key) = key {
+        let locator = values[0].parse::<Locator>()?;
+        let paper = provider.resolve(&locator).await?;
+        vec![manifest.add(paper, Some(key))?]
+    } else {
+        let mut resolved = Vec::with_capacity(values.len());
+        for value in values {
+            let locator = value.parse::<Locator>()?;
+            resolved.push(provider.resolve(&locator).await?);
+        }
+        manifest.add_batch(resolved)?
+    };
+    for outcome in outcomes {
         match outcome {
             AddOutcome::Added(key) => println!("Added {key}"),
             AddOutcome::Existing(key) => println!("Already present: {key}"),
@@ -141,10 +148,15 @@ fn list(cwd: &Path) -> Result<()> {
         })
         .collect::<Vec<_>>();
     let headers = ["KEY", "YEAR", "AUTHOR/COLLABORATION", "TITLE"];
-    let mut widths = headers.map(str::len);
+    // Only the first three columns are padded; the trailing title column is
+    // printed unpadded, so its width never needs to be tracked.
+    let mut widths = [0usize; 3];
+    for (width, header) in widths.iter_mut().zip(headers) {
+        *width = header.chars().count();
+    }
     for row in &rows {
-        for (index, value) in row.iter().enumerate() {
-            widths[index] = widths[index].max(value.chars().count());
+        for (width, value) in widths.iter_mut().zip(&row[..3]) {
+            *width = (*width).max(value.chars().count());
         }
     }
     println!(

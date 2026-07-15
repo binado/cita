@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use paperdb_core::{Locator, MetadataProvider, ProviderError, Publication, ResolvedPaper};
+use paperdb_core::{
+    Locator, MetadataProvider, ProviderError, Publication, ResolvedPaper, strip_arxiv_version,
+};
 use paperdb_inspire_client::{
     Client, Error as ClientError, LiteratureId, LiteratureMetadata, LiteratureRecord,
     PublicationInfo,
@@ -59,7 +61,7 @@ fn map_record(record: LiteratureRecord) -> Result<ResolvedPaper, ProviderError> 
     let arxiv_ids = metadata
         .arxiv_eprints
         .iter()
-        .map(|item| strip_arxiv_version(&item.value))
+        .map(|item| strip_arxiv_version(&item.value).to_owned())
         .collect::<Vec<_>>();
     let year = publication
         .as_ref()
@@ -173,16 +175,6 @@ fn arxiv_year(id: &str) -> Option<i32> {
     let number = id.split_once('/')?.1;
     let year: i32 = number.get(..2)?.parse().ok()?;
     Some(if year >= 91 { 1900 + year } else { 2000 + year })
-}
-
-fn strip_arxiv_version(id: &str) -> String {
-    if let Some(index) = id.rfind('v')
-        && !id[index + 1..].is_empty()
-        && id[index + 1..].bytes().all(|c| c.is_ascii_digit())
-    {
-        return id[..index].to_owned();
-    }
-    id.to_owned()
 }
 
 #[cfg(test)]

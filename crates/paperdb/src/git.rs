@@ -26,7 +26,7 @@ pub fn commit(manifest_path: &Path) -> Result<()> {
         .context("paperdb.toml is not inside the discovered Git repository")?;
     let relative_text = relative.to_string_lossy();
     let current_bytes = fs::read(manifest_path)?;
-    let old_bytes = git_output_allow_failure(&root, &["show", &format!("HEAD:{}", relative_text)]);
+    let old_bytes = git_output_allow_failure(&root, &["show", &format!("HEAD:{relative_text}")]);
     if old_bytes.as_deref() == Some(current_bytes.as_slice()) {
         println!("paperdb.toml has no Git changes");
         return Ok(());
