@@ -24,6 +24,9 @@ pub enum AddOutcome {
     Existing(String),
 }
 
+/// Error message when `--key` is used with more than one locator.
+pub const EXPLICIT_KEY_REQUIRES_ONE_LOCATOR: &str = "--key can only be used with one locator";
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("manifest already exists at {0}")]
@@ -122,11 +125,10 @@ impl Manifest {
     ) -> Result<Vec<AddOutcome>, Error> {
         if let Some(key) = explicit_key {
             validate_key(key).map_err(Error::InvalidKey)?;
-            // The CLI (`main::add`) also checks this so it can fail before any
-            // network resolution; keep this message in sync with that one.
+            // The CLI also checks this so it can fail before any network resolution.
             if resolved.len() != 1 {
                 return Err(Error::InvalidKey(
-                    "--key can only be used with one locator".into(),
+                    EXPLICIT_KEY_REQUIRES_ONE_LOCATOR.into(),
                 ));
             }
         }
@@ -484,6 +486,23 @@ mod tests {
         assert_eq!(
             manifest.remove_batch(&["doi:10.1000/abc".into()]).unwrap()[0].key,
             "One"
+        );
+    }
+
+    #[test]
+    fn treats_arxiv_case_as_the_same_identifier() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("paperdb.toml");
+        let mut manifest = Manifest::create(&path).unwrap();
+        let mut first = resolved("One", 1);
+        first.arxiv_ids = vec!["HEP-TH/9901001v2".into()];
+        manifest.add_batch(vec![first], None).unwrap();
+
+        let mut same_arxiv = resolved("Other", 1);
+        same_arxiv.arxiv_ids = vec!["hep-th/9901001".into()];
+        assert_eq!(
+            manifest.add_batch(vec![same_arxiv], None).unwrap(),
+            [AddOutcome::Existing("One".into())]
         );
     }
 

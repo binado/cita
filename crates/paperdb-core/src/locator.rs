@@ -83,10 +83,15 @@ fn parse_arxiv(value: &str) -> Option<String> {
     (modern || legacy).then_some(normalized)
 }
 
-/// Strip a trailing `v<digits>` version suffix from an arXiv id, preserving case.
+/// Strip a trailing lowercase `v` + non-empty digit run from an arXiv id.
 ///
-/// Case is preserved so the result is still suitable for storage; use
-/// [`normalize_arxiv`] when comparing ids for equality.
+/// Leading and trailing whitespace is trimmed. Only a lowercase `v` followed by
+/// at least one ASCII digit counts as a version (`v2`, `v12`); a bare trailing
+/// `v`, an uppercase `V`, or a non-digit tail is left unchanged. Case of the id
+/// body is preserved so the result is suitable for storage.
+///
+/// This does not validate arXiv id shape. For equality comparisons, ASCII-lowercase
+/// the stripped result.
 pub fn strip_arxiv_version(id: &str) -> &str {
     let id = id.trim();
     if let Some(index) = id.rfind('v')
@@ -140,5 +145,16 @@ mod tests {
         for value in ["10.1000/x", "arxiv:nope", "inspire:0", ""] {
             assert!(value.parse::<Locator>().is_err(), "{value}");
         }
+    }
+
+    #[test]
+    fn strip_arxiv_version_preserves_case_and_normalize_lowercases() {
+        assert_eq!(strip_arxiv_version("HEP-TH/9901001v1"), "HEP-TH/9901001");
+        assert_eq!(normalize_arxiv("HEP-TH/9901001v1"), "hep-th/9901001");
+        assert_eq!(strip_arxiv_version("  1207.7214v2  "), "1207.7214");
+        assert_eq!(strip_arxiv_version("1207.7214v"), "1207.7214v");
+        assert_eq!(strip_arxiv_version("1207.7214v2a"), "1207.7214v2a");
+        assert_eq!(strip_arxiv_version("1207.7214"), "1207.7214");
+        assert_eq!(strip_arxiv_version("1207.7214V2"), "1207.7214V2");
     }
 }

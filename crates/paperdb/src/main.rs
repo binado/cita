@@ -3,7 +3,10 @@ mod inspire;
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand};
-use paperdb_core::{AddOutcome, Locator, Manifest, MetadataProvider, export_bibtex};
+use paperdb_core::{
+    AddOutcome, EXPLICIT_KEY_REQUIRES_ONE_LOCATOR, Locator, Manifest, MetadataProvider,
+    export_bibtex,
+};
 use std::{
     env,
     io::Write,
@@ -88,9 +91,9 @@ fn init(cwd: &Path) -> Result<()> {
 
 async fn add(cwd: &Path, key: Option<&str>, values: &[String]) -> Result<()> {
     // Fail fast before any network resolution. `Manifest::add_batch` enforces
-    // the same invariant defensively; keep the message in sync with it.
+    // the same invariant defensively.
     if key.is_some() && values.len() != 1 {
-        bail!("--key can only be used with one locator");
+        bail!("{EXPLICIT_KEY_REQUIRES_ONE_LOCATOR}");
     }
     let path = find_manifest(cwd)?;
     let mut manifest = Manifest::load(&path)?;
