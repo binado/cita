@@ -115,11 +115,7 @@ impl Manifest {
         &self.papers
     }
 
-    pub fn add(
-        &mut self,
-        paper: ResolvedPaper,
-        key: Option<&str>,
-    ) -> Result<AddOutcome, Error> {
+    pub fn add(&mut self, paper: ResolvedPaper, key: Option<&str>) -> Result<AddOutcome, Error> {
         if let Some(key) = key {
             validate_key(key).map_err(Error::InvalidKey)?;
         }
