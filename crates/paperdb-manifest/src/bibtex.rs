@@ -1,50 +1,60 @@
-use paperdb_core::Paper;
+use paperdb_core::PaperRecord;
+use std::collections::BTreeMap;
 
-pub fn export_bibtex(papers: &[Paper]) -> String {
-    let mut papers = papers.iter().collect::<Vec<_>>();
-    papers.sort_by(|a, b| a.key.cmp(&b.key));
+pub fn export_bibtex(papers: &BTreeMap<String, PaperRecord>) -> String {
     let mut output = String::new();
-    for (index, paper) in papers.into_iter().enumerate() {
+    for (index, (key, record)) in papers.iter().enumerate() {
         if index > 0 {
             output.push('\n');
         }
-        let kind = if paper.publication.as_ref().is_some_and(|p| p.is_journal()) {
-            "article"
-        } else {
-            "misc"
-        };
-        output.push_str(&format!("@{kind}{{{},\n", paper.key));
-        field(&mut output, "title", &paper.title);
-        if !paper.authors.is_empty() {
-            field(&mut output, "author", &paper.authors.join(" and "));
+        let is_article = record
+            .publication
+            .as_ref()
+            .is_some_and(|publication| publication.is_journal());
+        let kind = if is_article { "article" } else { "misc" };
+        output.push_str(&format!("@{kind}{{{key},\n"));
+        field(&mut output, "title", &record.title);
+        if !record.authors.is_empty() {
+            field(&mut output, "author", &record.authors.join(" and "));
         }
-        if !paper.collaborations.is_empty() {
+        if !record.collaborations.is_empty() {
             field(
                 &mut output,
                 "collaboration",
-                &paper.collaborations.join(" and "),
+                &record.collaborations.join(" and "),
             );
         }
-        if let Some(year) = paper.year {
+        // An @article cites the journal version, so its year is the journal
+        // year when known; @misc keeps the citation-display year.
+        let year = if is_article {
+            record
+                .publication
+                .as_ref()
+                .and_then(|publication| publication.year)
+                .or(record.year)
+        } else {
+            record.year
+        };
+        if let Some(year) = year {
             field(&mut output, "year", &year.to_string());
         }
-        if let Some(publication) = &paper.publication {
+        if let Some(publication) = &record.publication {
             optional_field(&mut output, "journal", publication.journal.as_deref());
             optional_field(&mut output, "volume", publication.volume.as_deref());
             optional_field(&mut output, "number", publication.issue.as_deref());
             optional_field(&mut output, "pages", publication.pages.as_deref());
         }
-        optional_field(&mut output, "doi", paper.dois.first().map(String::as_str));
-        if let Some(arxiv) = paper.arxiv_ids.first() {
+        optional_field(&mut output, "doi", record.dois.first().map(String::as_str));
+        if let Some(arxiv) = record.arxiv_ids.first() {
             field(&mut output, "eprint", arxiv);
             field(&mut output, "archivePrefix", "arXiv");
         }
         optional_field(
             &mut output,
             "primaryClass",
-            paper.primary_category.as_deref(),
+            record.primary_category.as_deref(),
         );
-        optional_field(&mut output, "url", paper.url.as_deref());
+        optional_field(&mut output, "url", record.url.as_deref());
         output.push_str("}\n");
     }
     output
@@ -68,8 +78,7 @@ mod tests {
 
     #[test]
     fn produces_stable_sorted_tex_preserving_output() {
-        let paper = Paper {
-            key: "A".into(),
+        let record = PaperRecord {
             title: "A  $Z\\to e^+e^-$ result".into(),
             authors: vec!["Doe, Jane".into()],
             collaborations: vec!["ATLAS".into()],
@@ -81,11 +90,35 @@ mod tests {
                 ..Publication::default()
             }),
             source: "inspire".into(),
-            ..Paper::default()
+            ..PaperRecord::default()
         };
-        let bib = export_bibtex(&[paper]);
+        let bib = export_bibtex(&BTreeMap::from([("A".to_string(), record)]));
         assert!(bib.starts_with("@article{A,\n  title = {A $Z\\to e^+e^-$ result},\n"));
         assert!(bib.contains("  archivePrefix = {arXiv},\n"));
         assert!(bib.ends_with("}\n"));
+    }
+
+    #[test]
+    fn article_year_prefers_publication_year() {
+        let record = PaperRecord {
+            title: "Journal version".into(),
+            year: Some(2019),
+            publication: Some(Publication {
+                journal: Some("JHEP".into()),
+                year: Some(2020),
+                ..Publication::default()
+            }),
+            source: "inspire".into(),
+            ..PaperRecord::default()
+        };
+        let bib = export_bibtex(&BTreeMap::from([("A".to_string(), record.clone())]));
+        assert!(bib.contains("  year = {2020},\n"), "{bib}");
+
+        let preprint = PaperRecord {
+            publication: None,
+            ..record
+        };
+        let bib = export_bibtex(&BTreeMap::from([("A".to_string(), preprint)]));
+        assert!(bib.contains("  year = {2019},\n"), "{bib}");
     }
 }

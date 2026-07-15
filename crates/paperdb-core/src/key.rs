@@ -1,32 +1,34 @@
-use crate::ResolvedPaper;
+use crate::PaperRecord;
 use unicode_normalization::UnicodeNormalization;
 
 pub fn validate_key(key: &str) -> Result<(), String> {
     if key.is_empty() {
         return Err("citation key must not be empty".into());
     }
+    // Keys appear both in BibTeX entries and as quoted TOML table keys, so
+    // reject anything that breaks either syntax.
     if key
         .chars()
-        .any(|c| c.is_whitespace() || matches!(c, ',' | '{' | '}'))
+        .any(|c| c.is_whitespace() || matches!(c, ',' | '{' | '}' | '"' | '\\'))
     {
         return Err(format!(
-            "invalid citation key `{key}`: whitespace, commas, and braces are not allowed"
+            "invalid citation key `{key}`: whitespace, commas, braces, quotes, and backslashes are not allowed"
         ));
     }
     Ok(())
 }
 
-pub fn fallback_key(paper: &ResolvedPaper) -> String {
-    let owner = paper
+pub fn fallback_key(record: &PaperRecord) -> String {
+    let owner = record
         .authors
         .first()
         .map(|author| author.split(',').next().unwrap_or(author))
-        .or_else(|| paper.collaborations.first().map(String::as_str))
+        .or_else(|| record.collaborations.first().map(String::as_str))
         .unwrap_or("paper");
-    let year = paper
+    let year = record
         .year
         .map_or_else(|| "nd".into(), |year| year.to_string());
-    let title = paper
+    let title = record
         .title
         .split_whitespace()
         .find(|word| word.chars().any(char::is_alphanumeric))
@@ -49,12 +51,19 @@ mod tests {
 
     #[test]
     fn generates_ascii_fallbacks() {
-        let paper = ResolvedPaper {
+        let record = PaperRecord {
             title: "Über gauge fields".into(),
             authors: vec!["García, Ana".into()],
             year: Some(2024),
-            ..ResolvedPaper::default()
+            ..PaperRecord::default()
         };
-        assert_eq!(fallback_key(&paper), "Garcia2024Uber");
+        assert_eq!(fallback_key(&record), "Garcia2024Uber");
+    }
+
+    #[test]
+    fn rejects_quotes_and_backslashes() {
+        assert!(validate_key(r#"Aad"2012"#).is_err());
+        assert!(validate_key(r"Aad\2012").is_err());
+        assert!(validate_key("Aad:2012tfa").is_ok());
     }
 }

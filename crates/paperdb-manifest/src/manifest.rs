@@ -1,22 +1,23 @@
 use paperdb_core::{
-    Paper, ResolvedPaper, fallback_key, normalize_arxiv, normalize_doi, validate_key,
+    INSPIRE_SOURCE, Locator, PaperRecord, ResolvedPaper, fallback_key, normalize_arxiv,
+    normalize_doi, validate_key,
 };
 use serde::Deserialize;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs,
     io::Write,
     path::{Path, PathBuf},
 };
 use tempfile::NamedTempFile;
 use thiserror::Error;
-use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
+use toml_edit::{Array, DocumentMut, Item, Table, Value};
 
 #[derive(Debug)]
 pub struct Manifest {
     path: PathBuf,
     document: DocumentMut,
-    papers: Vec<Paper>,
+    papers: BTreeMap<String, PaperRecord>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,7 +56,7 @@ pub enum Error {
 struct ManifestData {
     schema: u32,
     #[serde(default)]
-    papers: Vec<Paper>,
+    papers: BTreeMap<String, PaperRecord>,
 }
 
 impl Manifest {
@@ -70,7 +71,7 @@ impl Manifest {
         let manifest = Self {
             path,
             document,
-            papers: Vec::new(),
+            papers: BTreeMap::new(),
         };
         manifest.save()?;
         Ok(manifest)
@@ -112,7 +113,7 @@ impl Manifest {
     pub fn path(&self) -> &Path {
         &self.path
     }
-    pub fn papers(&self) -> &[Paper] {
+    pub fn papers(&self) -> &BTreeMap<String, PaperRecord> {
         &self.papers
     }
 
@@ -136,49 +137,60 @@ impl Manifest {
         let mut additions = Vec::new();
         let mut outcomes = Vec::new();
         for (item, explicit_key) in resolved {
-            let matches = matching_indices(&self.papers, &item);
+            let matches = matching_keys(&self.papers, &item.record);
             if matches.len() > 1 {
                 self.papers = original;
                 return Err(Error::IdentifierConflict(
                     "the resolved identifiers belong to multiple existing papers".into(),
                 ));
             }
-            if let Some(index) = matches.first() {
-                let existing = &self.papers[*index];
-                if let (Some(existing_id), Some(candidate_id)) =
-                    (existing.inspire_id, item.inspire_id)
+            if let Some(existing_key) = matches.first() {
+                let existing = &self.papers[existing_key];
+                if existing.source == item.record.source
+                    && let (Some(existing_id), Some(candidate_id)) =
+                        (&existing.source_id, &item.record.source_id)
                     && existing_id != candidate_id
                 {
                     let message = format!(
-                        "{} resolves to INSPIRE {}, but its identifier overlaps `{}` (INSPIRE {})",
-                        item.title, candidate_id, existing.key, existing_id
+                        "{} resolves to {} {}, but its identifier overlaps `{}` ({} {})",
+                        item.record.title,
+                        item.record.source,
+                        candidate_id,
+                        existing_key,
+                        existing.source,
+                        existing_id
                     );
                     self.papers = original;
                     return Err(Error::IdentifierConflict(message));
                 }
-                outcomes.push(AddOutcome::Existing(self.papers[*index].key.clone()));
+                outcomes.push(AddOutcome::Existing(existing_key.clone()));
                 continue;
             }
 
             let key = explicit_key
-                .or_else(|| item.suggested_key.clone())
-                .unwrap_or_else(|| fallback_key(&item));
-            validate_key(&key).map_err(Error::InvalidKey)?;
-            if self.papers.iter().any(|paper| paper.key == key) {
+                .or(item.suggested_key)
+                .unwrap_or_else(|| fallback_key(&item.record));
+            if let Err(message) = validate_key(&key) {
+                self.papers = original;
+                return Err(Error::InvalidKey(message));
+            }
+            // The key is taken by a paper with a *different* identity (an
+            // identity match would have hit the `Existing` arm above), so
+            // inserting would silently replace it — refuse instead.
+            if self.papers.contains_key(&key) {
                 self.papers = original;
                 return Err(Error::KeyConflict(key));
             }
-            let paper = item.into_paper(key.clone());
-            self.papers.push(paper.clone());
-            additions.push(paper);
+            self.papers.insert(key.clone(), item.record.clone());
+            additions.push((key.clone(), item.record));
             outcomes.push(AddOutcome::Added(key));
         }
         if let Err(message) = validate_papers(&self.papers) {
             self.papers = original;
             return Err(Error::IdentifierConflict(message));
         }
-        for paper in &additions {
-            append_paper(&mut self.document, paper);
+        for (key, record) in &additions {
+            append_paper(&mut self.document, key, record);
         }
         if !additions.is_empty() {
             self.save()?;
@@ -186,41 +198,27 @@ impl Manifest {
         Ok(outcomes)
     }
 
-    pub fn remove_batch(&mut self, selectors: &[String]) -> Result<Vec<Paper>, Error> {
-        let mut indices = HashSet::new();
+    pub fn remove_batch(
+        &mut self,
+        selectors: &[String],
+    ) -> Result<Vec<(String, PaperRecord)>, Error> {
+        let mut keys = BTreeSet::new();
         for selector in selectors {
-            let index = find_selector(&self.papers, selector)
+            let key = find_selector(&self.papers, selector)
                 .ok_or_else(|| Error::PaperNotFound(selector.clone()))?;
-            indices.insert(index);
+            keys.insert(key);
         }
-        let removed = self
-            .papers
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| indices.contains(index))
-            .map(|(_, paper)| paper.clone())
-            .collect::<Vec<_>>();
-        self.papers = self
-            .papers
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| !indices.contains(index))
-            .map(|(_, paper)| paper.clone())
-            .collect();
-        if let Some(array) = self
-            .document
-            .get_mut("papers")
-            .and_then(Item::as_array_of_tables_mut)
-        {
-            let retained = array
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| !indices.contains(index))
-                .map(|(_, table)| table.clone())
-                .collect::<Vec<_>>();
-            array.clear();
-            for table in retained {
-                array.push(table);
+        let mut removed = Vec::new();
+        for key in &keys {
+            let record = self
+                .papers
+                .remove(key)
+                .expect("selector resolved to a present key");
+            removed.push((key.clone(), record));
+        }
+        if let Some(table) = self.document.get_mut("papers").and_then(Item::as_table_mut) {
+            for key in &keys {
+                table.remove(key);
             }
         }
         self.save()?;
@@ -228,13 +226,15 @@ impl Manifest {
     }
 
     pub fn save(&self) -> Result<(), Error> {
+        let mut document = self.document.clone();
+        sort_paper_tables(&mut document);
         let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
         let mut temporary = NamedTempFile::new_in(parent).map_err(|source| Error::Write {
             path: self.path.clone(),
             source,
         })?;
         temporary
-            .write_all(self.document.to_string().as_bytes())
+            .write_all(document.to_string().as_bytes())
             .map_err(|source| Error::Write {
                 path: self.path.clone(),
                 source,
@@ -256,46 +256,63 @@ impl Manifest {
     }
 }
 
-fn append_paper(document: &mut DocumentMut, paper: &Paper) {
-    if !document.contains_key("papers") {
-        document["papers"] = Item::ArrayOfTables(ArrayOfTables::new());
+/// Render `[papers.<key>]` tables in key order regardless of insertion or
+/// hand-edited order, so saved manifests are deterministic and diff-friendly.
+/// Comments travel with their tables.
+fn sort_paper_tables(document: &mut DocumentMut) {
+    let Some(papers) = document.get_mut("papers").and_then(Item::as_table_mut) else {
+        return;
+    };
+    let mut keys = papers
+        .iter()
+        .map(|(key, _)| key.to_owned())
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    for (position, key) in keys.iter().enumerate() {
+        if let Some(table) = papers.get_mut(key).and_then(Item::as_table_mut) {
+            table.set_position(position);
+        }
     }
-    document["papers"]
-        .as_array_of_tables_mut()
-        .expect("validated papers is an array of tables")
-        .push(paper_table(paper));
 }
 
-fn paper_table(paper: &Paper) -> Table {
+fn append_paper(document: &mut DocumentMut, key: &str, record: &PaperRecord) {
+    if !document.contains_key("papers") {
+        let mut papers = Table::new();
+        papers.set_implicit(true);
+        document.insert("papers", Item::Table(papers));
+    }
+    document["papers"]
+        .as_table_mut()
+        .expect("validated papers is a table")
+        .insert(key, Item::Table(paper_table(record)));
+}
+
+fn paper_table(record: &PaperRecord) -> Table {
     let mut table = Table::new();
-    insert(&mut table, "key", paper.key.clone());
-    insert(&mut table, "title", paper.title.clone());
-    insert_array(&mut table, "authors", &paper.authors);
-    insert_array(&mut table, "collaborations", &paper.collaborations);
-    if let Some(year) = paper.year {
+    insert(&mut table, "title", record.title.clone());
+    insert_array(&mut table, "authors", &record.authors);
+    insert_array(&mut table, "collaborations", &record.collaborations);
+    if let Some(year) = record.year {
         insert(&mut table, "year", i64::from(year));
     }
-    insert_array(&mut table, "document_types", &paper.document_types);
-    insert_opt(&mut table, "url", paper.url.as_deref());
-    if let Some(id) = paper.inspire_id {
-        let id = i64::try_from(id).unwrap_or(i64::MAX);
-        insert(&mut table, "inspire_id", id);
-    }
-    insert_array(&mut table, "arxiv_ids", &paper.arxiv_ids);
-    insert_array(&mut table, "dois", &paper.dois);
+    insert_array(&mut table, "document_types", &record.document_types);
+    insert_opt(&mut table, "url", record.url.as_deref());
+    insert(&mut table, "source", record.source.clone());
+    insert_opt(&mut table, "source_id", record.source_id.as_deref());
+    insert_array(&mut table, "arxiv_ids", &record.arxiv_ids);
+    insert_array(&mut table, "dois", &record.dois);
     insert_opt(
         &mut table,
         "primary_category",
-        paper.primary_category.as_deref(),
+        record.primary_category.as_deref(),
     );
-    insert(&mut table, "source", paper.source.clone());
     insert_opt(
         &mut table,
         "source_updated",
-        paper.source_updated.as_deref(),
+        record.source_updated.as_deref(),
     );
-    insert_opt(&mut table, "preprint_date", paper.preprint_date.as_deref());
-    if let Some(publication) = &paper.publication {
+    insert_opt(&mut table, "preprint_date", record.preprint_date.as_deref());
+    if let Some(publication) = &record.publication {
         let mut child = Table::new();
         child.set_implicit(false);
         insert_opt(&mut child, "journal", publication.journal.as_deref());
@@ -331,19 +348,20 @@ fn insert_array(table: &mut Table, key: &str, values: &[String]) {
     table.insert(key, Item::Value(Value::Array(array)));
 }
 
-fn matching_indices(papers: &[Paper], candidate: &ResolvedPaper) -> Vec<usize> {
+fn matching_keys(papers: &BTreeMap<String, PaperRecord>, candidate: &PaperRecord) -> Vec<String> {
     papers
         .iter()
-        .enumerate()
-        .filter(|(_, paper)| identifiers_overlap(paper, candidate))
-        .map(|(index, _)| index)
+        .filter(|(_, record)| identifiers_overlap(record, candidate))
+        .map(|(key, _)| key.clone())
         .collect()
 }
 
-fn identifiers_overlap(paper: &Paper, candidate: &ResolvedPaper) -> bool {
-    paper.inspire_id.is_some() && paper.inspire_id == candidate.inspire_id
-        || overlaps_normalized(&paper.arxiv_ids, &candidate.arxiv_ids, normalize_arxiv)
-        || overlaps_normalized(&paper.dois, &candidate.dois, normalize_doi)
+fn identifiers_overlap(record: &PaperRecord, candidate: &PaperRecord) -> bool {
+    record.source_id.is_some()
+        && record.source == candidate.source
+        && record.source_id == candidate.source_id
+        || overlaps_normalized(&record.arxiv_ids, &candidate.arxiv_ids, normalize_arxiv)
+        || overlaps_normalized(&record.dois, &candidate.dois, normalize_doi)
 }
 
 fn overlaps_normalized(left: &[String], right: &[String], normalize: fn(&str) -> String) -> bool {
@@ -353,62 +371,58 @@ fn overlaps_normalized(left: &[String], right: &[String], normalize: fn(&str) ->
     })
 }
 
-fn find_selector(papers: &[Paper], selector: &str) -> Option<usize> {
-    if let Some(index) = papers.iter().position(|paper| paper.key == selector) {
-        return Some(index);
+fn find_selector(papers: &BTreeMap<String, PaperRecord>, selector: &str) -> Option<String> {
+    if papers.contains_key(selector) {
+        return Some(selector.to_owned());
     }
-    let locator = selector.parse::<paperdb_core::Locator>().ok()?;
-    papers.iter().position(|paper| match &locator {
-        paperdb_core::Locator::Inspire(id) => paper.inspire_id == Some(*id),
-        paperdb_core::Locator::Arxiv(id) => paper
-            .arxiv_ids
-            .iter()
-            .any(|value| normalize_arxiv(value) == normalize_arxiv(id)),
-        paperdb_core::Locator::Doi(doi) => paper
-            .dois
-            .iter()
-            .any(|value| normalize_doi(value) == normalize_doi(doi)),
-    })
+    let locator = selector.parse::<Locator>().ok()?;
+    papers
+        .iter()
+        .find(|(_, record)| match &locator {
+            Locator::Inspire(id) => {
+                record.source == INSPIRE_SOURCE
+                    && record.source_id.as_deref() == Some(id.to_string().as_str())
+            }
+            Locator::Arxiv(id) => record
+                .arxiv_ids
+                .iter()
+                .any(|value| normalize_arxiv(value) == normalize_arxiv(id)),
+            Locator::Doi(doi) => record
+                .dois
+                .iter()
+                .any(|value| normalize_doi(value) == normalize_doi(doi)),
+        })
+        .map(|(key, _)| key.clone())
 }
 
-fn validate_papers(papers: &[Paper]) -> Result<(), String> {
-    let mut keys = HashSet::new();
-    let mut inspire = HashMap::new();
+fn validate_papers(papers: &BTreeMap<String, PaperRecord>) -> Result<(), String> {
+    let mut sources = HashMap::new();
     let mut arxiv = HashMap::new();
     let mut dois = HashMap::new();
-    for paper in papers {
-        validate_key(&paper.key)?;
-        if !keys.insert(paper.key.clone()) {
-            return Err(format!("duplicate citation key `{}`", paper.key));
-        }
-        if let Some(id) = paper.inspire_id
-            && let Some(other) = inspire.insert(id, &paper.key)
+    for (key, record) in papers {
+        validate_key(key)?;
+        if let Some(id) = &record.source_id
+            && let Some(other) = sources.insert((record.source.clone(), id.clone()), key)
         {
             return Err(format!(
-                "INSPIRE id {id} is shared by `{other}` and `{}`",
-                paper.key
+                "{} id {id} is shared by `{other}` and `{key}`",
+                record.source
             ));
         }
-        for id in &paper.arxiv_ids {
+        for id in &record.arxiv_ids {
             let id = normalize_arxiv(id);
-            if let Some(other) = arxiv.insert(id.clone(), &paper.key)
-                && other != &paper.key
+            if let Some(other) = arxiv.insert(id.clone(), key)
+                && other != key
             {
-                return Err(format!(
-                    "arXiv id {id} is shared by `{other}` and `{}`",
-                    paper.key
-                ));
+                return Err(format!("arXiv id {id} is shared by `{other}` and `{key}`"));
             }
         }
-        for doi in &paper.dois {
+        for doi in &record.dois {
             let doi = normalize_doi(doi);
-            if let Some(other) = dois.insert(doi.clone(), &paper.key)
-                && other != &paper.key
+            if let Some(other) = dois.insert(doi.clone(), key)
+                && other != key
             {
-                return Err(format!(
-                    "DOI {doi} is shared by `{other}` and `{}`",
-                    paper.key
-                ));
+                return Err(format!("DOI {doi} is shared by `{other}` and `{key}`"));
             }
         }
     }
@@ -422,10 +436,12 @@ mod tests {
     fn resolved(key: &str, id: u64) -> ResolvedPaper {
         ResolvedPaper {
             suggested_key: Some(key.into()),
-            title: format!("Paper {id}"),
-            inspire_id: Some(id),
-            source: "inspire".into(),
-            ..ResolvedPaper::default()
+            record: PaperRecord {
+                title: format!("Paper {id}"),
+                source: INSPIRE_SOURCE.into(),
+                source_id: Some(id.to_string()),
+                ..PaperRecord::default()
+            },
         }
     }
 
@@ -433,7 +449,7 @@ mod tests {
     fn preserves_comments_unknown_fields_and_is_atomic_on_conflict() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("paperdb.toml");
-        fs::write(&path, "schema = 1 # keep\ncustom = 'yes'\n\n[[papers]]\nkey = 'One'\ntitle = 'First'\nsource = 'inspire'\ninspire_id = 1\nunknown = 42 # also keep\n").unwrap();
+        fs::write(&path, "schema = 1 # keep\ncustom = 'yes'\n\n[papers.One]\ntitle = 'First'\nsource = 'inspire'\nsource_id = '1'\nunknown = 42 # also keep\n").unwrap();
         let mut manifest = Manifest::load(&path).unwrap();
         manifest.add(resolved("Two", 2), None).unwrap();
         let after_add = fs::read_to_string(&path).unwrap();
@@ -442,6 +458,18 @@ mod tests {
         let error = manifest.add_batch(vec![resolved("Three", 3), resolved("Two", 4)]);
         assert!(matches!(error, Err(Error::KeyConflict(_))));
         assert_eq!(fs::read_to_string(&path).unwrap(), after_add);
+    }
+
+    #[test]
+    fn key_collision_with_different_identity_is_a_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("paperdb.toml");
+        let mut manifest = Manifest::create(&path).unwrap();
+        manifest.add(resolved("One", 1), None).unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+        let error = manifest.add(resolved("One", 2), None);
+        assert!(matches!(error, Err(Error::KeyConflict(key)) if key == "One"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
     }
 
     #[test]
@@ -467,18 +495,18 @@ mod tests {
         let path = dir.path().join("paperdb.toml");
         let mut manifest = Manifest::create(&path).unwrap();
         let mut first = resolved("One", 1);
-        first.arxiv_ids = vec!["2401.00001v2".into()];
-        first.dois = vec!["10.1000/ABC".into()];
+        first.record.arxiv_ids = vec!["2401.00001v2".into()];
+        first.record.dois = vec!["10.1000/ABC".into()];
         manifest.add(first, None).unwrap();
 
         let mut same_arxiv = resolved("Other", 1);
-        same_arxiv.arxiv_ids = vec!["2401.00001".into()];
+        same_arxiv.record.arxiv_ids = vec!["2401.00001".into()];
         assert_eq!(
             manifest.add(same_arxiv, None).unwrap(),
             AddOutcome::Existing("One".into())
         );
         assert_eq!(
-            manifest.remove_batch(&["doi:10.1000/abc".into()]).unwrap()[0].key,
+            manifest.remove_batch(&["doi:10.1000/abc".into()]).unwrap()[0].0,
             "One"
         );
     }
@@ -489,11 +517,11 @@ mod tests {
         let path = dir.path().join("paperdb.toml");
         let mut manifest = Manifest::create(&path).unwrap();
         let mut first = resolved("One", 1);
-        first.arxiv_ids = vec!["HEP-TH/9901001v2".into()];
+        first.record.arxiv_ids = vec!["HEP-TH/9901001v2".into()];
         manifest.add(first, None).unwrap();
 
         let mut same_arxiv = resolved("Other", 1);
-        same_arxiv.arxiv_ids = vec!["hep-th/9901001".into()];
+        same_arxiv.record.arxiv_ids = vec!["hep-th/9901001".into()];
         assert_eq!(
             manifest.add(same_arxiv, None).unwrap(),
             AddOutcome::Existing("One".into())
@@ -506,16 +534,59 @@ mod tests {
         let path = dir.path().join("paperdb.toml");
         let mut manifest = Manifest::create(&path).unwrap();
         let mut first = resolved("One", 1);
-        first.arxiv_ids = vec!["2401.00001".into()];
+        first.record.arxiv_ids = vec!["2401.00001".into()];
         manifest.add(first, None).unwrap();
         let before = fs::read_to_string(&path).unwrap();
 
         let mut conflicting = resolved("Two", 2);
-        conflicting.arxiv_ids = vec!["2401.00001v3".into()];
+        conflicting.record.arxiv_ids = vec!["2401.00001v3".into()];
         assert!(matches!(
             manifest.add(conflicting, None),
             Err(Error::IdentifierConflict(_))
         ));
         assert_eq!(fs::read_to_string(path).unwrap(), before);
+    }
+
+    #[test]
+    fn rejects_duplicate_paper_tables_in_hand_written_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("paperdb.toml");
+        fs::write(
+            &path,
+            "schema = 1\n\n[papers.One]\ntitle = 'First'\nsource = 'inspire'\n\n[papers.One]\ntitle = 'Again'\nsource = 'inspire'\n",
+        )
+        .unwrap();
+        assert!(matches!(Manifest::load(&path), Err(Error::Invalid { .. })));
+    }
+
+    #[test]
+    fn keys_with_colons_round_trip_as_quoted_table_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("paperdb.toml");
+        let mut manifest = Manifest::create(&path).unwrap();
+        manifest.add(resolved("Aad:2012tfa", 1), None).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains(r#"[papers."Aad:2012tfa"]"#), "{text}");
+        let reloaded = Manifest::load(&path).unwrap();
+        assert!(reloaded.papers().contains_key("Aad:2012tfa"));
+    }
+
+    #[test]
+    fn save_renders_paper_tables_key_sorted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("paperdb.toml");
+        fs::write(
+            &path,
+            "schema = 1\n\n[papers.Zed]\ntitle = 'Last'\nsource = 'inspire'\nsource_id = '9'\n\n# alpha comment\n[papers.Alpha]\ntitle = 'First'\nsource = 'inspire'\nsource_id = '1'\n",
+        )
+        .unwrap();
+        let mut manifest = Manifest::load(&path).unwrap();
+        manifest.add(resolved("Mid", 5), None).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let alpha = text.find("[papers.Alpha]").unwrap();
+        let mid = text.find("[papers.Mid]").unwrap();
+        let zed = text.find("[papers.Zed]").unwrap();
+        assert!(alpha < mid && mid < zed, "{text}");
+        assert!(text.contains("# alpha comment"), "{text}");
     }
 }

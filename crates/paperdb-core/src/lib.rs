@@ -8,5 +8,5 @@ mod provider;
 
 pub use key::{fallback_key, validate_key};
 pub use locator::{Locator, normalize_arxiv, normalize_doi, strip_arxiv_version};
-pub use model::{Paper, Publication, ResolvedPaper};
+pub use model::{INSPIRE_SOURCE, PaperRecord, Publication, ResolvedPaper};
 pub use provider::{MetadataProvider, ProviderError};
