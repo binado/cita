@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/paperdb", "crates/paperdb-core", "crates/paperdb-inspire-client"]
+members = [
+    "crates/paperdb",
+    "crates/paperdb-core",
+    "crates/paperdb-inspire-client",
+    "crates/paperdb-manifest",
+]
 resolver = "2"
 
 [workspace.package]

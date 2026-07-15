@@ -1,8 +1,11 @@
-//! Asynchronous access to individual records in the INSPIRE literature API.
+//! INSPIRE metadata provider for PaperDB, built on a reusable async INSPIRE
+//! literature API client.
 //!
 //! The client deliberately covers only direct literature lookup. It retains
 //! unknown JSON fields, making typed consumers forward-compatible with API
-//! additions without coupling them to the full INSPIRE schema.
+//! additions without coupling them to the full INSPIRE schema. On top of it,
+//! [`InspireProvider`] implements `paperdb_core::MetadataProvider`, mapping
+//! raw INSPIRE records into provider-neutral resolved papers.
 //!
 //! ```no_run
 //! # async fn example() -> Result<(), paperdb_inspire_client::Error> {
@@ -18,8 +21,10 @@
 //! ```
 
 mod model;
+mod provider;
 
 pub use model::*;
+pub use provider::InspireProvider;
 use reqwest::StatusCode;
 use std::time::Duration;
 use thiserror::Error;
@@ -193,7 +198,13 @@ pub enum Error {
 }
 
 fn validate_arxiv(id: &str) -> Result<(), Error> {
-    let without_version = strip_version(id);
+    // `strip_arxiv_version` trims surrounding whitespace, so a padded id would
+    // otherwise validate here yet be stored (and later pushed into the request
+    // path) verbatim. Reject whitespace up front, matching `validate_doi`.
+    if id.bytes().any(|c| c.is_ascii_whitespace()) {
+        return Err(Error::InvalidIdentifier(format!("invalid arXiv id `{id}`")));
+    }
+    let without_version = paperdb_core::strip_arxiv_version(id);
     let modern = {
         let mut parts = without_version.split('.');
         matches!((parts.next(), parts.next(), parts.next()), (Some(a), Some(b), None)
@@ -215,19 +226,6 @@ fn validate_arxiv(id: &str) -> Result<(), Error> {
     } else {
         Err(Error::InvalidIdentifier(format!("invalid arXiv id `{id}`")))
     }
-}
-
-/// Request/validation-local: strips a trailing `v` + digits for arXiv id shape checks.
-/// Does not trim; the HTTP client must not depend on paperdb-core. Storage and identity
-/// normalization use `paperdb_core::strip_arxiv_version`.
-fn strip_version(id: &str) -> &str {
-    if let Some(index) = id.rfind('v')
-        && !id[index + 1..].is_empty()
-        && id[index + 1..].bytes().all(|c| c.is_ascii_digit())
-    {
-        return &id[..index];
-    }
-    id
 }
 
 fn validate_doi(doi: &str) -> Result<(), Error> {
@@ -361,6 +359,9 @@ mod tests {
     fn validates_identifiers_and_base_urls() {
         assert!(LiteratureId::record(0).is_err());
         assert!(LiteratureId::arxiv("bad").is_err());
+        // Whitespace-padded ids would strip to a valid form but be stored and
+        // requested verbatim, so they must be rejected outright.
+        assert!(LiteratureId::arxiv(" 1207.7214 ").is_err());
         assert!(LiteratureId::doi("not-a-doi").is_err());
         assert!(Client::builder().base_url("not a URL").build().is_err());
     }

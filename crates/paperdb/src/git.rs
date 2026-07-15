@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
-use paperdb_core::{Manifest, Paper};
+use paperdb_core::PaperRecord;
+use paperdb_manifest::Manifest;
 use std::{
     collections::BTreeMap,
     fs,
@@ -33,17 +34,17 @@ pub fn commit(manifest_path: &Path) -> Result<()> {
     }
 
     let current = Manifest::load(manifest_path)?;
-    let old_manifest;
-    let old = if let Some(bytes) = &old_bytes {
-        let temporary = tempfile::tempdir()?;
-        let path = temporary.path().join("paperdb.toml");
-        fs::write(&path, bytes)?;
-        old_manifest = Manifest::load(path)?;
-        Some(old_manifest.papers())
+    let (subject, body) = if let Some(bytes) = &old_bytes {
+        match parse_committed_manifest(bytes)? {
+            Some(old_manifest) => commit_message(Some(old_manifest.papers()), current.papers()),
+            // The committed manifest predates the current format (or is
+            // otherwise unreadable); commit with a generic message rather
+            // than refusing to commit the fixed file.
+            None => ("references: update bibliography".into(), String::new()),
+        }
     } else {
-        None
+        commit_message(None, current.papers())
     };
-    let (subject, body) = commit_message(old, current.papers());
 
     run_git(&root, &["add", "--", &relative_text])?;
     let mut args = vec!["commit", "--only", "-m", &subject];
@@ -56,32 +57,36 @@ pub fn commit(manifest_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn commit_message(old: Option<&[Paper]>, new: &[Paper]) -> (String, String) {
+/// Parse the manifest bytes committed at HEAD; `None` means the blob exists
+/// but is not a readable current-format manifest.
+fn parse_committed_manifest(bytes: &[u8]) -> Result<Option<Manifest>> {
+    let temporary = tempfile::tempdir()?;
+    let path = temporary.path().join("paperdb.toml");
+    fs::write(&path, bytes)?;
+    Ok(Manifest::load(path).ok())
+}
+
+fn commit_message(
+    old: Option<&BTreeMap<String, PaperRecord>>,
+    new: &BTreeMap<String, PaperRecord>,
+) -> (String, String) {
     let Some(old) = old else {
         return (
             "references: initialize paperdb".into(),
             body_lines([], new, []),
         );
     };
-    let old_by_key = old
-        .iter()
-        .map(|paper| (&paper.key, paper))
-        .collect::<BTreeMap<_, _>>();
-    let new_by_key = new
-        .iter()
-        .map(|paper| (&paper.key, paper))
-        .collect::<BTreeMap<_, _>>();
     let added = new
         .iter()
-        .filter(|paper| !old_by_key.contains_key(&paper.key))
+        .filter(|(key, _)| !old.contains_key(*key))
         .collect::<Vec<_>>();
     let removed = old
         .iter()
-        .filter(|paper| !new_by_key.contains_key(&paper.key))
+        .filter(|(key, _)| !new.contains_key(*key))
         .collect::<Vec<_>>();
     let modified = new
         .iter()
-        .filter(|paper| old_by_key.get(&paper.key).is_some_and(|old| *old != *paper))
+        .filter(|(key, record)| old.get(*key).is_some_and(|old| old != *record))
         .collect::<Vec<_>>();
     let subject = match (added.len(), removed.len(), modified.len()) {
         (count, 0, 0) if count > 0 => format!("references: add {count} {}", plural(count)),
@@ -97,22 +102,22 @@ fn plural(count: usize) -> &'static str {
 }
 
 fn body_lines<'a>(
-    removed: impl IntoIterator<Item = &'a Paper>,
-    added: impl IntoIterator<Item = &'a Paper>,
-    modified: impl IntoIterator<Item = &'a Paper>,
+    removed: impl IntoIterator<Item = (&'a String, &'a PaperRecord)>,
+    added: impl IntoIterator<Item = (&'a String, &'a PaperRecord)>,
+    modified: impl IntoIterator<Item = (&'a String, &'a PaperRecord)>,
 ) -> String {
     removed
         .into_iter()
-        .map(|paper| format!("- {} — {}", paper.key, paper.title))
+        .map(|(key, record)| format!("- {key} — {}", record.title))
         .chain(
             added
                 .into_iter()
-                .map(|paper| format!("+ {} — {}", paper.key, paper.title)),
+                .map(|(key, record)| format!("+ {key} — {}", record.title)),
         )
         .chain(
             modified
                 .into_iter()
-                .map(|paper| format!("~ {} — {}", paper.key, paper.title)),
+                .map(|(key, record)| format!("~ {key} — {}", record.title)),
         )
         .collect::<Vec<_>>()
         .join("\n")
@@ -151,32 +156,33 @@ mod tests {
 
     #[test]
     fn chooses_specific_messages() {
-        let a = Paper {
-            key: "A".into(),
-            title: "Alpha".into(),
-            source: "inspire".into(),
-            ..Paper::default()
-        };
-        let b = Paper {
-            key: "B".into(),
-            title: "Beta".into(),
-            source: "inspire".into(),
-            ..Paper::default()
-        };
+        fn record(title: &str) -> PaperRecord {
+            PaperRecord {
+                title: title.into(),
+                source: "inspire".into(),
+                ..PaperRecord::default()
+            }
+        }
+        let empty = BTreeMap::new();
+        let just_a = BTreeMap::from([("A".to_string(), record("Alpha"))]);
+        let a_and_b = BTreeMap::from([
+            ("A".to_string(), record("Alpha")),
+            ("B".to_string(), record("Beta")),
+        ]);
         assert_eq!(
-            commit_message(None, &[]).0,
+            commit_message(None, &empty).0,
             "references: initialize paperdb"
         );
         assert_eq!(
-            commit_message(Some(&[]), &[a.clone(), b]).0,
+            commit_message(Some(&empty), &a_and_b).0,
             "references: add 2 papers"
         );
         assert_eq!(
-            commit_message(Some(std::slice::from_ref(&a)), &[]).0,
+            commit_message(Some(&just_a), &empty).0,
             "references: remove 1 paper"
         );
         assert_eq!(
-            commit_message(Some(std::slice::from_ref(&a)), std::slice::from_ref(&a)).0,
+            commit_message(Some(&just_a), &just_a).0,
             "references: update manifest"
         );
     }

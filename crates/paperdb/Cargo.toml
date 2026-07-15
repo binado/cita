@@ -17,11 +17,10 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-async-trait.workspace = true
 clap.workspace = true
 paperdb-core = { path = "../paperdb-core" }
 paperdb-inspire-client = { path = "../paperdb-inspire-client" }
-serde_json.workspace = true
+paperdb-manifest = { path = "../paperdb-manifest" }
 tempfile.workspace = true
 tokio.workspace = true
 

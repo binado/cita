@@ -13,5 +13,7 @@ paperdb export --bibtex > references.bib
 paperdb commit
 ```
 
-The workspace also contains `paperdb-core` and the independently reusable
-`paperdb-inspire-client` library.
+The workspace also contains three library crates: `paperdb-core`
+(provider-neutral models and locators), `paperdb-manifest` (the `paperdb.toml`
+storage engine and BibTeX export), and `paperdb-inspire-client` (an INSPIRE
+metadata provider built on a reusable async INSPIRE literature API client).

@@ -32,23 +32,21 @@ fn assert_success(output: &Output) {
 fn sample_manifest() -> &'static str {
     r#"schema = 1
 
-[[papers]]
-key = "Zed:2020"
+[papers."Zed:2020"]
 title = "A  result with $Z\\to ee$"
 authors = ["Zed, Zoe"]
 year = 2020
-arxiv_ids = ["2001.00001"]
 source = "inspire"
+arxiv_ids = ["2001.00001"]
 
-[[papers]]
-key = "Alpha:2019"
+[papers."Alpha:2019"]
 title = "Earlier paper"
 collaborations = ["Example Collaboration"]
 year = 2019
-dois = ["10.1000/example"]
 source = "inspire"
+dois = ["10.1000/example"]
 
-[papers.publication]
+[papers."Alpha:2019".publication]
 journal = "JHEP"
 volume = "1"
 pages = "12"
@@ -152,6 +150,35 @@ fn commit_is_scoped_and_leaves_unrelated_staging_intact() {
     let unchanged = paperdb(directory.path(), &["commit"]);
     assert_success(&unchanged);
     assert!(String::from_utf8_lossy(&unchanged.stdout).contains("no Git changes"));
+}
+
+#[test]
+fn commit_falls_back_gracefully_when_head_manifest_is_unreadable() {
+    let directory = tempfile::tempdir().unwrap();
+    assert_success(&git(directory.path(), &["init", "-q"]));
+    assert_success(&git(
+        directory.path(),
+        &["config", "user.name", "PaperDB Tests"],
+    ));
+    assert_success(&git(
+        directory.path(),
+        &["config", "user.email", "paperdb@example.invalid"],
+    ));
+    let old_format = "schema = 1\n\n[[papers]]\nkey = \"Old:2019\"\ntitle = \"Old format\"\nsource = \"inspire\"\n";
+    fs::write(directory.path().join("paperdb.toml"), old_format).unwrap();
+    assert_success(&git(directory.path(), &["add", "paperdb.toml"]));
+    assert_success(&git(
+        directory.path(),
+        &["commit", "-q", "-m", "old-format manifest"],
+    ));
+
+    fs::write(directory.path().join("paperdb.toml"), sample_manifest()).unwrap();
+    assert_success(&paperdb(directory.path(), &["commit"]));
+    let subject = git(directory.path(), &["log", "-1", "--format=%s"]);
+    assert_eq!(
+        String::from_utf8_lossy(&subject.stdout).trim(),
+        "references: update bibliography"
+    );
 }
 
 #[test]
