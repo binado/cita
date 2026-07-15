@@ -198,6 +198,12 @@ pub enum Error {
 }
 
 fn validate_arxiv(id: &str) -> Result<(), Error> {
+    // `strip_arxiv_version` trims surrounding whitespace, so a padded id would
+    // otherwise validate here yet be stored (and later pushed into the request
+    // path) verbatim. Reject whitespace up front, matching `validate_doi`.
+    if id.bytes().any(|c| c.is_ascii_whitespace()) {
+        return Err(Error::InvalidIdentifier(format!("invalid arXiv id `{id}`")));
+    }
     let without_version = paperdb_core::strip_arxiv_version(id);
     let modern = {
         let mut parts = without_version.split('.');
@@ -353,6 +359,9 @@ mod tests {
     fn validates_identifiers_and_base_urls() {
         assert!(LiteratureId::record(0).is_err());
         assert!(LiteratureId::arxiv("bad").is_err());
+        // Whitespace-padded ids would strip to a valid form but be stored and
+        // requested verbatim, so they must be rejected outright.
+        assert!(LiteratureId::arxiv(" 1207.7214 ").is_err());
         assert!(LiteratureId::doi("not-a-doi").is_err());
         assert!(Client::builder().base_url("not a URL").build().is_err());
     }

@@ -93,6 +93,19 @@ impl Manifest {
             path: path.clone(),
             message: error.to_string(),
         })?;
+        // Papers must live in `[papers.<key>]` tables. An inline `papers = { .. }`
+        // map deserializes fine but is invisible to the `toml_edit` edit path,
+        // so removals would report success while leaving the file untouched.
+        if let Some(item) = document.get("papers")
+            && !item.is_table()
+        {
+            return Err(Error::Invalid {
+                path,
+                message: "`papers` must be a table of `[papers.<key>]` entries, \
+                          not an inline map"
+                    .into(),
+            });
+        }
         if data.schema != 1 {
             return Err(Error::Invalid {
                 path,
@@ -554,6 +567,18 @@ mod tests {
         fs::write(
             &path,
             "schema = 1\n\n[papers.One]\ntitle = 'First'\nsource = 'inspire'\n\n[papers.One]\ntitle = 'Again'\nsource = 'inspire'\n",
+        )
+        .unwrap();
+        assert!(matches!(Manifest::load(&path), Err(Error::Invalid { .. })));
+    }
+
+    #[test]
+    fn rejects_inline_papers_maps_on_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("paperdb.toml");
+        fs::write(
+            &path,
+            "schema = 1\npapers = { One = { title = 'First', source = 'inspire' } }\n",
         )
         .unwrap();
         assert!(matches!(Manifest::load(&path), Err(Error::Invalid { .. })));
