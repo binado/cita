@@ -3,10 +3,7 @@ mod inspire;
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand};
-use paperdb_core::{
-    AddOutcome, EXPLICIT_KEY_REQUIRES_ONE_LOCATOR, Locator, Manifest, MetadataProvider,
-    export_bibtex,
-};
+use paperdb_core::{AddOutcome, Locator, Manifest, MetadataProvider, export_bibtex};
 use std::{
     env,
     io::Write,
@@ -90,20 +87,25 @@ fn init(cwd: &Path) -> Result<()> {
 }
 
 async fn add(cwd: &Path, key: Option<&str>, values: &[String]) -> Result<()> {
-    // Fail fast before any network resolution. `Manifest::add_batch` enforces
-    // the same invariant defensively.
     if key.is_some() && values.len() != 1 {
-        bail!("{EXPLICIT_KEY_REQUIRES_ONE_LOCATOR}");
+        bail!("--key can only be used with one locator");
     }
     let path = find_manifest(cwd)?;
     let mut manifest = Manifest::load(&path)?;
     let provider = inspire::InspireProvider::new()?;
-    let mut resolved = Vec::with_capacity(values.len());
-    for value in values {
-        let locator = value.parse::<Locator>()?;
-        resolved.push(provider.resolve(&locator).await?);
-    }
-    for outcome in manifest.add_batch(resolved, key)? {
+    let outcomes = if let Some(key) = key {
+        let locator = values[0].parse::<Locator>()?;
+        let paper = provider.resolve(&locator).await?;
+        vec![manifest.add(paper, Some(key))?]
+    } else {
+        let mut resolved = Vec::with_capacity(values.len());
+        for value in values {
+            let locator = value.parse::<Locator>()?;
+            resolved.push(provider.resolve(&locator).await?);
+        }
+        manifest.add_batch(resolved)?
+    };
+    for outcome in outcomes {
         match outcome {
             AddOutcome::Added(key) => println!("Added {key}"),
             AddOutcome::Existing(key) => println!("Already present: {key}"),

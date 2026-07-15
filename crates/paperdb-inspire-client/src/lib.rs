@@ -217,6 +217,9 @@ fn validate_arxiv(id: &str) -> Result<(), Error> {
     }
 }
 
+/// Request/validation-local: strips a trailing `v` + digits for arXiv id shape checks.
+/// Does not trim; the HTTP client must not depend on paperdb-core. Storage and identity
+/// normalization use `paperdb_core::strip_arxiv_version`.
 fn strip_version(id: &str) -> &str {
     if let Some(index) = id.rfind('v')
         && !id[index + 1..].is_empty()

@@ -24,9 +24,6 @@ pub enum AddOutcome {
     Existing(String),
 }
 
-/// Error message when `--key` is used with more than one locator.
-pub const EXPLICIT_KEY_REQUIRES_ONE_LOCATOR: &str = "--key can only be used with one locator";
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("manifest already exists at {0}")]
@@ -118,25 +115,30 @@ impl Manifest {
         &self.papers
     }
 
-    pub fn add_batch(
+    pub fn add(
         &mut self,
-        resolved: Vec<ResolvedPaper>,
-        explicit_key: Option<&str>,
-    ) -> Result<Vec<AddOutcome>, Error> {
-        if let Some(key) = explicit_key {
+        paper: ResolvedPaper,
+        key: Option<&str>,
+    ) -> Result<AddOutcome, Error> {
+        if let Some(key) = key {
             validate_key(key).map_err(Error::InvalidKey)?;
-            // The CLI also checks this so it can fail before any network resolution.
-            if resolved.len() != 1 {
-                return Err(Error::InvalidKey(
-                    EXPLICIT_KEY_REQUIRES_ONE_LOCATOR.into(),
-                ));
-            }
         }
+        let mut outcomes = self.insert_papers(vec![(paper, key.map(str::to_owned))])?;
+        Ok(outcomes.pop().expect("one paper yields one outcome"))
+    }
 
+    pub fn add_batch(&mut self, papers: Vec<ResolvedPaper>) -> Result<Vec<AddOutcome>, Error> {
+        self.insert_papers(papers.into_iter().map(|paper| (paper, None)).collect())
+    }
+
+    fn insert_papers(
+        &mut self,
+        resolved: Vec<(ResolvedPaper, Option<String>)>,
+    ) -> Result<Vec<AddOutcome>, Error> {
         let original = self.papers.clone();
         let mut additions = Vec::new();
         let mut outcomes = Vec::new();
-        for item in resolved {
+        for (item, explicit_key) in resolved {
             let matches = matching_indices(&self.papers, &item);
             if matches.len() > 1 {
                 self.papers = original;
@@ -162,7 +164,6 @@ impl Manifest {
             }
 
             let key = explicit_key
-                .map(str::to_owned)
                 .or_else(|| item.suggested_key.clone())
                 .unwrap_or_else(|| fallback_key(&item));
             validate_key(&key).map_err(Error::InvalidKey)?;
@@ -441,11 +442,11 @@ mod tests {
         let path = dir.path().join("paperdb.toml");
         fs::write(&path, "schema = 1 # keep\ncustom = 'yes'\n\n[[papers]]\nkey = 'One'\ntitle = 'First'\nsource = 'inspire'\ninspire_id = 1\nunknown = 42 # also keep\n").unwrap();
         let mut manifest = Manifest::load(&path).unwrap();
-        manifest.add_batch(vec![resolved("Two", 2)], None).unwrap();
+        manifest.add(resolved("Two", 2), None).unwrap();
         let after_add = fs::read_to_string(&path).unwrap();
         assert!(after_add.contains("# keep"));
         assert!(after_add.contains("unknown = 42 # also keep"));
-        let error = manifest.add_batch(vec![resolved("Three", 3), resolved("Two", 4)], None);
+        let error = manifest.add_batch(vec![resolved("Three", 3), resolved("Two", 4)]);
         assert!(matches!(error, Err(Error::KeyConflict(_))));
         assert_eq!(fs::read_to_string(&path).unwrap(), after_add);
     }
@@ -456,7 +457,7 @@ mod tests {
         let path = dir.path().join("paperdb.toml");
         let mut manifest = Manifest::create(&path).unwrap();
         manifest
-            .add_batch(vec![resolved("One", 1), resolved("Two", 2)], None)
+            .add_batch(vec![resolved("One", 1), resolved("Two", 2)])
             .unwrap();
         let before = fs::read_to_string(&path).unwrap();
         assert!(
@@ -475,13 +476,13 @@ mod tests {
         let mut first = resolved("One", 1);
         first.arxiv_ids = vec!["2401.00001v2".into()];
         first.dois = vec!["10.1000/ABC".into()];
-        manifest.add_batch(vec![first], None).unwrap();
+        manifest.add(first, None).unwrap();
 
         let mut same_arxiv = resolved("Other", 1);
         same_arxiv.arxiv_ids = vec!["2401.00001".into()];
         assert_eq!(
-            manifest.add_batch(vec![same_arxiv], None).unwrap(),
-            [AddOutcome::Existing("One".into())]
+            manifest.add(same_arxiv, None).unwrap(),
+            AddOutcome::Existing("One".into())
         );
         assert_eq!(
             manifest.remove_batch(&["doi:10.1000/abc".into()]).unwrap()[0].key,
@@ -496,13 +497,13 @@ mod tests {
         let mut manifest = Manifest::create(&path).unwrap();
         let mut first = resolved("One", 1);
         first.arxiv_ids = vec!["HEP-TH/9901001v2".into()];
-        manifest.add_batch(vec![first], None).unwrap();
+        manifest.add(first, None).unwrap();
 
         let mut same_arxiv = resolved("Other", 1);
         same_arxiv.arxiv_ids = vec!["hep-th/9901001".into()];
         assert_eq!(
-            manifest.add_batch(vec![same_arxiv], None).unwrap(),
-            [AddOutcome::Existing("One".into())]
+            manifest.add(same_arxiv, None).unwrap(),
+            AddOutcome::Existing("One".into())
         );
     }
 
@@ -513,13 +514,13 @@ mod tests {
         let mut manifest = Manifest::create(&path).unwrap();
         let mut first = resolved("One", 1);
         first.arxiv_ids = vec!["2401.00001".into()];
-        manifest.add_batch(vec![first], None).unwrap();
+        manifest.add(first, None).unwrap();
         let before = fs::read_to_string(&path).unwrap();
 
         let mut conflicting = resolved("Two", 2);
         conflicting.arxiv_ids = vec!["2401.00001v3".into()];
         assert!(matches!(
-            manifest.add_batch(vec![conflicting], None),
+            manifest.add(conflicting, None),
             Err(Error::IdentifierConflict(_))
         ));
         assert_eq!(fs::read_to_string(path).unwrap(), before);
