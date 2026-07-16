@@ -34,6 +34,9 @@ enum Command {
         /// Override the citation key (only valid with one locator)
         #[arg(long)]
         key: Option<String>,
+        /// Overwrite stored metadata when the paper is already present by identity
+        #[arg(short = 'f', long)]
+        force: bool,
         /// arXiv id, or an arxiv:, doi:, or inspire: locator
         #[arg(required = true)]
         locators: Vec<String>,
@@ -131,7 +134,11 @@ async fn run() -> Result<()> {
             println!();
         }
         Some(Command::Init) => init(&cwd)?,
-        Some(Command::Add { key, locators }) => add(&cwd, key.as_deref(), &locators).await?,
+        Some(Command::Add {
+            key,
+            force,
+            locators,
+        }) => add(&cwd, key.as_deref(), force, &locators).await?,
         Some(Command::Remove { selectors }) => remove(&cwd, &selectors)?,
         Some(Command::List {
             sort_by,
@@ -220,7 +227,7 @@ fn ensure_cache_layout(directory: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn add(cwd: &Path, key: Option<&str>, values: &[String]) -> Result<()> {
+async fn add(cwd: &Path, key: Option<&str>, force: bool, values: &[String]) -> Result<()> {
     if key.is_some() && values.len() != 1 {
         bail!("--key can only be used with one locator");
     }
@@ -230,19 +237,20 @@ async fn add(cwd: &Path, key: Option<&str>, values: &[String]) -> Result<()> {
     let outcomes = if let Some(key) = key {
         let locator = values[0].parse::<Locator>()?;
         let paper = provider.resolve(&locator).await?;
-        vec![manifest.add(paper, Some(key))?]
+        vec![manifest.add(paper, Some(key), force)?]
     } else {
         let mut resolved = Vec::with_capacity(values.len());
         for value in values {
             let locator = value.parse::<Locator>()?;
             resolved.push(provider.resolve(&locator).await?);
         }
-        manifest.add_batch(resolved)?
+        manifest.add_batch(resolved, force)?
     };
     for outcome in outcomes {
         match outcome {
             AddOutcome::Added(key) => println!("Added {key}"),
             AddOutcome::Existing(key) => println!("Already present: {key}"),
+            AddOutcome::Updated(key) => println!("Updated {key}"),
         }
     }
     Ok(())
@@ -561,6 +569,7 @@ where
 fn prepare_selection(
     manifest: &mut Manifest,
     selection: PaperSelection,
+    selector: &str,
     save: bool,
     output: &mut impl Write,
 ) -> Result<SelectedPaper> {
@@ -572,24 +581,43 @@ fn prepare_selection(
             Ok(SelectedPaper { key, record })
         }
         PaperSelection::Transient(resolved) => {
-            let record = resolved.record.clone();
-            let key = if save {
-                match manifest.add(resolved, None)? {
-                    AddOutcome::Added(key) => {
-                        writeln!(output, "Added {key}")?;
-                        key
-                    }
-                    AddOutcome::Existing(key) => {
-                        writeln!(output, "Already present: {key}")?;
-                        key
-                    }
-                }
-            } else {
-                resolved
+            if !save {
+                let record = resolved.record.clone();
+                let key = resolved
                     .suggested_key
-                    .unwrap_or_else(|| fallback_key(&record))
-            };
-            Ok(SelectedPaper { key, record })
+                    .unwrap_or_else(|| fallback_key(&record));
+                return Ok(SelectedPaper { key, record });
+            }
+
+            let resolved_record = resolved.record.clone();
+            match manifest.add(resolved, None, false)? {
+                AddOutcome::Added(key) => {
+                    writeln!(output, "Added {key}")?;
+                    Ok(SelectedPaper {
+                        key,
+                        record: resolved_record,
+                    })
+                }
+                AddOutcome::Existing(key) => {
+                    writeln!(output, "Already present: {key}")?;
+                    let record = manifest
+                        .papers()
+                        .get(&key)
+                        .expect("Existing key must be present")
+                        .clone();
+                    if record != resolved_record {
+                        writeln!(
+                            output,
+                            "warning: stored metadata for `{key}` differs from INSPIRE; \
+                             run `cita add --force {selector}` to update it"
+                        )?;
+                    }
+                    Ok(SelectedPaper { key, record })
+                }
+                AddOutcome::Updated(_) => {
+                    unreachable!("--save never force-updates stored metadata")
+                }
+            }
         }
     }
 }
@@ -608,7 +636,7 @@ where
     let manifest_path = find_manifest(cwd)?;
     let mut manifest = Manifest::load(&manifest_path)?;
     let selection = select_paper_with(&manifest, selector, provider_factory).await?;
-    let selected = prepare_selection(&mut manifest, selection, save, output)?;
+    let selected = prepare_selection(&mut manifest, selection, selector, save, output)?;
     Ok((manifest_path, selected))
 }
 
@@ -908,6 +936,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn add_accepts_force_flag() {
+        for arguments in [
+            vec!["cita", "add", "--force", "1207.7214"],
+            vec!["cita", "add", "-f", "1207.7214"],
+            vec!["cita", "add", "--force", "--key", "Custom", "1207.7214"],
+        ] {
+            assert!(Cli::try_parse_from(arguments).is_ok());
+        }
+    }
+
     #[tokio::test]
     async fn selection_constructs_the_provider_only_for_valid_manifest_misses() {
         let directory = tempfile::tempdir().unwrap();
@@ -924,6 +963,14 @@ mod tests {
             .unwrap();
         assert!(matches!(
             stored,
+            PaperSelection::Stored { key, .. } if key == "Example"
+        ));
+
+        let stored_by_locator = select_paper_with(&manifest, "1207.7214", unused_provider)
+            .await
+            .unwrap();
+        assert!(matches!(
+            stored_by_locator,
             PaperSelection::Stored { key, .. } if key == "Example"
         ));
 
@@ -1161,6 +1208,49 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.key, "Existing");
+        assert!(selected.record.arxiv_ids.is_empty());
+        assert_eq!(selected.record.title, "Existing");
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "Already present: Existing\n\
+             warning: stored metadata for `Existing` differs from INSPIRE; \
+             run `cita add --force 2401.00001` to update it\n"
+        );
+        assert_eq!(fs::read(path).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn save_identity_overlap_with_equal_metadata_does_not_warn() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cita.toml");
+        let mut existing = resolved("Existing", "1", Some("2401.00001"));
+        existing.record.title = "Same".into();
+        let mut manifest = Manifest::create(&path).unwrap();
+        manifest
+            .add(existing.clone(), Some("Existing"), false)
+            .unwrap();
+        let before = fs::read(&path).unwrap();
+
+        let mut overlap = existing;
+        overlap.suggested_key = Some("Suggested".into());
+        let mut output = Vec::new();
+
+        let (_, selected) = select_for_action_with(
+            directory.path(),
+            "2401.00001",
+            true,
+            fake_factory(
+                overlap,
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            &mut output,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(selected.key, "Existing");
+        assert_eq!(selected.record.title, "Same");
         assert_eq!(
             String::from_utf8(output).unwrap(),
             "Already present: Existing\n"
