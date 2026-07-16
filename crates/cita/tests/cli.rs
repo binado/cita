@@ -150,6 +150,23 @@ fn fetch_reuses_cached_pdf_and_reports_missing_arxiv_id() {
 }
 
 #[test]
+fn open_no_download_errors_on_a_cache_miss_without_creating_the_cache() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("cita.toml"), sample_manifest()).unwrap();
+
+    let opened = cita(directory.path(), &["open", "--no-download", "Zed:2020"]);
+
+    assert!(!opened.status.success());
+    assert!(
+        String::from_utf8_lossy(&opened.stderr).contains("PDF is not cached"),
+        "{}",
+        String::from_utf8_lossy(&opened.stderr)
+    );
+    assert!(!directory.path().join(".cita").exists());
+    assert!(!directory.path().join(".gitignore").exists());
+}
+
+#[test]
 fn commit_is_scoped_and_leaves_unrelated_staging_intact() {
     let directory = tempfile::tempdir().unwrap();
     assert_success(&git(directory.path(), &["init", "-q"]));

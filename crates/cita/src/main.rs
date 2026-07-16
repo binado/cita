@@ -2,7 +2,7 @@ mod git;
 
 use anyhow::{Context, Result, bail};
 use cita_core::{Locator, MetadataProvider};
-use cita_documents::{DocumentStore, FetchOutcome, FetchPolicy};
+use cita_documents::{DocumentStore, FetchOutcome, FetchPolicy, arxiv_pdf_url};
 use cita_inspire_client::InspireProvider;
 use cita_manifest::{AddOutcome, Manifest, export_bibtex};
 use clap::{CommandFactory, Parser, Subcommand};
@@ -54,8 +54,14 @@ enum Command {
     /// Fetch and open a paper's arXiv PDF
     Open {
         /// Download even if a cached PDF already exists
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["browser", "no_download"])]
         force: bool,
+        /// Open the arXiv PDF URL in a browser without downloading it
+        #[arg(long, conflicts_with = "no_download")]
+        browser: bool,
+        /// Refuse to download the PDF if it is not already cached
+        #[arg(long)]
+        no_download: bool,
         /// Citation key or paper locator
         selector: String,
     },
@@ -92,8 +98,13 @@ async fn run() -> Result<()> {
         Some(Command::Fetch { force, selector }) => {
             fetch(&cwd, &selector, force).await?;
         }
-        Some(Command::Open { force, selector }) => {
-            open(&cwd, &selector, force).await?;
+        Some(Command::Open {
+            force,
+            browser,
+            no_download,
+            selector,
+        }) => {
+            open(&cwd, &selector, force, browser, no_download).await?;
         }
         Some(Command::Export { bibtex: true }) => export(&cwd)?,
         Some(Command::Export { bibtex: false }) => unreachable!("clap requires --bibtex"),
@@ -258,13 +269,36 @@ fn list(cwd: &Path) -> Result<()> {
 }
 
 async fn fetch(cwd: &Path, selector: &str, force: bool) -> Result<()> {
-    let (key, outcome) = fetch_paper(cwd, selector, force).await?;
+    let policy = if force {
+        FetchPolicy::Force
+    } else {
+        FetchPolicy::UseCache
+    };
+    let (key, outcome) = fetch_paper(cwd, selector, policy).await?;
     print_fetch_outcome(&key, &outcome);
     Ok(())
 }
 
-async fn open(cwd: &Path, selector: &str, force: bool) -> Result<()> {
-    open_with(cwd, selector, force, |path| {
+async fn open(
+    cwd: &Path,
+    selector: &str,
+    force: bool,
+    browser: bool,
+    no_download: bool,
+) -> Result<()> {
+    if browser {
+        return open_in_browser_with(cwd, selector, |url| {
+            opener::open(url).map_err(anyhow::Error::from)
+        });
+    }
+    let policy = if force {
+        FetchPolicy::Force
+    } else if no_download {
+        FetchPolicy::CacheOnly
+    } else {
+        FetchPolicy::UseCache
+    };
+    open_with(cwd, selector, policy, |path| {
         opener::open(path).map_err(anyhow::Error::from)
     })
     .await
@@ -273,10 +307,10 @@ async fn open(cwd: &Path, selector: &str, force: bool) -> Result<()> {
 async fn open_with(
     cwd: &Path,
     selector: &str,
-    force: bool,
+    policy: FetchPolicy,
     launch: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<()> {
-    let (key, outcome) = fetch_paper(cwd, selector, force).await?;
+    let (key, outcome) = fetch_paper(cwd, selector, policy).await?;
     print_fetch_outcome(&key, &outcome);
     let path = outcome.path();
     launch(path).with_context(|| format!("could not open {}", path.display()))?;
@@ -284,18 +318,32 @@ async fn open_with(
     Ok(())
 }
 
-async fn fetch_paper(cwd: &Path, selector: &str, force: bool) -> Result<(String, FetchOutcome)> {
+fn open_in_browser_with(
+    cwd: &Path,
+    selector: &str,
+    launch: impl FnOnce(&str) -> Result<()>,
+) -> Result<()> {
+    let manifest = Manifest::load(find_manifest(cwd)?)?;
+    let (_, paper) = manifest.paper(selector)?;
+    let url = arxiv_pdf_url(paper)?;
+    launch(url.as_str()).with_context(|| format!("could not open {url}"))?;
+    println!("Opened {url}");
+    Ok(())
+}
+
+async fn fetch_paper(
+    cwd: &Path,
+    selector: &str,
+    policy: FetchPolicy,
+) -> Result<(String, FetchOutcome)> {
     let manifest_path = find_manifest(cwd)?;
     let manifest = Manifest::load(&manifest_path)?;
     let (key, paper) = manifest.paper(selector)?;
     let project_root = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-    ensure_cache_layout(project_root)?;
+    if policy != FetchPolicy::CacheOnly {
+        ensure_cache_layout(project_root)?;
+    }
     let store = DocumentStore::new(project_root.join(".cita/files"))?;
-    let policy = if force {
-        FetchPolicy::Force
-    } else {
-        FetchPolicy::UseCache
-    };
     let outcome = store.fetch(paper, policy).await?;
     Ok((key.to_owned(), outcome))
 }
@@ -333,7 +381,7 @@ mod tests {
     use std::cell::RefCell;
 
     #[tokio::test]
-    async fn open_passes_the_cached_pdf_to_the_launcher() {
+    async fn open_no_download_passes_the_cached_pdf_to_the_launcher() {
         let directory = tempfile::tempdir().unwrap();
         fs::write(
             directory.path().join("cita.toml"),
@@ -345,13 +393,53 @@ mod tests {
         fs::write(&pdf, b"%PDF-cached").unwrap();
         let launched = RefCell::new(None);
 
-        open_with(directory.path(), "Example", false, |path| {
-            launched.replace(Some(path.to_owned()));
-            Ok(())
-        })
+        open_with(
+            directory.path(),
+            "Example",
+            FetchPolicy::CacheOnly,
+            |path| {
+                launched.replace(Some(path.to_owned()));
+                Ok(())
+            },
+        )
         .await
         .unwrap();
 
         assert_eq!(launched.into_inner(), Some(pdf));
+    }
+
+    #[test]
+    fn browser_open_passes_the_arxiv_pdf_url_to_the_launcher_without_creating_a_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join("cita.toml"),
+            "schema = 1\n\n[papers.Example]\ntitle = 'Example'\nsource = 'inspire'\narxiv_ids = ['hep-th/9901001']\n",
+        )
+        .unwrap();
+        let launched = RefCell::new(None);
+
+        open_in_browser_with(directory.path(), "Example", |url| {
+            launched.replace(Some(url.to_owned()));
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            launched.into_inner().as_deref(),
+            Some("https://arxiv.org/pdf/hep-th/9901001")
+        );
+        assert!(!directory.path().join(".cita").exists());
+        assert!(!directory.path().join(".gitignore").exists());
+    }
+
+    #[test]
+    fn open_modes_are_mutually_exclusive() {
+        for arguments in [
+            vec!["cita", "open", "--force", "--browser", "Example"],
+            vec!["cita", "open", "--force", "--no-download", "Example"],
+            vec!["cita", "open", "--browser", "--no-download", "Example"],
+        ] {
+            assert!(Cli::try_parse_from(arguments).is_err());
+        }
     }
 }

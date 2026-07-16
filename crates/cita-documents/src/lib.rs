@@ -20,6 +20,7 @@ const PDF_SIGNATURE: &[u8] = b"%PDF-";
 pub enum FetchPolicy {
     #[default]
     UseCache,
+    CacheOnly,
     Force,
 }
 
@@ -65,9 +66,12 @@ impl DocumentStore {
         let arxiv_id = validated_arxiv_id(arxiv_id)?;
         let destination = cache_path(&self.cache_root, &arxiv_id);
 
-        if policy == FetchPolicy::UseCache && destination.exists() {
+        if policy != FetchPolicy::Force && destination.exists() {
             validate_cached_pdf(&destination)?;
             return Ok(FetchOutcome::Cached(destination));
+        }
+        if policy == FetchPolicy::CacheOnly {
+            return Err(Error::NotCached(destination));
         }
 
         let parent = destination
@@ -191,6 +195,8 @@ pub enum Error {
     },
     #[error("cached file {0} is not a valid PDF; retry with --force")]
     InvalidCachedPdf(PathBuf),
+    #[error("PDF is not cached at {0}; rerun without --no-download")]
+    NotCached(PathBuf),
     #[error("arXiv request failed: {0}")]
     Transport(#[source] reqwest::Error),
     #[error("arXiv returned HTTP {status} for `{arxiv_id}`")]
@@ -212,6 +218,17 @@ fn validated_arxiv_id(value: &str) -> Result<String, Error> {
         Ok(Locator::Arxiv(id)) => Ok(id),
         _ => Err(Error::InvalidArxivIdentifier(value.to_owned())),
     }
+}
+
+pub fn arxiv_pdf_url(paper: &PaperRecord) -> Result<Url, Error> {
+    let arxiv_id = paper
+        .arxiv_ids
+        .first()
+        .ok_or(Error::MissingArxivIdentifier)?;
+    let arxiv_id = validated_arxiv_id(arxiv_id)?;
+    let base_url =
+        Url::parse(DEFAULT_BASE_URL).expect("the built-in arXiv base URL must always be valid");
+    pdf_url(&base_url, &arxiv_id)
 }
 
 fn cache_path(cache_root: &Path, arxiv_id: &str) -> PathBuf {
@@ -372,6 +389,47 @@ mod tests {
         ));
         assert_eq!(fs::read(destination).unwrap(), b"%PDF-new");
         handle.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn cache_only_reuses_a_valid_pdf_and_rejects_a_cache_miss() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("arxiv/1207.7214.pdf");
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(&destination, b"%PDF-cached").unwrap();
+        let store = DocumentStore::new(directory.path()).unwrap();
+
+        assert_eq!(
+            store
+                .fetch(&paper(&["1207.7214"]), FetchPolicy::CacheOnly)
+                .await
+                .unwrap(),
+            FetchOutcome::Cached(destination)
+        );
+
+        let missing = directory.path().join("arxiv/2101.00001.pdf");
+        assert!(matches!(
+            store
+                .fetch(&paper(&["2101.00001"]), FetchPolicy::CacheOnly)
+                .await,
+            Err(Error::NotCached(path)) if path == missing
+        ));
+    }
+
+    #[test]
+    fn builds_public_arxiv_pdf_urls_for_browser_opening() {
+        assert_eq!(
+            arxiv_pdf_url(&paper(&["1207.7214"])).unwrap().as_str(),
+            "https://arxiv.org/pdf/1207.7214"
+        );
+        assert_eq!(
+            arxiv_pdf_url(&paper(&["hep-th/9901001"])).unwrap().as_str(),
+            "https://arxiv.org/pdf/hep-th/9901001"
+        );
+        assert!(matches!(
+            arxiv_pdf_url(&paper(&[])),
+            Err(Error::MissingArxivIdentifier)
+        ));
     }
 
     #[tokio::test]
