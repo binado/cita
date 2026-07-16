@@ -45,17 +45,17 @@ enum Command {
     List,
     /// Fetch a paper's arXiv PDF into the local cache
     Fetch {
-        /// Replace an existing cached PDF
+        /// Download even if a cached PDF already exists
         #[arg(long)]
-        refresh: bool,
+        force: bool,
         /// Citation key or paper locator
         selector: String,
     },
     /// Fetch and open a paper's arXiv PDF
     Open {
-        /// Replace an existing cached PDF
+        /// Download even if a cached PDF already exists
         #[arg(long)]
-        refresh: bool,
+        force: bool,
         /// Citation key or paper locator
         selector: String,
     },
@@ -89,11 +89,11 @@ async fn run() -> Result<()> {
         Some(Command::Add { key, locators }) => add(&cwd, key.as_deref(), &locators).await?,
         Some(Command::Remove { selectors }) => remove(&cwd, &selectors)?,
         Some(Command::List) => list(&cwd)?,
-        Some(Command::Fetch { refresh, selector }) => {
-            fetch(&cwd, &selector, refresh).await?;
+        Some(Command::Fetch { force, selector }) => {
+            fetch(&cwd, &selector, force).await?;
         }
-        Some(Command::Open { refresh, selector }) => {
-            open(&cwd, &selector, refresh).await?;
+        Some(Command::Open { force, selector }) => {
+            open(&cwd, &selector, force).await?;
         }
         Some(Command::Export { bibtex: true }) => export(&cwd)?,
         Some(Command::Export { bibtex: false }) => unreachable!("clap requires --bibtex"),
@@ -257,14 +257,14 @@ fn list(cwd: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn fetch(cwd: &Path, selector: &str, refresh: bool) -> Result<()> {
-    let (key, outcome) = fetch_paper(cwd, selector, refresh).await?;
+async fn fetch(cwd: &Path, selector: &str, force: bool) -> Result<()> {
+    let (key, outcome) = fetch_paper(cwd, selector, force).await?;
     print_fetch_outcome(&key, &outcome);
     Ok(())
 }
 
-async fn open(cwd: &Path, selector: &str, refresh: bool) -> Result<()> {
-    open_with(cwd, selector, refresh, |path| {
+async fn open(cwd: &Path, selector: &str, force: bool) -> Result<()> {
+    open_with(cwd, selector, force, |path| {
         opener::open(path).map_err(anyhow::Error::from)
     })
     .await
@@ -273,10 +273,10 @@ async fn open(cwd: &Path, selector: &str, refresh: bool) -> Result<()> {
 async fn open_with(
     cwd: &Path,
     selector: &str,
-    refresh: bool,
+    force: bool,
     launch: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<()> {
-    let (key, outcome) = fetch_paper(cwd, selector, refresh).await?;
+    let (key, outcome) = fetch_paper(cwd, selector, force).await?;
     print_fetch_outcome(&key, &outcome);
     let path = outcome.path();
     launch(path).with_context(|| format!("could not open {}", path.display()))?;
@@ -284,7 +284,7 @@ async fn open_with(
     Ok(())
 }
 
-async fn fetch_paper(cwd: &Path, selector: &str, refresh: bool) -> Result<(String, FetchOutcome)> {
+async fn fetch_paper(cwd: &Path, selector: &str, force: bool) -> Result<(String, FetchOutcome)> {
     let manifest_path = find_manifest(cwd)?;
     let manifest = Manifest::load(&manifest_path)?;
     let (key, paper) = manifest.paper(selector)?;
@@ -293,8 +293,8 @@ async fn fetch_paper(cwd: &Path, selector: &str, refresh: bool) -> Result<(Strin
         .unwrap_or_else(|| Path::new("."))
         .join(".cita/files");
     let store = DocumentStore::new(cache_root)?;
-    let policy = if refresh {
-        FetchPolicy::Refresh
+    let policy = if force {
+        FetchPolicy::Force
     } else {
         FetchPolicy::UseCache
     };

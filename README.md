@@ -45,10 +45,10 @@ cita commit                                                  # commit only cita.
   citation key and is only valid with a single locator.
 - `cita remove <selector>...` — remove papers by citation key or locator.
 - `cita list` — list stored papers.
-- `cita fetch [--refresh] <selector>` — download the selected paper's arXiv
-  PDF into `.cita/files/`, or reuse the cached file. `--refresh` replaces it
-  with the latest arXiv version.
-- `cita open [--refresh] <selector>` — fetch the PDF and open it in the
+- `cita fetch [--force] <selector>` — download the selected paper's arXiv
+  PDF into `.cita/files/`, or skip the download if a cached file already
+  exists. `--force` downloads again even when a cache file is present.
+- `cita open [--force] <selector>` — fetch the PDF and open it in the
   system's default application.
 - `cita export --bibtex` — write deterministic BibTeX to standard output.
 - `cita commit` — stage and commit only `cita.toml`, leaving any other staged
@@ -69,7 +69,7 @@ The workspace contains one binary and four library crates:
 
 PDFs are local cache data and are not committed by `cita commit`. Cita uses the
 first arXiv identifier stored for a paper. Stored identifiers are versionless,
-so a download gets the latest available version; use `--refresh` to update an
+so a download gets the latest available version; use `--force` to replace an
 existing cached copy. Papers without an arXiv identifier cannot be fetched.
 The `.gitignore` change made by `cita init` is also left for your normal Git
 workflow because `cita commit` remains scoped to `cita.toml`.

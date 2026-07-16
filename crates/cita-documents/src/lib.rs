@@ -20,7 +20,7 @@ const PDF_SIGNATURE: &[u8] = b"%PDF-";
 pub enum FetchPolicy {
     #[default]
     UseCache,
-    Refresh,
+    Force,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -189,7 +189,7 @@ pub enum Error {
         path: PathBuf,
         source: std::io::Error,
     },
-    #[error("cached file {0} is not a valid PDF; retry with --refresh")]
+    #[error("cached file {0} is not a valid PDF; retry with --force")]
     InvalidCachedPdf(PathBuf),
     #[error("arXiv request failed: {0}")]
     Transport(#[source] reqwest::Error),
@@ -352,7 +352,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_atomically_replaces_cached_pdf() {
+    async fn force_atomically_replaces_cached_pdf() {
         let directory = tempfile::tempdir().unwrap();
         let destination = directory.path().join("arxiv/1207.7214.pdf");
         fs::create_dir_all(destination.parent().unwrap()).unwrap();
@@ -365,7 +365,7 @@ mod tests {
 
         assert!(matches!(
             store
-                .fetch(&paper(&["1207.7214"]), FetchPolicy::Refresh)
+                .fetch(&paper(&["1207.7214"]), FetchPolicy::Force)
                 .await
                 .unwrap(),
             FetchOutcome::Downloaded(_)
@@ -399,7 +399,7 @@ mod tests {
         fs::write(&destination, b"%PDF-existing").unwrap();
         assert!(matches!(
             store
-                .fetch(&paper(&["1207.7214"]), FetchPolicy::Refresh)
+                .fetch(&paper(&["1207.7214"]), FetchPolicy::Force)
                 .await,
             Err(Error::InvalidDownloadedPdf(_))
         ));

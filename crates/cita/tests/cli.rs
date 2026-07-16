@@ -140,7 +140,7 @@ fn fetch_reuses_cached_pdf_and_reports_missing_arxiv_id() {
     assert!(stdout.contains("Already fetched Zed:2020"), "{stdout}");
     assert!(stdout.contains(pdf.to_string_lossy().as_ref()), "{stdout}");
 
-    let missing = cita(&nested, &["fetch", "--refresh", "Alpha:2019"]);
+    let missing = cita(&nested, &["fetch", "--force", "Alpha:2019"]);
     assert!(!missing.status.success());
     assert!(String::from_utf8_lossy(&missing.stderr).contains("paper has no arXiv identifier"));
 }
