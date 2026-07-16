@@ -394,7 +394,8 @@ fn list(cwd: &Path, sort_by: SortBy, order: Order, wrap_title: bool) -> Result<(
     let title_column_width = title_width
         .unwrap_or_else(|| column_width(headers[1], rows.iter().map(|row| row.title.as_str())));
 
-    let color = std::io::stdout().is_terminal();
+    let color =
+        std::io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
     let header_line = format!(
         "{:<kw$}  {:<tw$}  {:<aw$}  {:<yw$}",
         headers[0],
