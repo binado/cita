@@ -139,6 +139,10 @@ fn fetch_reuses_cached_pdf_and_reports_missing_arxiv_id() {
     let stdout = String::from_utf8_lossy(&fetched.stdout);
     assert!(stdout.contains("Already fetched Zed:2020"), "{stdout}");
     assert!(stdout.contains(pdf.to_string_lossy().as_ref()), "{stdout}");
+    assert_eq!(
+        fs::read_to_string(directory.path().join(".gitignore")).unwrap(),
+        "# Cita document cache\n/.cita/files/\n"
+    );
 
     let missing = cita(&nested, &["fetch", "--force", "Alpha:2019"]);
     assert!(!missing.status.success());

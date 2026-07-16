@@ -288,11 +288,9 @@ async fn fetch_paper(cwd: &Path, selector: &str, force: bool) -> Result<(String,
     let manifest_path = find_manifest(cwd)?;
     let manifest = Manifest::load(&manifest_path)?;
     let (key, paper) = manifest.paper(selector)?;
-    let cache_root = manifest_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(".cita/files");
-    let store = DocumentStore::new(cache_root)?;
+    let project_root = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    ensure_cache_layout(project_root)?;
+    let store = DocumentStore::new(project_root.join(".cita/files"))?;
     let policy = if force {
         FetchPolicy::Force
     } else {
