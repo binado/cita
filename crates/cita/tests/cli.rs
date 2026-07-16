@@ -112,6 +112,167 @@ fn discovers_parent_manifest_lists_and_exports_clean_bibtex() {
 }
 
 #[test]
+fn sort_by_title_reorders_rows() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(
+        directory.path().join("cita.toml"),
+        r#"schema = 1
+
+[papers."Zulu:1"]
+title = "Alpha Title"
+source = "inspire"
+
+[papers."Alpha:2"]
+title = "Zulu Title"
+source = "inspire"
+"#,
+    )
+    .unwrap();
+
+    let list = cita(directory.path(), &["list", "--sort-by", "title"]);
+    assert_success(&list);
+    let list = String::from_utf8(list.stdout).unwrap();
+    assert!(list.find("Zulu:1").unwrap() < list.find("Alpha:2").unwrap());
+}
+
+#[test]
+fn order_desc_reverses_the_sort() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("cita.toml"), sample_manifest()).unwrap();
+
+    let ascending = cita(directory.path(), &["list", "--sort-by", "key"]);
+    assert_success(&ascending);
+    let ascending = String::from_utf8(ascending.stdout).unwrap();
+    assert!(ascending.find("Alpha:2019").unwrap() < ascending.find("Zed:2020").unwrap());
+
+    let descending = cita(
+        directory.path(),
+        &["list", "--sort-by", "key", "--order", "desc"],
+    );
+    assert_success(&descending);
+    let descending = String::from_utf8(descending.stdout).unwrap();
+    assert!(descending.find("Zed:2020").unwrap() < descending.find("Alpha:2019").unwrap());
+}
+
+#[test]
+fn order_desc_keeps_missing_years_last() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(
+        directory.path().join("cita.toml"),
+        r#"schema = 1
+
+[papers."Zulu:1"]
+title = "Paper one"
+year = 1990
+source = "inspire"
+
+[papers."Alpha:2"]
+title = "Paper two"
+year = 2020
+source = "inspire"
+
+[papers."Undated:3"]
+title = "Paper three"
+source = "inspire"
+"#,
+    )
+    .unwrap();
+
+    let list = cita(
+        directory.path(),
+        &["list", "--sort-by", "year", "--order", "desc"],
+    );
+    assert_success(&list);
+    let list = String::from_utf8(list.stdout).unwrap();
+    let alpha = list.find("Alpha:2").unwrap();
+    let zulu = list.find("Zulu:1").unwrap();
+    let undated = list.find("Undated:3").unwrap();
+    assert!(alpha < zulu, "descending years: 2020 before 1990");
+    assert!(zulu < undated, "missing years still sort last");
+}
+
+#[test]
+fn sort_by_author_reorders_rows() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(
+        directory.path().join("cita.toml"),
+        r#"schema = 1
+
+[papers."Zulu:1"]
+title = "Paper one"
+authors = ["Aaronson, A"]
+source = "inspire"
+
+[papers."Alpha:2"]
+title = "Paper two"
+authors = ["Zimmerman, Z"]
+source = "inspire"
+"#,
+    )
+    .unwrap();
+
+    let list = cita(directory.path(), &["list", "--sort-by", "author"]);
+    assert_success(&list);
+    let list = String::from_utf8(list.stdout).unwrap();
+    assert!(list.find("Zulu:1").unwrap() < list.find("Alpha:2").unwrap());
+}
+
+#[test]
+fn sort_by_year_reorders_rows_and_puts_missing_years_last() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(
+        directory.path().join("cita.toml"),
+        r#"schema = 1
+
+[papers."Zulu:1"]
+title = "Paper one"
+year = 1990
+source = "inspire"
+
+[papers."Alpha:2"]
+title = "Paper two"
+year = 2020
+source = "inspire"
+
+[papers."Undated:3"]
+title = "Paper three"
+source = "inspire"
+"#,
+    )
+    .unwrap();
+
+    let list = cita(directory.path(), &["list", "--sort-by", "year"]);
+    assert_success(&list);
+    let list = String::from_utf8(list.stdout).unwrap();
+    let zulu = list.find("Zulu:1").unwrap();
+    let alpha = list.find("Alpha:2").unwrap();
+    let undated = list.find("Undated:3").unwrap();
+    assert!(zulu < alpha);
+    assert!(alpha < undated);
+}
+
+#[test]
+fn multi_author_paper_renders_et_al() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(
+        directory.path().join("cita.toml"),
+        r#"schema = 1
+
+[papers."Multi:2020"]
+title = "A collaborative paper"
+authors = ["First, Alice", "Second, Bob"]
+source = "inspire"
+"#,
+    )
+    .unwrap();
+
+    let list = cita(directory.path(), &["list"]);
+    assert_success(&list);
+    let list = String::from_utf8(list.stdout).unwrap();
+    assert!(list.contains("First, Alice et al."));
+}
+
+#[test]
 fn multi_remove_is_atomic() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("cita.toml");

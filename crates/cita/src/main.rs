@@ -1,7 +1,7 @@
 mod git;
 
 use anyhow::{Context, Result, bail};
-use cita_core::{Locator, MetadataProvider};
+use cita_core::{Locator, MetadataProvider, PaperRecord};
 use cita_documents::{
     DocumentStore, Error as DocumentError, FetchOutcome, FetchPolicy, arxiv_pdf_url,
 };
@@ -11,7 +11,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use std::{
     env, fs,
     fs::OpenOptions,
-    io::Write,
+    io::{IsTerminal, Write},
     path::{Path, PathBuf},
 };
 
@@ -44,7 +44,17 @@ enum Command {
         selectors: Vec<String>,
     },
     /// List stored papers
-    List,
+    List {
+        /// Field to sort the listing by
+        #[arg(long, value_enum, default_value_t = SortBy::Key)]
+        sort_by: SortBy,
+        /// Sort direction
+        #[arg(long, value_enum, default_value_t = Order::Asc)]
+        order: Order,
+        /// Truncate long titles instead of wrapping them across lines
+        #[arg(long)]
+        no_wrap_title: bool,
+    },
     /// Fetch a paper's arXiv PDF into the local cache
     Fetch {
         /// Download even if a cached PDF already exists
@@ -80,6 +90,24 @@ enum Command {
     Commit,
 }
 
+/// Field to sort `cita list` by.
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+enum SortBy {
+    #[default]
+    Key,
+    Title,
+    Author,
+    Year,
+}
+
+/// Sort direction for `cita list`.
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+enum Order {
+    #[default]
+    Asc,
+    Desc,
+}
+
 #[tokio::main]
 async fn main() {
     if let Err(error) = run().await {
@@ -99,7 +127,11 @@ async fn run() -> Result<()> {
         Some(Command::Init) => init(&cwd)?,
         Some(Command::Add { key, locators }) => add(&cwd, key.as_deref(), &locators).await?,
         Some(Command::Remove { selectors }) => remove(&cwd, &selectors)?,
-        Some(Command::List) => list(&cwd)?,
+        Some(Command::List {
+            sort_by,
+            order,
+            no_wrap_title,
+        }) => list(&cwd, sort_by, order, !no_wrap_title)?,
         Some(Command::Fetch {
             force,
             dry_run,
@@ -217,64 +249,214 @@ fn remove(cwd: &Path, selectors: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn list(cwd: &Path) -> Result<()> {
+struct Row {
+    key: String,
+    title: String,
+    author: String,
+    year_num: Option<i32>,
+    year: String,
+}
+
+/// First author (`et al.` when there is more than one), falling back to the
+/// first collaboration, then `—` when neither is present.
+fn author_display(record: &PaperRecord) -> String {
+    match record.authors.first() {
+        Some(first) if record.authors.len() > 1 => format!("{first} et al."),
+        Some(first) => first.clone(),
+        None => match record.collaborations.first() {
+            Some(collaboration) => collaboration.clone(),
+            None => "—".to_string(),
+        },
+    }
+}
+
+/// Truncates `title` to at most `width` chars, replacing the tail with `…`
+/// when it doesn't fit. Operates on chars (not bytes) so multibyte and TeX
+/// titles (e.g. `$Z\to ee$`) are never split mid-codepoint.
+fn truncate(title: &str, width: usize) -> String {
+    let chars: Vec<char> = title.chars().collect();
+    if chars.len() <= width {
+        return title.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut truncated: String = chars[..width - 1].iter().collect();
+    truncated.push('…');
+    truncated
+}
+
+/// Greedy word-wraps `title` into lines of at most `width` chars. A single
+/// word longer than `width` is hard-broken across lines.
+fn wrap(title: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![title.to_string()];
+    }
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in title.split_whitespace() {
+        let word_len = word.chars().count();
+        if word_len > width {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+            let chars: Vec<char> = word.chars().collect();
+            for chunk in chars.chunks(width) {
+                lines.push(chunk.iter().collect());
+            }
+            continue;
+        }
+        let candidate_len = if current.is_empty() {
+            word_len
+        } else {
+            current.chars().count() + 1 + word_len
+        };
+        if candidate_len > width {
+            lines.push(std::mem::take(&mut current));
+            current.push_str(word);
+        } else {
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(word);
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+/// Applies `order` to a field comparison, leaving `Equal` untouched so ties
+/// still fall back to the prior (stable) order.
+fn ordered(comparison: std::cmp::Ordering, order: Order) -> std::cmp::Ordering {
+    match order {
+        Order::Asc => comparison,
+        Order::Desc => comparison.reverse(),
+    }
+}
+
+fn list(cwd: &Path, sort_by: SortBy, order: Order, wrap_title: bool) -> Result<()> {
     let manifest = Manifest::load(find_manifest(cwd)?)?;
     if manifest.papers().is_empty() {
         return Ok(());
     }
-    let rows = manifest
+    let mut rows: Vec<Row> = manifest
         .papers()
         .iter()
-        .map(|(key, record)| {
-            let author = record
-                .authors
-                .first()
-                .or_else(|| record.collaborations.first())
-                .map(String::as_str)
-                .unwrap_or("—");
-            [
-                key.clone(),
-                record.year.map_or_else(|| "—".into(), |y| y.to_string()),
-                author.into(),
-                record.title.clone(),
-            ]
+        .map(|(key, record)| Row {
+            key: key.clone(),
+            title: record.title.clone(),
+            author: author_display(record),
+            year_num: record.year,
+            year: record.year.map_or_else(|| "—".into(), |y| y.to_string()),
         })
-        .collect::<Vec<_>>();
-    let headers = ["KEY", "YEAR", "AUTHOR/COLLABORATION", "TITLE"];
-    // Only the first three columns are padded; the trailing title column is
-    // printed unpadded, so its width never needs to be tracked.
-    let mut widths = [0usize; 3];
-    for (width, header) in widths.iter_mut().zip(headers) {
-        *width = header.chars().count();
-    }
-    for row in &rows {
-        for (width, value) in widths.iter_mut().zip(&row[..3]) {
-            *width = (*width).max(value.chars().count());
+        .collect();
+
+    match sort_by {
+        SortBy::Key => {
+            if let Order::Desc = order {
+                rows.reverse();
+            }
         }
+        SortBy::Title => rows.sort_by(|a, b| ordered(a.title.cmp(&b.title), order)),
+        SortBy::Author => rows.sort_by(|a, b| ordered(a.author.cmp(&b.author), order)),
+        // Missing years always sort last, independent of direction (like SQL's
+        // NULLS LAST); only the comparison between two present years flips.
+        SortBy::Year => rows.sort_by(|a, b| match (a.year_num, b.year_num) {
+            (None, None) => std::cmp::Ordering::Equal,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (Some(a_year), Some(b_year)) => ordered(a_year.cmp(&b_year), order),
+        }),
     }
-    println!(
-        "{:<w0$}  {:<w1$}  {:<w2$}  {}",
+
+    let headers = ["Key", "Title", "Author", "Year"];
+    let key_width = column_width(headers[0], rows.iter().map(|row| row.key.as_str()));
+    let author_width = column_width(headers[2], rows.iter().map(|row| row.author.as_str()));
+    let year_width = column_width(headers[3], rows.iter().map(|row| row.year.as_str()));
+
+    // `terminal_size()` falls back to stderr/stdin, which would return a
+    // width from the shell's tty even when stdout is piped (e.g. `cita list
+    // | cat`). Query stdout specifically so piped output stays plain.
+    let terminal_width =
+        terminal_size::terminal_size_of(std::io::stdout()).map(|(width, _)| width.0 as usize);
+    let title_width = match terminal_width {
+        Some(width) => {
+            let reserved = key_width + author_width + year_width + 6;
+            Some(width.saturating_sub(reserved).max(10))
+        }
+        None => None,
+    };
+    let title_column_width = title_width
+        .unwrap_or_else(|| column_width(headers[1], rows.iter().map(|row| row.title.as_str())));
+
+    let color =
+        std::io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
+    let header_line = format!(
+        "{:<kw$}  {:<tw$}  {:<aw$}  {:<yw$}",
         headers[0],
         headers[1],
         headers[2],
         headers[3],
-        w0 = widths[0],
-        w1 = widths[1],
-        w2 = widths[2]
+        kw = key_width,
+        tw = title_column_width,
+        aw = author_width,
+        yw = year_width
     );
+    if color {
+        let style = anstyle::Style::new()
+            .bold()
+            .fg_color(Some(anstyle::AnsiColor::Cyan.into()));
+        println!("{style}{header_line}{style:#}");
+    } else {
+        println!("{header_line}");
+    }
+
     for row in rows {
-        println!(
-            "{:<w0$}  {:<w1$}  {:<w2$}  {}",
-            row[0],
-            row[1],
-            row[2],
-            row[3],
-            w0 = widths[0],
-            w1 = widths[1],
-            w2 = widths[2]
-        );
+        let title_lines = match title_width {
+            Some(width) if wrap_title => wrap(&row.title, width),
+            Some(width) => vec![truncate(&row.title, width)],
+            None => vec![row.title],
+        };
+        let mut lines = title_lines.into_iter();
+        if let Some(first_line) = lines.next() {
+            println!(
+                "{:<kw$}  {:<tw$}  {:<aw$}  {:<yw$}",
+                row.key,
+                first_line,
+                row.author,
+                row.year,
+                kw = key_width,
+                tw = title_column_width,
+                aw = author_width,
+                yw = year_width
+            );
+        }
+        for continuation in lines {
+            println!(
+                "{:<kw$}  {:<tw$}  {:<aw$}  {:<yw$}",
+                "",
+                continuation,
+                "",
+                "",
+                kw = key_width,
+                tw = title_column_width,
+                aw = author_width,
+                yw = year_width
+            );
+        }
     }
     Ok(())
+}
+
+fn column_width<'a>(header: &str, values: impl Iterator<Item = &'a str>) -> usize {
+    values.fold(header.chars().count(), |width, value| {
+        width.max(value.chars().count())
+    })
 }
 
 async fn fetch(cwd: &Path, selector: &str, force: bool, dry_run: bool) -> Result<()> {
@@ -500,5 +682,116 @@ mod tests {
         ] {
             assert!(Cli::try_parse_from(arguments).is_err());
         }
+    }
+
+    #[test]
+    fn list_accepts_no_wrap_title_flag() {
+        let Command::List {
+            sort_by: _,
+            order: _,
+            no_wrap_title,
+        } = Cli::try_parse_from(["cita", "list", "--no-wrap-title"])
+            .unwrap()
+            .command
+            .unwrap()
+        else {
+            panic!("expected List command");
+        };
+        assert!(no_wrap_title);
+    }
+
+    #[test]
+    fn list_order_defaults_to_ascending() {
+        let Command::List { order, .. } = Cli::try_parse_from(["cita", "list"])
+            .unwrap()
+            .command
+            .unwrap()
+        else {
+            panic!("expected List command");
+        };
+        assert!(matches!(order, Order::Asc));
+    }
+
+    #[test]
+    fn list_accepts_order_desc() {
+        let Command::List { order, .. } = Cli::try_parse_from(["cita", "list", "--order", "desc"])
+            .unwrap()
+            .command
+            .unwrap()
+        else {
+            panic!("expected List command");
+        };
+        assert!(matches!(order, Order::Desc));
+    }
+
+    #[test]
+    fn truncate_passes_short_titles_through_unchanged() {
+        assert_eq!(truncate("A short title", 20), "A short title");
+        assert_eq!(truncate("Exactly ten", 11), "Exactly ten");
+    }
+
+    #[test]
+    fn truncate_ellipsizes_long_titles() {
+        assert_eq!(truncate("A very long title indeed", 10), "A very lo…");
+    }
+
+    #[test]
+    fn truncate_is_multibyte_and_tex_safe() {
+        // "$Z\to ee$" contains only ASCII, but exercise a genuine multibyte
+        // title (é) alongside TeX markup to ensure char, not byte, slicing.
+        assert_eq!(truncate("Café $Z\\to ee$", 6), "Café …");
+    }
+
+    #[test]
+    fn wrap_breaks_on_word_boundaries() {
+        assert_eq!(
+            wrap("the quick brown fox", 10),
+            vec!["the quick".to_string(), "brown fox".to_string()]
+        );
+    }
+
+    #[test]
+    fn wrap_hard_breaks_an_overlong_word() {
+        assert_eq!(
+            wrap("supercalifragilisticexpialidocious", 10),
+            vec![
+                "supercalif".to_string(),
+                "ragilistic".to_string(),
+                "expialidoc".to_string(),
+                "ious".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn author_display_shows_single_author() {
+        let record = PaperRecord {
+            authors: vec!["Higgs, Peter".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(author_display(&record), "Higgs, Peter");
+    }
+
+    #[test]
+    fn author_display_shows_et_al_for_multiple_authors() {
+        let record = PaperRecord {
+            authors: vec!["Higgs, Peter".to_string(), "Englert, Francois".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(author_display(&record), "Higgs, Peter et al.");
+    }
+
+    #[test]
+    fn author_display_falls_back_to_collaboration() {
+        let record = PaperRecord {
+            collaborations: vec!["ATLAS Collaboration".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(author_display(&record), "ATLAS Collaboration");
+    }
+
+    #[test]
+    fn author_display_falls_back_to_placeholder() {
+        assert_eq!(author_display(&PaperRecord::default()), "—");
     }
 }
