@@ -47,6 +47,7 @@ cita commit                                                  # commit only cita.
   papers through INSPIRE and store them. A bare token is treated as an arXiv
   id; use `arxiv:`, `doi:`, or `inspire:` prefixes for explicit locators.
   `--key` overrides the citation key and is only valid with a single locator.
+  It cannot rename a paper already stored under a different citation key.
   Without `--force`, a paper already present by identity is left unchanged.
   With `--force`, differing metadata is overwritten in place under the existing
   citation key.
@@ -58,10 +59,11 @@ cita commit                                                  # commit only cita.
   locator that is absent from the manifest is resolved transiently by default;
   `--save` stores its metadata first (a later download failure does not roll
   that write back). If `--save` finds the paper already present by identity but
-  with different metadata, Cita keeps the stored record, warns, and suggests
-  `cita add --force <selector>`. `--force` downloads again even when a cache
-  file is present. `--dry-run` prints the URL without touching the local cache
-  and cannot be combined with `--save`.
+  with different metadata, Cita leaves the manifest unchanged, warns on
+  standard error, uses the freshly resolved metadata for the current document
+  action, and suggests `cita add --force <selector>`. `--force` downloads again
+  even when a cache file is present. `--dry-run` prints the URL without touching
+  the local cache and cannot be combined with `--save`.
 - `cita open [--force | --no-download | --browser] [--save] <selector>` — open
   the PDF in the system's default application. As with `fetch`, missing locators
   are resolved through INSPIRE; without `--save`, metadata is not written to

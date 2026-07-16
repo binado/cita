@@ -66,7 +66,7 @@ enum Command {
         /// Print the arXiv PDF URL without downloading it
         #[arg(long, conflicts_with = "save")]
         dry_run: bool,
-        /// Store resolved metadata when the selector is not already present
+        /// Persist new metadata before fetching; kept if the fetch later fails
         #[arg(long)]
         save: bool,
         /// Citation key or paper locator
@@ -83,7 +83,7 @@ enum Command {
         /// Refuse to download the PDF if it is not already cached
         #[arg(long)]
         no_download: bool,
-        /// Store resolved metadata when the selector is not already present
+        /// Persist new metadata before opening; kept if the open later fails
         #[arg(long)]
         save: bool,
         /// Citation key or paper locator
@@ -228,12 +228,35 @@ fn ensure_cache_layout(directory: &Path) -> Result<()> {
 }
 
 async fn add(cwd: &Path, key: Option<&str>, force: bool, values: &[String]) -> Result<()> {
+    add_with(
+        cwd,
+        key,
+        force,
+        values,
+        || Ok(InspireProvider::new()?),
+        &mut std::io::stdout(),
+    )
+    .await
+}
+
+async fn add_with<P, F>(
+    cwd: &Path,
+    key: Option<&str>,
+    force: bool,
+    values: &[String],
+    provider_factory: F,
+    output: &mut impl Write,
+) -> Result<()>
+where
+    P: MetadataProvider,
+    F: FnOnce() -> Result<P>,
+{
     if key.is_some() && values.len() != 1 {
         bail!("--key can only be used with one locator");
     }
     let path = find_manifest(cwd)?;
     let mut manifest = Manifest::load(&path)?;
-    let provider = InspireProvider::new()?;
+    let provider = provider_factory()?;
     let outcomes = if let Some(key) = key {
         let locator = values[0].parse::<Locator>()?;
         let paper = provider.resolve(&locator).await?;
@@ -248,9 +271,9 @@ async fn add(cwd: &Path, key: Option<&str>, force: bool, values: &[String]) -> R
     };
     for outcome in outcomes {
         match outcome {
-            AddOutcome::Added(key) => println!("Added {key}"),
-            AddOutcome::Existing(key) => println!("Already present: {key}"),
-            AddOutcome::Updated(key) => println!("Updated {key}"),
+            AddOutcome::Added(key) => writeln!(output, "Added {key}")?,
+            AddOutcome::Existing(key) => writeln!(output, "Already present: {key}")?,
+            AddOutcome::Updated(key) => writeln!(output, "Updated {key}")?,
         }
     }
     Ok(())
@@ -500,7 +523,7 @@ async fn fetch(cwd: &Path, selector: &str, force: bool, dry_run: bool, save: boo
         dry_run,
         save,
         || Ok(InspireProvider::new()?),
-        &mut std::io::stdout(),
+        (&mut std::io::stdout(), &mut std::io::stderr()),
     )
     .await
 }
@@ -520,7 +543,7 @@ async fn open(
             save,
             || Ok(InspireProvider::new()?),
             |url| opener::open(url).map_err(anyhow::Error::from),
-            &mut std::io::stdout(),
+            (&mut std::io::stdout(), &mut std::io::stderr()),
         )
         .await;
     }
@@ -538,7 +561,7 @@ async fn open(
         save,
         || Ok(InspireProvider::new()?),
         |path| opener::open(path).map_err(anyhow::Error::from),
-        &mut std::io::stdout(),
+        (&mut std::io::stdout(), &mut std::io::stderr()),
     )
     .await
 }
@@ -572,6 +595,7 @@ fn prepare_selection(
     selector: &str,
     save: bool,
     output: &mut impl Write,
+    diagnostics: &mut impl Write,
 ) -> Result<SelectedPaper> {
     match selection {
         PaperSelection::Stored { key, record } => {
@@ -607,15 +631,23 @@ fn prepare_selection(
                         .clone();
                     if record != resolved_record {
                         writeln!(
-                            output,
+                            diagnostics,
                             "warning: stored metadata for `{key}` differs from INSPIRE; \
+                             using fresh metadata for this action without changing cita.toml; \
                              run `cita add --force {selector}` to update it"
                         )?;
                     }
-                    Ok(SelectedPaper { key, record })
+                    Ok(SelectedPaper {
+                        key,
+                        record: resolved_record,
+                    })
                 }
-                AddOutcome::Updated(_) => {
-                    unreachable!("--save never force-updates stored metadata")
+                AddOutcome::Updated(key) => {
+                    writeln!(output, "Updated {key}")?;
+                    Ok(SelectedPaper {
+                        key,
+                        record: resolved_record,
+                    })
                 }
             }
         }
@@ -628,6 +660,7 @@ async fn select_for_action_with<P, F>(
     save: bool,
     provider_factory: F,
     output: &mut impl Write,
+    diagnostics: &mut impl Write,
 ) -> Result<(PathBuf, SelectedPaper)>
 where
     P: MetadataProvider,
@@ -636,7 +669,14 @@ where
     let manifest_path = find_manifest(cwd)?;
     let mut manifest = Manifest::load(&manifest_path)?;
     let selection = select_paper_with(&manifest, selector, provider_factory).await?;
-    let selected = prepare_selection(&mut manifest, selection, selector, save, output)?;
+    let selected = prepare_selection(
+        &mut manifest,
+        selection,
+        selector,
+        save,
+        output,
+        diagnostics,
+    )?;
     Ok((manifest_path, selected))
 }
 
@@ -647,17 +687,18 @@ async fn fetch_with<P, F>(
     dry_run: bool,
     save: bool,
     provider_factory: F,
-    output: &mut impl Write,
+    writers: (&mut impl Write, &mut impl Write),
 ) -> Result<()>
 where
     P: MetadataProvider,
     F: FnOnce() -> Result<P>,
 {
+    let (output, diagnostics) = writers;
     if dry_run && save {
         bail!("--dry-run cannot be used with --save");
     }
     let (manifest_path, selected) =
-        select_for_action_with(cwd, selector, save, provider_factory, output).await?;
+        select_for_action_with(cwd, selector, save, provider_factory, output, diagnostics).await?;
     let url = arxiv_pdf_url(&selected.record)?.to_string();
     if dry_run {
         writeln!(output, "{url}")?;
@@ -680,14 +721,15 @@ async fn open_with<P, F>(
     save: bool,
     provider_factory: F,
     launch: impl FnOnce(&Path) -> Result<()>,
-    output: &mut impl Write,
+    writers: (&mut impl Write, &mut impl Write),
 ) -> Result<()>
 where
     P: MetadataProvider,
     F: FnOnce() -> Result<P>,
 {
+    let (output, diagnostics) = writers;
     let (manifest_path, selected) =
-        select_for_action_with(cwd, selector, save, provider_factory, output).await?;
+        select_for_action_with(cwd, selector, save, provider_factory, output, diagnostics).await?;
     let url = arxiv_pdf_url(&selected.record)?.to_string();
     let outcome = fetch_selected(&manifest_path, &selected.record, policy).await?;
     writeln!(
@@ -707,14 +749,15 @@ async fn open_in_browser_with<P, F>(
     save: bool,
     provider_factory: F,
     launch: impl FnOnce(&str) -> Result<()>,
-    output: &mut impl Write,
+    writers: (&mut impl Write, &mut impl Write),
 ) -> Result<()>
 where
     P: MetadataProvider,
     F: FnOnce() -> Result<P>,
 {
+    let (output, diagnostics) = writers;
     let (_, selected) =
-        select_for_action_with(cwd, selector, save, provider_factory, output).await?;
+        select_for_action_with(cwd, selector, save, provider_factory, output, diagnostics).await?;
     let url = arxiv_pdf_url(&selected.record)?;
     launch(url.as_str()).with_context(|| format!("could not open {url}"))?;
     writeln!(output, "Opened {url}")?;
@@ -861,7 +904,7 @@ mod tests {
                 launched.replace(Some(path.to_owned()));
                 Ok(())
             },
-            &mut output,
+            (&mut output, &mut std::io::sink()),
         )
         .await
         .unwrap();
@@ -893,7 +936,7 @@ mod tests {
                 launched.replace(Some(url.to_owned()));
                 Ok(())
             },
-            &mut output,
+            (&mut output, &mut std::io::sink()),
         )
         .await
         .unwrap();
@@ -937,6 +980,24 @@ mod tests {
     }
 
     #[test]
+    fn save_help_explains_when_metadata_is_persisted() {
+        let command = Cli::command();
+        for subcommand in ["fetch", "open"] {
+            let help = command
+                .find_subcommand(subcommand)
+                .unwrap()
+                .get_arguments()
+                .find(|argument| argument.get_id() == "save")
+                .unwrap()
+                .get_help()
+                .unwrap()
+                .to_string();
+            assert!(help.contains("before"), "{subcommand}: {help}");
+            assert!(help.contains("later fails"), "{subcommand}: {help}");
+        }
+    }
+
+    #[test]
     fn add_accepts_force_flag() {
         for arguments in [
             vec!["cita", "add", "--force", "1207.7214"],
@@ -945,6 +1006,43 @@ mod tests {
         ] {
             assert!(Cli::try_parse_from(arguments).is_ok());
         }
+    }
+
+    #[tokio::test]
+    async fn add_force_refreshes_stored_metadata_through_the_cli_wiring() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cita.toml");
+        let mut stored = resolved("Existing", "1", Some("1207.7214"));
+        stored.record.title = "Stored metadata".into();
+        let mut manifest = Manifest::create(&path).unwrap();
+        manifest.add(stored, Some("Existing"), false).unwrap();
+
+        let mut refreshed = resolved("Suggested", "1", Some("1207.7214"));
+        refreshed.record.title = "Fresh metadata".into();
+        let factory_calls = Arc::new(AtomicUsize::new(0));
+        let resolve_calls = Arc::new(AtomicUsize::new(0));
+        let mut output = Vec::new();
+        add_with(
+            directory.path(),
+            None,
+            true,
+            &["1207.7214".into()],
+            fake_factory(
+                refreshed.clone(),
+                factory_calls.clone(),
+                resolve_calls.clone(),
+            ),
+            &mut output,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(factory_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(resolve_calls.load(Ordering::SeqCst), 1);
+        let reloaded = Manifest::load(path).unwrap();
+        assert_eq!(reloaded.papers()["Existing"], refreshed.record);
+        assert!(!reloaded.papers().contains_key("Suggested"));
+        assert_eq!(String::from_utf8(output).unwrap(), "Updated Existing\n");
     }
 
     #[tokio::test]
@@ -1033,7 +1131,7 @@ mod tests {
                 factory_calls.clone(),
                 resolve_calls.clone(),
             ),
-            &mut output,
+            (&mut output, &mut std::io::sink()),
         )
         .await
         .unwrap();
@@ -1070,7 +1168,7 @@ mod tests {
                 Arc::new(AtomicUsize::new(0)),
                 Arc::new(AtomicUsize::new(0)),
             ),
-            &mut output,
+            (&mut output, &mut std::io::sink()),
         )
         .await
         .unwrap();
@@ -1106,7 +1204,7 @@ mod tests {
                 local_launch.replace(Some(path.to_owned()));
                 Ok(())
             },
-            &mut local_output,
+            (&mut local_output, &mut std::io::sink()),
         )
         .await
         .unwrap();
@@ -1127,7 +1225,7 @@ mod tests {
                 browser_launch.replace(Some(url.to_owned()));
                 Ok(())
             },
-            &mut browser_output,
+            (&mut browser_output, &mut std::io::sink()),
         )
         .await
         .unwrap();
@@ -1161,7 +1259,7 @@ mod tests {
                 Arc::new(AtomicUsize::new(0)),
                 Arc::new(AtomicUsize::new(0)),
             ),
-            &mut output,
+            (&mut output, &mut std::io::sink()),
         )
         .await
         .unwrap();
@@ -1192,6 +1290,7 @@ mod tests {
         overlap.record.source_id = None;
         overlap.record.dois = vec!["10.1000/EXISTING".into()];
         let mut output = Vec::new();
+        let mut diagnostics = Vec::new();
 
         let (_, selected) = select_for_action_with(
             directory.path(),
@@ -1203,17 +1302,22 @@ mod tests {
                 Arc::new(AtomicUsize::new(0)),
             ),
             &mut output,
+            &mut diagnostics,
         )
         .await
         .unwrap();
 
         assert_eq!(selected.key, "Existing");
-        assert!(selected.record.arxiv_ids.is_empty());
-        assert_eq!(selected.record.title, "Existing");
+        assert_eq!(selected.record.arxiv_ids, vec!["2401.00001"]);
+        assert_eq!(selected.record.title, "Resolved paper");
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "Already present: Existing\n\
-             warning: stored metadata for `Existing` differs from INSPIRE; \
+            "Already present: Existing\n"
+        );
+        assert_eq!(
+            String::from_utf8(diagnostics).unwrap(),
+            "warning: stored metadata for `Existing` differs from INSPIRE; \
+             using fresh metadata for this action without changing cita.toml; \
              run `cita add --force 2401.00001` to update it\n"
         );
         assert_eq!(fs::read(path).unwrap(), before);
@@ -1234,6 +1338,7 @@ mod tests {
         let mut overlap = existing;
         overlap.suggested_key = Some("Suggested".into());
         let mut output = Vec::new();
+        let mut diagnostics = Vec::new();
 
         let (_, selected) = select_for_action_with(
             directory.path(),
@@ -1245,6 +1350,7 @@ mod tests {
                 Arc::new(AtomicUsize::new(0)),
             ),
             &mut output,
+            &mut diagnostics,
         )
         .await
         .unwrap();
@@ -1255,6 +1361,7 @@ mod tests {
             String::from_utf8(output).unwrap(),
             "Already present: Existing\n"
         );
+        assert!(diagnostics.is_empty());
         assert_eq!(fs::read(path).unwrap(), before);
     }
 
@@ -1274,7 +1381,7 @@ mod tests {
                 Arc::new(AtomicUsize::new(0)),
             ),
             |_| panic!("cache miss must not launch"),
-            &mut output,
+            (&mut output, &mut std::io::sink()),
         )
         .await
         .unwrap_err();
@@ -1291,7 +1398,7 @@ mod tests {
                 Arc::new(AtomicUsize::new(0)),
             ),
             |_| panic!("missing arXiv id must not launch"),
-            &mut output,
+            (&mut output, &mut std::io::sink()),
         )
         .await
         .unwrap_err();
@@ -1308,7 +1415,7 @@ mod tests {
                 Arc::new(AtomicUsize::new(0)),
             ),
             |_| bail!("launcher failed"),
-            &mut output,
+            (&mut output, &mut std::io::sink()),
         )
         .await
         .unwrap_err();
@@ -1345,7 +1452,7 @@ mod tests {
                 launched.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             },
-            &mut output,
+            (&mut output, &mut std::io::sink()),
         )
         .await
         .unwrap_err();

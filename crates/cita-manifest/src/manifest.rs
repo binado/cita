@@ -212,7 +212,6 @@ impl Manifest {
                 }
                 if let Some(requested) = &explicit_key
                     && requested != existing_key
-                    && force
                 {
                     self.papers = original;
                     return Err(Error::CannotRename {
@@ -354,7 +353,7 @@ fn append_paper(document: &mut DocumentMut, key: &str, record: &PaperRecord) {
 }
 
 /// Update known fields on an existing `[papers.<key>]` table in place, leaving
-/// unknown keys and table decor intact.
+/// comments, unknown keys, and table decor intact.
 fn update_paper(document: &mut DocumentMut, key: &str, record: &PaperRecord) {
     let table = document["papers"]
         .as_table_mut()
@@ -397,7 +396,7 @@ fn apply_record(table: &mut Table, record: &PaperRecord) {
             apply_publication(child, publication);
         }
         None => {
-            table.remove("publication");
+            remove_publication(table);
         }
     }
 }
@@ -410,6 +409,21 @@ fn apply_publication(table: &mut Table, publication: &Publication) {
     set_i32(table, "year", publication.year);
 }
 
+fn remove_publication(table: &mut Table) {
+    let remove_table = match table.get_mut("publication").and_then(Item::as_table_mut) {
+        Some(publication) => {
+            for key in ["journal", "volume", "issue", "pages", "year"] {
+                publication.remove(key);
+            }
+            publication.is_empty()
+        }
+        None => false,
+    };
+    if remove_table {
+        table.remove("publication");
+    }
+}
+
 fn paper_table(record: &PaperRecord) -> Table {
     let mut table = Table::new();
     apply_record(&mut table, record);
@@ -417,7 +431,11 @@ fn paper_table(record: &PaperRecord) -> Table {
 }
 
 fn insert(table: &mut Table, key: &str, value: impl Into<Value>) {
-    table.insert(key, Item::Value(value.into()));
+    let mut value = value.into();
+    if let Some(existing) = table.get(key).and_then(Item::as_value) {
+        *value.decor_mut() = existing.decor().clone();
+    }
+    table.insert(key, Item::Value(value));
 }
 
 fn set_opt(table: &mut Table, key: &str, value: Option<&str>) {
@@ -447,7 +465,7 @@ fn set_array(table: &mut Table, key: &str, values: &[String]) {
     for value in values {
         array.push(value.as_str());
     }
-    table.insert(key, Item::Value(Value::Array(array)));
+    insert(table, key, Value::Array(array));
 }
 
 fn matching_keys(papers: &BTreeMap<String, PaperRecord>, candidate: &PaperRecord) -> Vec<String> {
@@ -744,18 +762,19 @@ mod tests {
     }
 
     #[test]
-    fn force_updates_metadata_in_place_preserving_unknown_fields() {
+    fn force_updates_metadata_in_place_preserving_comments_and_unknown_fields() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cita.toml");
         fs::write(
             &path,
-            "schema = 1 # keep\n\n[papers.One]\ntitle = 'Old'\nsource = 'inspire'\nsource_id = '1'\narxiv_ids = ['1207.7214']\nunknown = 42 # also keep\n",
+            "schema = 1 # keep\n\n[papers.One]\ntitle = 'Old' # keep title comment\nauthors = ['Old Author'] # keep authors comment\nsource = 'inspire'\nsource_id = '1'\narxiv_ids = ['1207.7214'] # keep ids comment\nunknown = 42 # also keep\n\n[papers.One.publication]\njournal = 'Old Journal'\nunknown_nested = 'yes' # keep nested unknown\n",
         )
         .unwrap();
         let mut manifest = Manifest::load(&path).unwrap();
 
         let mut refreshed = resolved("Suggested", 1);
         refreshed.record.title = "New".into();
+        refreshed.record.authors = vec!["New Author".into()];
         refreshed.record.arxiv_ids = vec!["1207.7214".into()];
         refreshed.record.dois = vec!["10.1000/new".into()];
 
@@ -766,7 +785,7 @@ mod tests {
         assert_eq!(manifest.papers()["One"].title, "Old");
 
         assert_eq!(
-            manifest.add(refreshed, None, true).unwrap(),
+            manifest.add(refreshed.clone(), None, true).unwrap(),
             AddOutcome::Updated("One".into())
         );
         assert_eq!(manifest.papers()["One"].title, "New");
@@ -776,12 +795,22 @@ mod tests {
         );
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("# keep"), "{text}");
+        assert!(text.contains("# keep title comment"), "{text}");
+        assert!(text.contains("# keep authors comment"), "{text}");
+        assert!(text.contains("# keep ids comment"), "{text}");
         assert!(text.contains("unknown = 42 # also keep"), "{text}");
+        assert!(
+            text.contains("unknown_nested = 'yes' # keep nested unknown"),
+            "{text}"
+        );
+        assert!(!text.contains("journal ="), "{text}");
         assert!(
             text.contains("title = \"New\"") || text.contains("title = 'New'"),
             "{text}"
         );
         assert!(text.contains("10.1000/new"), "{text}");
+        let reloaded = Manifest::load(&path).unwrap();
+        assert_eq!(reloaded.papers()["One"], refreshed.record);
     }
 
     #[test]
@@ -800,18 +829,115 @@ mod tests {
     }
 
     #[test]
-    fn force_rejects_renaming_an_existing_identity() {
+    fn explicit_key_rejects_renaming_an_existing_identity() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cita.toml");
         let mut manifest = Manifest::create(&path).unwrap();
         manifest.add(resolved("One", 1), None, false).unwrap();
         let mut refreshed = resolved("Other", 1);
         refreshed.record.title = "Changed".into();
-        assert!(matches!(
-            manifest.add(refreshed, Some("Other"), true),
-            Err(Error::CannotRename { existing }) if existing == "One"
-        ));
+        for force in [false, true] {
+            assert!(matches!(
+                manifest.add(refreshed.clone(), Some("Other"), force),
+                Err(Error::CannotRename { existing }) if existing == "One"
+            ));
+        }
+        assert_eq!(
+            manifest.add(refreshed, Some("One"), false).unwrap(),
+            AddOutcome::Existing("One".into())
+        );
         assert_eq!(manifest.papers()["One"].title, "Paper 1");
+    }
+
+    #[test]
+    fn force_creates_and_removes_publication_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cita.toml");
+        let mut manifest = Manifest::create(&path).unwrap();
+        manifest.add(resolved("One", 1), None, false).unwrap();
+
+        let mut with_publication = resolved("One", 1);
+        with_publication.record.publication = Some(Publication {
+            journal: Some("Journal".into()),
+            year: Some(2025),
+            ..Publication::default()
+        });
+        assert_eq!(
+            manifest.add(with_publication.clone(), None, true).unwrap(),
+            AddOutcome::Updated("One".into())
+        );
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[papers.One.publication]"), "{text}");
+        assert!(text.contains("journal = \"Journal\""), "{text}");
+        assert_eq!(
+            Manifest::load(&path).unwrap().papers()["One"],
+            with_publication.record
+        );
+
+        let without_publication = resolved("One", 1);
+        assert_eq!(
+            manifest
+                .add(without_publication.clone(), None, true)
+                .unwrap(),
+            AddOutcome::Updated("One".into())
+        );
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("[papers.One.publication]"), "{text}");
+        assert_eq!(
+            Manifest::load(&path).unwrap().papers()["One"],
+            without_publication.record
+        );
+    }
+
+    #[test]
+    fn force_removes_empty_arrays_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cita.toml");
+        let mut initial = resolved("One", 1);
+        initial.record.authors = vec!["Author".into()];
+        initial.record.collaborations = vec!["Collaboration".into()];
+        let mut manifest = Manifest::create(&path).unwrap();
+        manifest.add(initial, None, false).unwrap();
+
+        let refreshed = resolved("One", 1);
+        assert_eq!(
+            manifest.add(refreshed.clone(), None, true).unwrap(),
+            AddOutcome::Updated("One".into())
+        );
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("authors ="), "{text}");
+        assert!(!text.contains("collaborations ="), "{text}");
+        assert_eq!(
+            Manifest::load(&path).unwrap().papers()["One"],
+            refreshed.record
+        );
+    }
+
+    #[test]
+    fn successful_force_update_batches_update_every_paper() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cita.toml");
+        let mut manifest = Manifest::create(&path).unwrap();
+        manifest
+            .add_batch(vec![resolved("One", 1), resolved("Two", 2)], false)
+            .unwrap();
+
+        let mut one = resolved("One", 1);
+        one.record.title = "Updated One".into();
+        let mut two = resolved("Two", 2);
+        two.record.title = "Updated Two".into();
+        assert_eq!(
+            manifest
+                .add_batch(vec![two.clone(), one.clone()], true)
+                .unwrap(),
+            vec![
+                AddOutcome::Updated("Two".into()),
+                AddOutcome::Updated("One".into())
+            ]
+        );
+        let reloaded = Manifest::load(&path).unwrap();
+        assert_eq!(reloaded.papers()["One"], one.record);
+        assert_eq!(reloaded.papers()["Two"], two.record);
     }
 
     #[test]
