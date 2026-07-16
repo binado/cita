@@ -16,6 +16,7 @@ name = "cita"
 path = "src/main.rs"
 
 [dependencies]
+anstyle.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 cita-core = { path = "../cita-core" }
@@ -24,6 +25,7 @@ cita-inspire-client = { path = "../cita-inspire-client" }
 cita-manifest = { path = "../cita-manifest" }
 opener.workspace = true
 tempfile.workspace = true
+terminal_size.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
