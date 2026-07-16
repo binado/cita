@@ -133,6 +133,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "cita"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cita-core",
+ "cita-inspire-client",
+ "cita-manifest",
+ "clap",
+ "tempfile",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "cita-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "thiserror",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "cita-inspire-client"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "cita-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "cita-manifest"
+version = "0.1.0"
+dependencies = [
+ "cita-core",
+ "serde",
+ "tempfile",
+ "thiserror",
+ "toml",
+ "toml_edit",
+]
+
+[[package]]
 name = "clap"
 version = "4.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -605,56 +655,6 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
-
-[[package]]
-name = "paperdb"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "paperdb-core",
- "paperdb-inspire-client",
- "paperdb-manifest",
- "tempfile",
- "tokio",
- "toml",
-]
-
-[[package]]
-name = "paperdb-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "serde",
- "thiserror",
- "unicode-normalization",
-]
-
-[[package]]
-name = "paperdb-inspire-client"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "paperdb-core",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "url",
-]
-
-[[package]]
-name = "paperdb-manifest"
-version = "0.1.0"
-dependencies = [
- "paperdb-core",
- "serde",
- "tempfile",
- "thiserror",
- "toml",
- "toml_edit",
-]
 
 [[package]]
 name = "percent-encoding"

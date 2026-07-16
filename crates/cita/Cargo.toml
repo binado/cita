@@ -1,5 +1,5 @@
 [package]
-name = "paperdb"
+name = "cita"
 description = "A Git-friendly bibliography database"
 readme = "../../README.md"
 keywords = ["bibliography", "bibtex", "citations", "inspirehep"]
@@ -12,15 +12,15 @@ repository.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "paperdb"
+name = "cita"
 path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-paperdb-core = { path = "../paperdb-core" }
-paperdb-inspire-client = { path = "../paperdb-inspire-client" }
-paperdb-manifest = { path = "../paperdb-manifest" }
+cita-core = { path = "../cita-core" }
+cita-inspire-client = { path = "../cita-inspire-client" }
+cita-manifest = { path = "../cita-manifest" }
 tempfile.workspace = true
 tokio.workspace = true
 

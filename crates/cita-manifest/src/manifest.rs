@@ -1,4 +1,4 @@
-use paperdb_core::{
+use cita_core::{
     INSPIRE_SOURCE, Locator, PaperRecord, ResolvedPaper, fallback_key, normalize_arxiv,
     normalize_doi, validate_key,
 };
@@ -461,7 +461,7 @@ mod tests {
     #[test]
     fn preserves_comments_unknown_fields_and_is_atomic_on_conflict() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("paperdb.toml");
+        let path = dir.path().join("cita.toml");
         fs::write(&path, "schema = 1 # keep\ncustom = 'yes'\n\n[papers.One]\ntitle = 'First'\nsource = 'inspire'\nsource_id = '1'\nunknown = 42 # also keep\n").unwrap();
         let mut manifest = Manifest::load(&path).unwrap();
         manifest.add(resolved("Two", 2), None).unwrap();
@@ -476,7 +476,7 @@ mod tests {
     #[test]
     fn key_collision_with_different_identity_is_a_conflict() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("paperdb.toml");
+        let path = dir.path().join("cita.toml");
         let mut manifest = Manifest::create(&path).unwrap();
         manifest.add(resolved("One", 1), None).unwrap();
         let before = fs::read_to_string(&path).unwrap();
@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn removals_are_all_or_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("paperdb.toml");
+        let path = dir.path().join("cita.toml");
         let mut manifest = Manifest::create(&path).unwrap();
         manifest
             .add_batch(vec![resolved("One", 1), resolved("Two", 2)])
@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn treats_arxiv_versions_and_doi_case_as_the_same_identifiers() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("paperdb.toml");
+        let path = dir.path().join("cita.toml");
         let mut manifest = Manifest::create(&path).unwrap();
         let mut first = resolved("One", 1);
         first.record.arxiv_ids = vec!["2401.00001v2".into()];
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn treats_arxiv_case_as_the_same_identifier() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("paperdb.toml");
+        let path = dir.path().join("cita.toml");
         let mut manifest = Manifest::create(&path).unwrap();
         let mut first = resolved("One", 1);
         first.record.arxiv_ids = vec!["HEP-TH/9901001v2".into()];
@@ -544,7 +544,7 @@ mod tests {
     #[test]
     fn rejects_overlapping_identifiers_with_different_inspire_records() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("paperdb.toml");
+        let path = dir.path().join("cita.toml");
         let mut manifest = Manifest::create(&path).unwrap();
         let mut first = resolved("One", 1);
         first.record.arxiv_ids = vec!["2401.00001".into()];
@@ -563,7 +563,7 @@ mod tests {
     #[test]
     fn rejects_duplicate_paper_tables_in_hand_written_files() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("paperdb.toml");
+        let path = dir.path().join("cita.toml");
         fs::write(
             &path,
             "schema = 1\n\n[papers.One]\ntitle = 'First'\nsource = 'inspire'\n\n[papers.One]\ntitle = 'Again'\nsource = 'inspire'\n",
@@ -575,7 +575,7 @@ mod tests {
     #[test]
     fn rejects_inline_papers_maps_on_load() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("paperdb.toml");
+        let path = dir.path().join("cita.toml");
         fs::write(
             &path,
             "schema = 1\npapers = { One = { title = 'First', source = 'inspire' } }\n",
@@ -587,7 +587,7 @@ mod tests {
     #[test]
     fn keys_with_colons_round_trip_as_quoted_table_keys() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("paperdb.toml");
+        let path = dir.path().join("cita.toml");
         let mut manifest = Manifest::create(&path).unwrap();
         manifest.add(resolved("Aad:2012tfa", 1), None).unwrap();
         let text = fs::read_to_string(&path).unwrap();
@@ -599,7 +599,7 @@ mod tests {
     #[test]
     fn save_renders_paper_tables_key_sorted() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("paperdb.toml");
+        let path = dir.path().join("cita.toml");
         fs::write(
             &path,
             "schema = 1\n\n[papers.Zed]\ntitle = 'Last'\nsource = 'inspire'\nsource_id = '9'\n\n# alpha comment\n[papers.Alpha]\ntitle = 'First'\nsource = 'inspire'\nsource_id = '1'\n",

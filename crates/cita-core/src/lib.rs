@@ -1,4 +1,4 @@
-//! Provider-neutral vocabulary for PaperDB: paper models, locators,
+//! Provider-neutral vocabulary for Cita: paper models, locators,
 //! citation-key helpers, and the `MetadataProvider` trait.
 
 mod key;
