@@ -2,7 +2,9 @@ mod git;
 
 use anyhow::{Context, Result, bail};
 use cita_core::{Locator, MetadataProvider};
-use cita_documents::{DocumentStore, FetchOutcome, FetchPolicy, arxiv_pdf_url};
+use cita_documents::{
+    DocumentStore, Error as DocumentError, FetchOutcome, FetchPolicy, arxiv_pdf_url,
+};
 use cita_inspire_client::InspireProvider;
 use cita_manifest::{AddOutcome, Manifest, export_bibtex};
 use clap::{CommandFactory, Parser, Subcommand};
@@ -367,8 +369,23 @@ async fn fetch_paper(
         ensure_cache_layout(project_root)?;
     }
     let store = DocumentStore::new(project_root.join(".cita/files"))?;
-    let outcome = store.fetch(paper, policy).await?;
+    let outcome = store
+        .fetch(paper, policy)
+        .await
+        .map_err(document_error_with_hint)?;
     Ok((key.to_owned(), url, outcome))
+}
+
+fn document_error_with_hint(error: DocumentError) -> anyhow::Error {
+    match error {
+        error @ DocumentError::InvalidCachedPdf(_) => {
+            anyhow::Error::from(error).context("retry with --force")
+        }
+        error @ DocumentError::NotCached(_) => {
+            anyhow::Error::from(error).context("rerun without --no-download")
+        }
+        error => error.into(),
+    }
 }
 
 fn arxiv_url_for_selector(cwd: &Path, selector: &str) -> Result<String> {

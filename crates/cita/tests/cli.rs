@@ -194,13 +194,29 @@ fn open_no_download_errors_on_a_cache_miss_without_creating_the_cache() {
     let opened = cita(directory.path(), &["open", "--no-download", "Zed:2020"]);
 
     assert!(!opened.status.success());
-    assert!(
-        String::from_utf8_lossy(&opened.stderr).contains("PDF is not cached"),
-        "{}",
-        String::from_utf8_lossy(&opened.stderr)
-    );
+    let stderr = String::from_utf8_lossy(&opened.stderr);
+    assert!(stderr.contains("PDF is not cached"), "{stderr}");
+    assert!(stderr.contains("rerun without --no-download"), "{stderr}");
     assert!(!directory.path().join(".cita").exists());
     assert!(!directory.path().join(".gitignore").exists());
+}
+
+#[test]
+fn fetch_suggests_force_for_an_invalid_cached_pdf() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("cita.toml"), sample_manifest()).unwrap();
+    let pdf = directory.path().join(".cita/files/arxiv/2001.00001.pdf");
+    fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+    fs::write(pdf, b"not a PDF").unwrap();
+
+    let fetched = cita(directory.path(), &["fetch", "Zed:2020"]);
+
+    assert!(!fetched.status.success());
+    assert!(
+        String::from_utf8_lossy(&fetched.stderr).contains("retry with --force"),
+        "{}",
+        String::from_utf8_lossy(&fetched.stderr)
+    );
 }
 
 #[test]

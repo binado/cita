@@ -193,9 +193,9 @@ pub enum Error {
         path: PathBuf,
         source: std::io::Error,
     },
-    #[error("cached file {0} is not a valid PDF; retry with --force")]
+    #[error("cached file {0} is not a valid PDF")]
     InvalidCachedPdf(PathBuf),
-    #[error("PDF is not cached at {0}; rerun without --no-download")]
+    #[error("PDF is not cached at {0}")]
     NotCached(PathBuf),
     #[error("arXiv request failed: {0}")]
     Transport(#[source] reqwest::Error),
@@ -493,5 +493,19 @@ mod tests {
                 .await,
             Err(Error::InvalidCachedPdf(path)) if path == destination
         ));
+    }
+
+    #[test]
+    fn cache_errors_are_policy_neutral() {
+        let path = PathBuf::from("cache/paper.pdf");
+
+        assert_eq!(
+            Error::InvalidCachedPdf(path.clone()).to_string(),
+            "cached file cache/paper.pdf is not a valid PDF"
+        );
+        assert_eq!(
+            Error::NotCached(path).to_string(),
+            "PDF is not cached at cache/paper.pdf"
+        );
     }
 }
