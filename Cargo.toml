@@ -2,6 +2,7 @@
 members = [
     "crates/cita",
     "crates/cita-core",
+    "crates/cita-documents",
     "crates/cita-inspire-client",
     "crates/cita-manifest",
 ]
@@ -19,6 +20,7 @@ authors = ["Bernardo Veronese"]
 anyhow = "1.0.94"
 async-trait = "0.1.83"
 clap = { version = "4.5.23", features = ["derive"] }
+opener = "0.8.5"
 reqwest = { version = "0.12.9", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0.216", features = ["derive"] }
 serde_json = "1.0.133"

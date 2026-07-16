@@ -55,16 +55,39 @@ year = 2019
 }
 
 #[test]
-fn init_uses_git_root_and_refuses_overwrite() {
+fn init_uses_git_root_and_idempotently_creates_cache_layout() {
     let directory = tempfile::tempdir().unwrap();
     assert_success(&git(directory.path(), &["init", "-q"]));
+    fs::write(directory.path().join(".gitignore"), ".DS_Store").unwrap();
     let nested = directory.path().join("a/b");
     fs::create_dir_all(&nested).unwrap();
     assert_success(&cita(&nested, &["init"]));
     assert!(directory.path().join("cita.toml").is_file());
+    assert!(directory.path().join(".cita/files").is_dir());
+    let expected_ignore = ".DS_Store\n\n# Cita document cache\n/.cita/files/\n";
+    assert_eq!(
+        fs::read_to_string(directory.path().join(".gitignore")).unwrap(),
+        expected_ignore
+    );
+
     let duplicate = cita(&nested, &["init"]);
-    assert!(!duplicate.status.success());
-    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("already exists"));
+    assert_success(&duplicate);
+    assert!(String::from_utf8_lossy(&duplicate.stdout).contains("Already initialized"));
+    assert_eq!(
+        fs::read_to_string(directory.path().join(".gitignore")).unwrap(),
+        expected_ignore
+    );
+}
+
+#[test]
+fn init_refuses_an_invalid_existing_manifest_without_creating_layout() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("cita.toml"), "not valid toml = [").unwrap();
+
+    let initialized = cita(directory.path(), &["init"]);
+    assert!(!initialized.status.success());
+    assert!(!directory.path().join(".cita").exists());
+    assert!(!directory.path().join(".gitignore").exists());
 }
 
 #[test]
@@ -99,6 +122,119 @@ fn multi_remove_is_atomic() {
     assert_eq!(fs::read_to_string(&path).unwrap(), before);
     assert_success(&cita(directory.path(), &["remove", "doi:10.1000/example"]));
     assert!(!fs::read_to_string(path).unwrap().contains("Alpha:2019"));
+}
+
+#[test]
+fn fetch_reuses_cached_pdf_and_reports_missing_arxiv_id() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("cita.toml"), sample_manifest()).unwrap();
+    let pdf = directory.path().join(".cita/files/arxiv/2001.00001.pdf");
+    fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+    fs::write(&pdf, b"%PDF-cached").unwrap();
+    let nested = directory.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+
+    let fetched = cita(&nested, &["fetch", "Zed:2020"]);
+    assert_success(&fetched);
+    let stdout = String::from_utf8_lossy(&fetched.stdout);
+    assert_eq!(
+        stdout,
+        "Already fetched Zed:2020: https://arxiv.org/pdf/2001.00001\n"
+    );
+    assert!(!stdout.contains(pdf.to_string_lossy().as_ref()), "{stdout}");
+    assert_eq!(
+        fs::read_to_string(directory.path().join(".gitignore")).unwrap(),
+        "# Cita document cache\n/.cita/files/\n"
+    );
+
+    let missing = cita(&nested, &["fetch", "--force", "Alpha:2019"]);
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("paper has no arXiv identifier"));
+}
+
+#[test]
+fn fetch_dry_run_prints_url_without_creating_the_cache() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("cita.toml"), sample_manifest()).unwrap();
+
+    let fetched = cita(directory.path(), &["fetch", "--dry-run", "Zed:2020"]);
+
+    assert_success(&fetched);
+    assert_eq!(
+        String::from_utf8_lossy(&fetched.stdout),
+        "https://arxiv.org/pdf/2001.00001\n[dry run] skipped download\n"
+    );
+    assert!(!directory.path().join(".cita").exists());
+    assert!(!directory.path().join(".gitignore").exists());
+}
+
+#[test]
+fn fetch_force_and_dry_run_are_mutually_exclusive() {
+    let directory = tempfile::tempdir().unwrap();
+
+    let fetched = cita(
+        directory.path(),
+        &["fetch", "--force", "--dry-run", "Zed:2020"],
+    );
+
+    assert!(!fetched.status.success());
+    assert!(
+        String::from_utf8_lossy(&fetched.stderr).contains("cannot be used with"),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&fetched.stderr)
+    );
+    assert!(!directory.path().join(".cita").exists());
+}
+
+#[test]
+fn open_no_download_errors_on_a_cache_miss_without_creating_the_cache() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("cita.toml"), sample_manifest()).unwrap();
+
+    let opened = cita(directory.path(), &["open", "--no-download", "Zed:2020"]);
+
+    assert!(!opened.status.success());
+    let stderr = String::from_utf8_lossy(&opened.stderr);
+    assert!(stderr.contains("PDF is not cached"), "{stderr}");
+    assert!(stderr.contains("rerun without --no-download"), "{stderr}");
+    assert!(!directory.path().join(".cita").exists());
+    assert!(!directory.path().join(".gitignore").exists());
+}
+
+#[test]
+fn fetch_suggests_force_for_an_invalid_cached_pdf() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("cita.toml"), sample_manifest()).unwrap();
+    let pdf = directory.path().join(".cita/files/arxiv/2001.00001.pdf");
+    fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+    fs::write(pdf, b"not a PDF").unwrap();
+
+    let fetched = cita(directory.path(), &["fetch", "Zed:2020"]);
+
+    assert!(!fetched.status.success());
+    assert!(
+        String::from_utf8_lossy(&fetched.stderr).contains("retry with --force"),
+        "{}",
+        String::from_utf8_lossy(&fetched.stderr)
+    );
+}
+
+#[test]
+fn open_no_download_suggests_dropping_the_flag_for_an_invalid_cached_pdf() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("cita.toml"), sample_manifest()).unwrap();
+    let pdf = directory.path().join(".cita/files/arxiv/2001.00001.pdf");
+    fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+    fs::write(pdf, b"not a PDF").unwrap();
+
+    let opened = cita(directory.path(), &["open", "--no-download", "Zed:2020"]);
+
+    assert!(!opened.status.success());
+    let stderr = String::from_utf8_lossy(&opened.stderr);
+    assert!(
+        stderr.contains("drop --no-download and retry with --force"),
+        "{stderr}"
+    );
 }
 
 #[test]

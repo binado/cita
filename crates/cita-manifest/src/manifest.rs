@@ -130,6 +130,18 @@ impl Manifest {
         &self.papers
     }
 
+    /// Find a stored paper using the same citation-key or locator syntax as
+    /// [`Self::remove_batch`].
+    pub fn paper(&self, selector: &str) -> Result<(&str, &PaperRecord), Error> {
+        let key = find_selector(&self.papers, selector)
+            .ok_or_else(|| Error::PaperNotFound(selector.to_owned()))?;
+        let (key, record) = self
+            .papers
+            .get_key_value(key)
+            .expect("selector resolved to a present key");
+        Ok((key, record))
+    }
+
     pub fn add(&mut self, paper: ResolvedPaper, key: Option<&str>) -> Result<AddOutcome, Error> {
         if let Some(key) = key {
             validate_key(key).map_err(Error::InvalidKey)?;
@@ -219,7 +231,7 @@ impl Manifest {
         for selector in selectors {
             let key = find_selector(&self.papers, selector)
                 .ok_or_else(|| Error::PaperNotFound(selector.clone()))?;
-            keys.insert(key);
+            keys.insert(key.to_owned());
         }
         let mut removed = Vec::new();
         for key in &keys {
@@ -384,9 +396,9 @@ fn overlaps_normalized(left: &[String], right: &[String], normalize: fn(&str) ->
     })
 }
 
-fn find_selector(papers: &BTreeMap<String, PaperRecord>, selector: &str) -> Option<String> {
-    if papers.contains_key(selector) {
-        return Some(selector.to_owned());
+fn find_selector<'a>(papers: &'a BTreeMap<String, PaperRecord>, selector: &str) -> Option<&'a str> {
+    if let Some((key, _)) = papers.get_key_value(selector) {
+        return Some(key);
     }
     let locator = selector.parse::<Locator>().ok()?;
     papers
@@ -405,7 +417,7 @@ fn find_selector(papers: &BTreeMap<String, PaperRecord>, selector: &str) -> Opti
                 .iter()
                 .any(|value| normalize_doi(value) == normalize_doi(doi)),
         })
-        .map(|(key, _)| key.clone())
+        .map(|(key, _)| key.as_str())
 }
 
 fn validate_papers(papers: &BTreeMap<String, PaperRecord>) -> Result<(), String> {
@@ -522,6 +534,27 @@ mod tests {
             manifest.remove_batch(&["doi:10.1000/abc".into()]).unwrap()[0].0,
             "One"
         );
+    }
+
+    #[test]
+    fn finds_papers_by_key_and_normalized_locators() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cita.toml");
+        let mut manifest = Manifest::create(&path).unwrap();
+        let mut item = resolved("One", 42);
+        item.record.arxiv_ids = vec!["HEP-TH/9901001v2".into()];
+        item.record.dois = vec!["10.1000/ABC".into()];
+        manifest.add(item, None).unwrap();
+
+        for selector in ["One", "hep-th/9901001", "doi:10.1000/abc", "inspire:42"] {
+            let (key, record) = manifest.paper(selector).unwrap();
+            assert_eq!(key, "One");
+            assert_eq!(record.title, "Paper 42");
+        }
+        assert!(matches!(
+            manifest.paper("missing"),
+            Err(Error::PaperNotFound(selector)) if selector == "missing"
+        ));
     }
 
     #[test]
