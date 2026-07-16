@@ -379,7 +379,11 @@ fn list(cwd: &Path, sort_by: SortBy, order: Order, wrap_title: bool) -> Result<(
     let author_width = column_width(headers[2], rows.iter().map(|row| row.author.as_str()));
     let year_width = column_width(headers[3], rows.iter().map(|row| row.year.as_str()));
 
-    let terminal_width = terminal_size::terminal_size().map(|(width, _)| width.0 as usize);
+    // `terminal_size()` falls back to stderr/stdin, which would return a
+    // width from the shell's tty even when stdout is piped (e.g. `cita list
+    // | cat`). Query stdout specifically so piped output stays plain.
+    let terminal_width =
+        terminal_size::terminal_size_of(std::io::stdout()).map(|(width, _)| width.0 as usize);
     let title_width = match terminal_width {
         Some(width) => {
             let reserved = key_width + author_width + year_width + 6;
