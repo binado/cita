@@ -55,16 +55,39 @@ year = 2019
 }
 
 #[test]
-fn init_uses_git_root_and_refuses_overwrite() {
+fn init_uses_git_root_and_idempotently_creates_cache_layout() {
     let directory = tempfile::tempdir().unwrap();
     assert_success(&git(directory.path(), &["init", "-q"]));
+    fs::write(directory.path().join(".gitignore"), ".DS_Store").unwrap();
     let nested = directory.path().join("a/b");
     fs::create_dir_all(&nested).unwrap();
     assert_success(&cita(&nested, &["init"]));
     assert!(directory.path().join("cita.toml").is_file());
+    assert!(directory.path().join(".cita/files").is_dir());
+    let expected_ignore = ".DS_Store\n\n# Cita document cache\n/.cita/files/\n";
+    assert_eq!(
+        fs::read_to_string(directory.path().join(".gitignore")).unwrap(),
+        expected_ignore
+    );
+
     let duplicate = cita(&nested, &["init"]);
-    assert!(!duplicate.status.success());
-    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("already exists"));
+    assert_success(&duplicate);
+    assert!(String::from_utf8_lossy(&duplicate.stdout).contains("Already initialized"));
+    assert_eq!(
+        fs::read_to_string(directory.path().join(".gitignore")).unwrap(),
+        expected_ignore
+    );
+}
+
+#[test]
+fn init_refuses_an_invalid_existing_manifest_without_creating_layout() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("cita.toml"), "not valid toml = [").unwrap();
+
+    let initialized = cita(directory.path(), &["init"]);
+    assert!(!initialized.status.success());
+    assert!(!directory.path().join(".cita").exists());
+    assert!(!directory.path().join(".gitignore").exists());
 }
 
 #[test]
@@ -99,6 +122,27 @@ fn multi_remove_is_atomic() {
     assert_eq!(fs::read_to_string(&path).unwrap(), before);
     assert_success(&cita(directory.path(), &["remove", "doi:10.1000/example"]));
     assert!(!fs::read_to_string(path).unwrap().contains("Alpha:2019"));
+}
+
+#[test]
+fn fetch_reuses_cached_pdf_and_reports_missing_arxiv_id() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("cita.toml"), sample_manifest()).unwrap();
+    let pdf = directory.path().join(".cita/files/arxiv/2001.00001.pdf");
+    fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+    fs::write(&pdf, b"%PDF-cached").unwrap();
+    let nested = directory.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+
+    let fetched = cita(&nested, &["fetch", "Zed:2020"]);
+    assert_success(&fetched);
+    let stdout = String::from_utf8_lossy(&fetched.stdout);
+    assert!(stdout.contains("Already fetched Zed:2020"), "{stdout}");
+    assert!(stdout.contains(pdf.to_string_lossy().as_ref()), "{stdout}");
+
+    let missing = cita(&nested, &["fetch", "--refresh", "Alpha:2019"]);
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("paper has no arXiv identifier"));
 }
 
 #[test]

@@ -2,14 +2,19 @@ mod git;
 
 use anyhow::{Context, Result, bail};
 use cita_core::{Locator, MetadataProvider};
+use cita_documents::{DocumentStore, FetchOutcome, FetchPolicy};
 use cita_inspire_client::InspireProvider;
 use cita_manifest::{AddOutcome, Manifest, export_bibtex};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::{
-    env,
+    env, fs,
+    fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
 };
+
+const CACHE_IGNORE_COMMENT: &str = "# Cita document cache";
+const CACHE_IGNORE_RULE: &str = "/.cita/files/";
 
 #[derive(Debug, Parser)]
 #[command(name = "cita", version, about = "A Git-friendly bibliography database")]
@@ -20,7 +25,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Create cita.toml at the repository root or current directory
+    /// Initialize cita.toml and the local document cache
     Init,
     /// Resolve and add one or more papers through INSPIRE
     Add {
@@ -38,6 +43,22 @@ enum Command {
     },
     /// List stored papers
     List,
+    /// Fetch a paper's arXiv PDF into the local cache
+    Fetch {
+        /// Replace an existing cached PDF
+        #[arg(long)]
+        refresh: bool,
+        /// Citation key or paper locator
+        selector: String,
+    },
+    /// Fetch and open a paper's arXiv PDF
+    Open {
+        /// Replace an existing cached PDF
+        #[arg(long)]
+        refresh: bool,
+        /// Citation key or paper locator
+        selector: String,
+    },
     /// Export the committed manifest as a deterministic format
     Export {
         /// Write BibTeX to standard output
@@ -68,6 +89,12 @@ async fn run() -> Result<()> {
         Some(Command::Add { key, locators }) => add(&cwd, key.as_deref(), &locators).await?,
         Some(Command::Remove { selectors }) => remove(&cwd, &selectors)?,
         Some(Command::List) => list(&cwd)?,
+        Some(Command::Fetch { refresh, selector }) => {
+            fetch(&cwd, &selector, refresh).await?;
+        }
+        Some(Command::Open { refresh, selector }) => {
+            open(&cwd, &selector, refresh).await?;
+        }
         Some(Command::Export { bibtex: true }) => export(&cwd)?,
         Some(Command::Export { bibtex: false }) => unreachable!("clap requires --bibtex"),
         Some(Command::Commit) => git::commit(&find_manifest(&cwd)?)?,
@@ -78,8 +105,58 @@ async fn run() -> Result<()> {
 fn init(cwd: &Path) -> Result<()> {
     let directory = git::repository_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
     let path = directory.join("cita.toml");
-    Manifest::create(&path)?;
-    println!("Initialized {}", path.display());
+    let existed = path.exists();
+    if existed {
+        Manifest::load(&path)?;
+    } else {
+        Manifest::create(&path)?;
+    }
+    ensure_cache_layout(&directory)?;
+    if existed {
+        println!("Already initialized {}", path.display());
+    } else {
+        println!("Initialized {}", path.display());
+    }
+    Ok(())
+}
+
+fn ensure_cache_layout(directory: &Path) -> Result<()> {
+    let cache = directory.join(".cita/files");
+    fs::create_dir_all(&cache)
+        .with_context(|| format!("could not create document cache {}", cache.display()))?;
+
+    let ignore_path = directory.join(".gitignore");
+    let existing = match fs::read_to_string(&ignore_path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(error).with_context(|| format!("could not read {}", ignore_path.display()));
+        }
+    };
+    if existing
+        .lines()
+        .any(|line| line.trim() == CACHE_IGNORE_RULE)
+    {
+        return Ok(());
+    }
+
+    let separator = if existing.is_empty() || existing.ends_with("\n\n") {
+        ""
+    } else if existing.ends_with('\n') {
+        "\n"
+    } else {
+        "\n\n"
+    };
+    let mut ignore = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&ignore_path)
+        .with_context(|| format!("could not open {}", ignore_path.display()))?;
+    write!(
+        ignore,
+        "{separator}{CACHE_IGNORE_COMMENT}\n{CACHE_IGNORE_RULE}\n"
+    )
+    .with_context(|| format!("could not update {}", ignore_path.display()))?;
     Ok(())
 }
 
@@ -180,6 +257,58 @@ fn list(cwd: &Path) -> Result<()> {
     Ok(())
 }
 
+async fn fetch(cwd: &Path, selector: &str, refresh: bool) -> Result<()> {
+    let (key, outcome) = fetch_paper(cwd, selector, refresh).await?;
+    print_fetch_outcome(&key, &outcome);
+    Ok(())
+}
+
+async fn open(cwd: &Path, selector: &str, refresh: bool) -> Result<()> {
+    open_with(cwd, selector, refresh, |path| {
+        opener::open(path).map_err(anyhow::Error::from)
+    })
+    .await
+}
+
+async fn open_with(
+    cwd: &Path,
+    selector: &str,
+    refresh: bool,
+    launch: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    let (key, outcome) = fetch_paper(cwd, selector, refresh).await?;
+    print_fetch_outcome(&key, &outcome);
+    let path = outcome.path();
+    launch(path).with_context(|| format!("could not open {}", path.display()))?;
+    println!("Opened {}", path.display());
+    Ok(())
+}
+
+async fn fetch_paper(cwd: &Path, selector: &str, refresh: bool) -> Result<(String, FetchOutcome)> {
+    let manifest_path = find_manifest(cwd)?;
+    let manifest = Manifest::load(&manifest_path)?;
+    let (key, paper) = manifest.paper(selector)?;
+    let cache_root = manifest_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(".cita/files");
+    let store = DocumentStore::new(cache_root)?;
+    let policy = if refresh {
+        FetchPolicy::Refresh
+    } else {
+        FetchPolicy::UseCache
+    };
+    let outcome = store.fetch(paper, policy).await?;
+    Ok((key.to_owned(), outcome))
+}
+
+fn print_fetch_outcome(key: &str, outcome: &FetchOutcome) {
+    match outcome {
+        FetchOutcome::Downloaded(path) => println!("Fetched {key}: {}", path.display()),
+        FetchOutcome::Cached(path) => println!("Already fetched {key}: {}", path.display()),
+    }
+}
+
 fn export(cwd: &Path) -> Result<()> {
     let manifest = Manifest::load(find_manifest(cwd)?)?;
     let output = export_bibtex(manifest.papers());
@@ -198,4 +327,33 @@ fn find_manifest(start: &Path) -> Result<PathBuf> {
         "no cita.toml found in {} or its parents; run `cita init`",
         start.display()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    #[tokio::test]
+    async fn open_passes_the_cached_pdf_to_the_launcher() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join("cita.toml"),
+            "schema = 1\n\n[papers.Example]\ntitle = 'Example'\nsource = 'inspire'\narxiv_ids = ['1207.7214']\n",
+        )
+        .unwrap();
+        let pdf = directory.path().join(".cita/files/arxiv/1207.7214.pdf");
+        fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+        fs::write(&pdf, b"%PDF-cached").unwrap();
+        let launched = RefCell::new(None);
+
+        open_with(directory.path(), "Example", false, |path| {
+            launched.replace(Some(path.to_owned()));
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(launched.into_inner(), Some(pdf));
+    }
 }
