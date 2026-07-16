@@ -1,15 +1,15 @@
-//! INSPIRE metadata provider for PaperDB, built on a reusable async INSPIRE
+//! INSPIRE metadata provider for Cita, built on a reusable async INSPIRE
 //! literature API client.
 //!
 //! The client deliberately covers only direct literature lookup. It retains
 //! unknown JSON fields, making typed consumers forward-compatible with API
 //! additions without coupling them to the full INSPIRE schema. On top of it,
-//! [`InspireProvider`] implements `paperdb_core::MetadataProvider`, mapping
+//! [`InspireProvider`] implements `cita_core::MetadataProvider`, mapping
 //! raw INSPIRE records into provider-neutral resolved papers.
 //!
 //! ```no_run
-//! # async fn example() -> Result<(), paperdb_inspire_client::Error> {
-//! use paperdb_inspire_client::{Client, LiteratureId};
+//! # async fn example() -> Result<(), cita_inspire_client::Error> {
+//! use cita_inspire_client::{Client, LiteratureId};
 //!
 //! let client = Client::new()?;
 //! let record = client
@@ -31,7 +31,7 @@ use thiserror::Error;
 use url::Url;
 
 const DEFAULT_BASE_URL: &str = "https://inspirehep.net/";
-const DEFAULT_USER_AGENT: &str = concat!("paperdb-inspire-client/", env!("CARGO_PKG_VERSION"));
+const DEFAULT_USER_AGENT: &str = concat!("cita-inspire-client/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LiteratureId {
@@ -204,7 +204,7 @@ fn validate_arxiv(id: &str) -> Result<(), Error> {
     if id.bytes().any(|c| c.is_ascii_whitespace()) {
         return Err(Error::InvalidIdentifier(format!("invalid arXiv id `{id}`")));
     }
-    let without_version = paperdb_core::strip_arxiv_version(id);
+    let without_version = cita_core::strip_arxiv_version(id);
     let modern = {
         let mut parts = without_version.split('.');
         matches!((parts.next(), parts.next(), parts.next()), (Some(a), Some(b), None)

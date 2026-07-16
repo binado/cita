@@ -1,6 +1,6 @@
 [package]
-name = "paperdb-core"
-description = "Provider-neutral models, locators, and citation-key helpers for PaperDB"
+name = "cita-manifest"
+description = "Manifest storage and BibTeX export for Cita"
 readme = "../../README.md"
 keywords = ["bibliography", "bibtex", "citations"]
 categories = ["command-line-utilities", "science"]
@@ -12,7 +12,12 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-async-trait.workspace = true
+cita-core = { path = "../cita-core" }
 serde.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
-unicode-normalization.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

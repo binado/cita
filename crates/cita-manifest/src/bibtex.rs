@@ -1,4 +1,4 @@
-use paperdb_core::PaperRecord;
+use cita_core::PaperRecord;
 use std::collections::BTreeMap;
 
 pub fn export_bibtex(papers: &BTreeMap<String, PaperRecord>) -> String {
@@ -74,7 +74,7 @@ fn field(output: &mut String, name: &str, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paperdb_core::Publication;
+    use cita_core::Publication;
 
     #[test]
     fn produces_stable_sorted_tex_preserving_output() {

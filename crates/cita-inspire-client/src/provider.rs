@@ -3,7 +3,7 @@ use crate::{
     PublicationInfo,
 };
 use async_trait::async_trait;
-use paperdb_core::{
+use cita_core::{
     INSPIRE_SOURCE, Locator, MetadataProvider, PaperRecord, ProviderError, Publication,
     ResolvedPaper, strip_arxiv_version,
 };

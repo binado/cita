@@ -4,8 +4,8 @@ use std::{
     process::{Command, Output},
 };
 
-fn paperdb(cwd: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_paperdb"))
+fn cita(cwd: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_cita"))
         .current_dir(cwd)
         .args(args)
         .output()
@@ -60,9 +60,9 @@ fn init_uses_git_root_and_refuses_overwrite() {
     assert_success(&git(directory.path(), &["init", "-q"]));
     let nested = directory.path().join("a/b");
     fs::create_dir_all(&nested).unwrap();
-    assert_success(&paperdb(&nested, &["init"]));
-    assert!(directory.path().join("paperdb.toml").is_file());
-    let duplicate = paperdb(&nested, &["init"]);
+    assert_success(&cita(&nested, &["init"]));
+    assert!(directory.path().join("cita.toml").is_file());
+    let duplicate = cita(&nested, &["init"]);
     assert!(!duplicate.status.success());
     assert!(String::from_utf8_lossy(&duplicate.stderr).contains("already exists"));
 }
@@ -70,16 +70,16 @@ fn init_uses_git_root_and_refuses_overwrite() {
 #[test]
 fn discovers_parent_manifest_lists_and_exports_clean_bibtex() {
     let directory = tempfile::tempdir().unwrap();
-    fs::write(directory.path().join("paperdb.toml"), sample_manifest()).unwrap();
+    fs::write(directory.path().join("cita.toml"), sample_manifest()).unwrap();
     let nested = directory.path().join("nested");
     fs::create_dir(&nested).unwrap();
 
-    let list = paperdb(&nested, &["list"]);
+    let list = cita(&nested, &["list"]);
     assert_success(&list);
     let list = String::from_utf8(list.stdout).unwrap();
     assert!(list.find("Alpha:2019").unwrap() < list.find("Zed:2020").unwrap());
 
-    let export = paperdb(&nested, &["export", "--bibtex"]);
+    let export = cita(&nested, &["export", "--bibtex"]);
     assert_success(&export);
     assert!(export.stderr.is_empty());
     let bib = String::from_utf8(export.stdout).unwrap();
@@ -91,16 +91,13 @@ fn discovers_parent_manifest_lists_and_exports_clean_bibtex() {
 #[test]
 fn multi_remove_is_atomic() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("paperdb.toml");
+    let path = directory.path().join("cita.toml");
     fs::write(&path, sample_manifest()).unwrap();
     let before = fs::read_to_string(&path).unwrap();
-    let failed = paperdb(directory.path(), &["remove", "Alpha:2019", "missing"]);
+    let failed = cita(directory.path(), &["remove", "Alpha:2019", "missing"]);
     assert!(!failed.status.success());
     assert_eq!(fs::read_to_string(&path).unwrap(), before);
-    assert_success(&paperdb(
-        directory.path(),
-        &["remove", "doi:10.1000/example"],
-    ));
+    assert_success(&cita(directory.path(), &["remove", "doi:10.1000/example"]));
     assert!(!fs::read_to_string(path).unwrap().contains("Alpha:2019"));
 }
 
@@ -110,24 +107,24 @@ fn commit_is_scoped_and_leaves_unrelated_staging_intact() {
     assert_success(&git(directory.path(), &["init", "-q"]));
     assert_success(&git(
         directory.path(),
-        &["config", "user.name", "PaperDB Tests"],
+        &["config", "user.name", "Cita Tests"],
     ));
     assert_success(&git(
         directory.path(),
-        &["config", "user.email", "paperdb@example.invalid"],
+        &["config", "user.email", "cita@example.invalid"],
     ));
-    assert_success(&paperdb(directory.path(), &["init"]));
-    assert_success(&paperdb(directory.path(), &["commit"]));
+    assert_success(&cita(directory.path(), &["init"]));
+    assert_success(&cita(directory.path(), &["commit"]));
     let subject = git(directory.path(), &["log", "-1", "--format=%s"]);
     assert_eq!(
         String::from_utf8_lossy(&subject.stdout).trim(),
-        "references: initialize paperdb"
+        "references: initialize cita"
     );
 
     fs::write(directory.path().join("unrelated.txt"), "keep staged\n").unwrap();
     assert_success(&git(directory.path(), &["add", "unrelated.txt"]));
-    fs::write(directory.path().join("paperdb.toml"), sample_manifest()).unwrap();
-    assert_success(&paperdb(directory.path(), &["commit"]));
+    fs::write(directory.path().join("cita.toml"), sample_manifest()).unwrap();
+    assert_success(&cita(directory.path(), &["commit"]));
     let subject = git(directory.path(), &["log", "-1", "--format=%s"]);
     assert_eq!(
         String::from_utf8_lossy(&subject.stdout).trim(),
@@ -140,14 +137,14 @@ fn commit_is_scoped_and_leaves_unrelated_staging_intact() {
     );
     assert_eq!(
         String::from_utf8_lossy(&committed.stdout).trim(),
-        "paperdb.toml"
+        "cita.toml"
     );
     let staged = git(directory.path(), &["diff", "--cached", "--name-only"]);
     assert_eq!(
         String::from_utf8_lossy(&staged.stdout).trim(),
         "unrelated.txt"
     );
-    let unchanged = paperdb(directory.path(), &["commit"]);
+    let unchanged = cita(directory.path(), &["commit"]);
     assert_success(&unchanged);
     assert!(String::from_utf8_lossy(&unchanged.stdout).contains("no Git changes"));
 }
@@ -158,22 +155,22 @@ fn commit_falls_back_gracefully_when_head_manifest_is_unreadable() {
     assert_success(&git(directory.path(), &["init", "-q"]));
     assert_success(&git(
         directory.path(),
-        &["config", "user.name", "PaperDB Tests"],
+        &["config", "user.name", "Cita Tests"],
     ));
     assert_success(&git(
         directory.path(),
-        &["config", "user.email", "paperdb@example.invalid"],
+        &["config", "user.email", "cita@example.invalid"],
     ));
     let old_format = "schema = 1\n\n[[papers]]\nkey = \"Old:2019\"\ntitle = \"Old format\"\nsource = \"inspire\"\n";
-    fs::write(directory.path().join("paperdb.toml"), old_format).unwrap();
-    assert_success(&git(directory.path(), &["add", "paperdb.toml"]));
+    fs::write(directory.path().join("cita.toml"), old_format).unwrap();
+    assert_success(&git(directory.path(), &["add", "cita.toml"]));
     assert_success(&git(
         directory.path(),
         &["commit", "-q", "-m", "old-format manifest"],
     ));
 
-    fs::write(directory.path().join("paperdb.toml"), sample_manifest()).unwrap();
-    assert_success(&paperdb(directory.path(), &["commit"]));
+    fs::write(directory.path().join("cita.toml"), sample_manifest()).unwrap();
+    assert_success(&cita(directory.path(), &["commit"]));
     let subject = git(directory.path(), &["log", "-1", "--format=%s"]);
     assert_eq!(
         String::from_utf8_lossy(&subject.stdout).trim(),
@@ -184,7 +181,7 @@ fn commit_falls_back_gracefully_when_head_manifest_is_unreadable() {
 #[test]
 fn no_subcommand_prints_help() {
     let directory = tempfile::tempdir().unwrap();
-    let output = paperdb(directory.path(), &[]);
+    let output = cita(directory.path(), &[]);
     assert_success(&output);
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Usage: paperdb"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Usage: cita"));
 }

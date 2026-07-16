@@ -1,10 +1,10 @@
 mod git;
 
 use anyhow::{Context, Result, bail};
+use cita_core::{Locator, MetadataProvider};
+use cita_inspire_client::InspireProvider;
+use cita_manifest::{AddOutcome, Manifest, export_bibtex};
 use clap::{CommandFactory, Parser, Subcommand};
-use paperdb_core::{Locator, MetadataProvider};
-use paperdb_inspire_client::InspireProvider;
-use paperdb_manifest::{AddOutcome, Manifest, export_bibtex};
 use std::{
     env,
     io::Write,
@@ -12,11 +12,7 @@ use std::{
 };
 
 #[derive(Debug, Parser)]
-#[command(
-    name = "paperdb",
-    version,
-    about = "A Git-friendly bibliography database"
-)]
+#[command(name = "cita", version, about = "A Git-friendly bibliography database")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -24,7 +20,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Create paperdb.toml at the repository root or current directory
+    /// Create cita.toml at the repository root or current directory
     Init,
     /// Resolve and add one or more papers through INSPIRE
     Add {
@@ -48,7 +44,7 @@ enum Command {
         #[arg(long, required = true)]
         bibtex: bool,
     },
-    /// Commit only paperdb.toml to Git
+    /// Commit only cita.toml to Git
     Commit,
 }
 
@@ -81,7 +77,7 @@ async fn run() -> Result<()> {
 
 fn init(cwd: &Path) -> Result<()> {
     let directory = git::repository_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
-    let path = directory.join("paperdb.toml");
+    let path = directory.join("cita.toml");
     Manifest::create(&path)?;
     println!("Initialized {}", path.display());
     Ok(())
@@ -193,13 +189,13 @@ fn export(cwd: &Path) -> Result<()> {
 
 fn find_manifest(start: &Path) -> Result<PathBuf> {
     for directory in start.ancestors() {
-        let candidate = directory.join("paperdb.toml");
+        let candidate = directory.join("cita.toml");
         if candidate.is_file() {
             return Ok(candidate);
         }
     }
     bail!(
-        "no paperdb.toml found in {} or its parents; run `paperdb init`",
+        "no cita.toml found in {} or its parents; run `cita init`",
         start.display()
     )
 }

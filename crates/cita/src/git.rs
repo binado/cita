@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
-use paperdb_core::PaperRecord;
-use paperdb_manifest::Manifest;
+use cita_core::PaperRecord;
+use cita_manifest::Manifest;
 use std::{
     collections::BTreeMap,
     fs,
@@ -21,15 +21,15 @@ pub fn repository_root(path: &Path) -> Option<PathBuf> {
 
 pub fn commit(manifest_path: &Path) -> Result<()> {
     let root = repository_root(manifest_path.parent().unwrap_or_else(|| Path::new(".")))
-        .context("paperdb.toml is not inside a Git repository")?;
+        .context("cita.toml is not inside a Git repository")?;
     let relative = manifest_path
         .strip_prefix(&root)
-        .context("paperdb.toml is not inside the discovered Git repository")?;
+        .context("cita.toml is not inside the discovered Git repository")?;
     let relative_text = relative.to_string_lossy();
     let current_bytes = fs::read(manifest_path)?;
     let old_bytes = git_output_allow_failure(&root, &["show", &format!("HEAD:{relative_text}")]);
     if old_bytes.as_deref() == Some(current_bytes.as_slice()) {
-        println!("paperdb.toml has no Git changes");
+        println!("cita.toml has no Git changes");
         return Ok(());
     }
 
@@ -53,7 +53,7 @@ pub fn commit(manifest_path: &Path) -> Result<()> {
     }
     args.extend(["--", &relative_text]);
     run_git(&root, &args)?;
-    println!("Committed paperdb.toml: {subject}");
+    println!("Committed cita.toml: {subject}");
     Ok(())
 }
 
@@ -61,7 +61,7 @@ pub fn commit(manifest_path: &Path) -> Result<()> {
 /// but is not a readable current-format manifest.
 fn parse_committed_manifest(bytes: &[u8]) -> Result<Option<Manifest>> {
     let temporary = tempfile::tempdir()?;
-    let path = temporary.path().join("paperdb.toml");
+    let path = temporary.path().join("cita.toml");
     fs::write(&path, bytes)?;
     Ok(Manifest::load(path).ok())
 }
@@ -72,7 +72,7 @@ fn commit_message(
 ) -> (String, String) {
     let Some(old) = old else {
         return (
-            "references: initialize paperdb".into(),
+            "references: initialize cita".into(),
             body_lines([], new, []),
         );
     };
@@ -171,7 +171,7 @@ mod tests {
         ]);
         assert_eq!(
             commit_message(None, &empty).0,
-            "references: initialize paperdb"
+            "references: initialize cita"
         );
         assert_eq!(
             commit_message(Some(&empty), &a_and_b).0,

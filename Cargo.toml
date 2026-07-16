@@ -1,9 +1,9 @@
 [workspace]
 members = [
-    "crates/paperdb",
-    "crates/paperdb-core",
-    "crates/paperdb-inspire-client",
-    "crates/paperdb-manifest",
+    "crates/cita",
+    "crates/cita-core",
+    "crates/cita-inspire-client",
+    "crates/cita-manifest",
 ]
 resolver = "2"
 
@@ -12,7 +12,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
-repository = "https://github.com/binado/paperdb"
+repository = "https://github.com/binado/cita"
 authors = ["Bernardo Veronese"]
 
 [workspace.dependencies]
