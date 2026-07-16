@@ -14,5 +14,5 @@ id = "cargo-clippy"
 name = "cargo clippy"
 language = "system"
 entry = "cargo clippy --workspace --all-targets -- -D warnings"
-types = ["rust"]
+always_run = true
 pass_filenames = false
