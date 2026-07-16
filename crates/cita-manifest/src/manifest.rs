@@ -1,6 +1,6 @@
 use cita_core::{
-    INSPIRE_SOURCE, Locator, PaperRecord, ResolvedPaper, fallback_key, normalize_arxiv,
-    normalize_doi, validate_key,
+    INSPIRE_SOURCE, Locator, PaperRecord, Publication, ResolvedPaper, fallback_key,
+    normalize_arxiv, normalize_doi, validate_key,
 };
 use serde::Deserialize;
 use std::{
@@ -24,6 +24,7 @@ pub struct Manifest {
 pub enum AddOutcome {
     Added(String),
     Existing(String),
+    Updated(String),
 }
 
 #[derive(Debug, Error)]
@@ -44,6 +45,8 @@ pub enum Error {
     },
     #[error("citation key conflict: `{0}` already exists; pass --key with a unique key")]
     KeyConflict(String),
+    #[error("paper already stored as `{existing}`; omit --key or pass --key {existing}")]
+    CannotRename { existing: String },
     #[error("identifier conflict: {0}")]
     IdentifierConflict(String),
     #[error("paper `{0}` was not found")]
@@ -130,36 +133,55 @@ impl Manifest {
         &self.papers
     }
 
-    /// Find a stored paper using the same citation-key or locator syntax as
-    /// [`Self::remove_batch`].
-    pub fn paper(&self, selector: &str) -> Result<(&str, &PaperRecord), Error> {
-        let key = find_selector(&self.papers, selector)
-            .ok_or_else(|| Error::PaperNotFound(selector.to_owned()))?;
+    /// Find a stored paper by exact citation key, then by locator.
+    pub fn find_paper(&self, selector: &str) -> Option<(&str, &PaperRecord)> {
+        let key = find_selector(&self.papers, selector)?;
         let (key, record) = self
             .papers
             .get_key_value(key)
             .expect("selector resolved to a present key");
-        Ok((key, record))
+        Some((key, record))
     }
 
-    pub fn add(&mut self, paper: ResolvedPaper, key: Option<&str>) -> Result<AddOutcome, Error> {
+    /// Find a stored paper using the same citation-key or locator syntax as
+    /// [`Self::remove_batch`], returning an error when it is absent.
+    pub fn paper(&self, selector: &str) -> Result<(&str, &PaperRecord), Error> {
+        self.find_paper(selector)
+            .ok_or_else(|| Error::PaperNotFound(selector.to_owned()))
+    }
+
+    pub fn add(
+        &mut self,
+        paper: ResolvedPaper,
+        key: Option<&str>,
+        force: bool,
+    ) -> Result<AddOutcome, Error> {
         if let Some(key) = key {
             validate_key(key).map_err(Error::InvalidKey)?;
         }
-        let mut outcomes = self.insert_papers(vec![(paper, key.map(str::to_owned))])?;
+        let mut outcomes = self.insert_papers(vec![(paper, key.map(str::to_owned))], force)?;
         Ok(outcomes.pop().expect("one paper yields one outcome"))
     }
 
-    pub fn add_batch(&mut self, papers: Vec<ResolvedPaper>) -> Result<Vec<AddOutcome>, Error> {
-        self.insert_papers(papers.into_iter().map(|paper| (paper, None)).collect())
+    pub fn add_batch(
+        &mut self,
+        papers: Vec<ResolvedPaper>,
+        force: bool,
+    ) -> Result<Vec<AddOutcome>, Error> {
+        self.insert_papers(
+            papers.into_iter().map(|paper| (paper, None)).collect(),
+            force,
+        )
     }
 
     fn insert_papers(
         &mut self,
         resolved: Vec<(ResolvedPaper, Option<String>)>,
+        force: bool,
     ) -> Result<Vec<AddOutcome>, Error> {
         let original = self.papers.clone();
         let mut additions = Vec::new();
+        let mut updates = Vec::new();
         let mut outcomes = Vec::new();
         for (item, explicit_key) in resolved {
             let matches = matching_keys(&self.papers, &item.record);
@@ -188,7 +210,22 @@ impl Manifest {
                     self.papers = original;
                     return Err(Error::IdentifierConflict(message));
                 }
-                outcomes.push(AddOutcome::Existing(existing_key.clone()));
+                if let Some(requested) = &explicit_key
+                    && requested != existing_key
+                {
+                    self.papers = original;
+                    return Err(Error::CannotRename {
+                        existing: existing_key.clone(),
+                    });
+                }
+                if force && self.papers[existing_key] != item.record {
+                    let key = existing_key.clone();
+                    self.papers.insert(key.clone(), item.record.clone());
+                    updates.push((key.clone(), item.record));
+                    outcomes.push(AddOutcome::Updated(key));
+                } else {
+                    outcomes.push(AddOutcome::Existing(existing_key.clone()));
+                }
                 continue;
             }
 
@@ -217,7 +254,10 @@ impl Manifest {
         for (key, record) in &additions {
             append_paper(&mut self.document, key, record);
         }
-        if !additions.is_empty() {
+        for (key, record) in &updates {
+            update_paper(&mut self.document, key, record);
+        }
+        if !additions.is_empty() || !updates.is_empty() {
             self.save()?;
         }
         Ok(outcomes)
@@ -312,65 +352,120 @@ fn append_paper(document: &mut DocumentMut, key: &str, record: &PaperRecord) {
         .insert(key, Item::Table(paper_table(record)));
 }
 
-fn paper_table(record: &PaperRecord) -> Table {
-    let mut table = Table::new();
-    insert(&mut table, "title", record.title.clone());
-    insert_array(&mut table, "authors", &record.authors);
-    insert_array(&mut table, "collaborations", &record.collaborations);
-    if let Some(year) = record.year {
-        insert(&mut table, "year", i64::from(year));
-    }
-    insert_array(&mut table, "document_types", &record.document_types);
-    insert_opt(&mut table, "url", record.url.as_deref());
-    insert(&mut table, "source", record.source.clone());
-    insert_opt(&mut table, "source_id", record.source_id.as_deref());
-    insert_array(&mut table, "arxiv_ids", &record.arxiv_ids);
-    insert_array(&mut table, "dois", &record.dois);
-    insert_opt(
-        &mut table,
+/// Update known fields on an existing `[papers.<key>]` table in place, leaving
+/// comments, unknown keys, and table decor intact.
+fn update_paper(document: &mut DocumentMut, key: &str, record: &PaperRecord) {
+    let table = document["papers"]
+        .as_table_mut()
+        .expect("validated papers is a table")
+        .get_mut(key)
+        .and_then(Item::as_table_mut)
+        .expect("updated key must already exist in the document");
+    apply_record(table, record);
+}
+
+fn apply_record(table: &mut Table, record: &PaperRecord) {
+    insert(table, "title", record.title.clone());
+    set_array(table, "authors", &record.authors);
+    set_array(table, "collaborations", &record.collaborations);
+    set_i32(table, "year", record.year);
+    set_array(table, "document_types", &record.document_types);
+    set_opt(table, "url", record.url.as_deref());
+    insert(table, "source", record.source.clone());
+    set_opt(table, "source_id", record.source_id.as_deref());
+    set_array(table, "arxiv_ids", &record.arxiv_ids);
+    set_array(table, "dois", &record.dois);
+    set_opt(
+        table,
         "primary_category",
         record.primary_category.as_deref(),
     );
-    insert_opt(
-        &mut table,
-        "source_updated",
-        record.source_updated.as_deref(),
-    );
-    insert_opt(&mut table, "preprint_date", record.preprint_date.as_deref());
-    if let Some(publication) = &record.publication {
-        let mut child = Table::new();
-        child.set_implicit(false);
-        insert_opt(&mut child, "journal", publication.journal.as_deref());
-        insert_opt(&mut child, "volume", publication.volume.as_deref());
-        insert_opt(&mut child, "issue", publication.issue.as_deref());
-        insert_opt(&mut child, "pages", publication.pages.as_deref());
-        if let Some(year) = publication.year {
-            insert(&mut child, "year", i64::from(year));
+    set_opt(table, "source_updated", record.source_updated.as_deref());
+    set_opt(table, "preprint_date", record.preprint_date.as_deref());
+    match &record.publication {
+        Some(publication) => {
+            if !table.contains_key("publication") {
+                let mut child = Table::new();
+                child.set_implicit(false);
+                table.insert("publication", Item::Table(child));
+            }
+            let child = table
+                .get_mut("publication")
+                .and_then(Item::as_table_mut)
+                .expect("publication was just ensured");
+            apply_publication(child, publication);
         }
-        table.insert("publication", Item::Table(child));
+        None => {
+            remove_publication(table);
+        }
     }
+}
+
+fn apply_publication(table: &mut Table, publication: &Publication) {
+    set_opt(table, "journal", publication.journal.as_deref());
+    set_opt(table, "volume", publication.volume.as_deref());
+    set_opt(table, "issue", publication.issue.as_deref());
+    set_opt(table, "pages", publication.pages.as_deref());
+    set_i32(table, "year", publication.year);
+}
+
+fn remove_publication(table: &mut Table) {
+    let remove_table = match table.get_mut("publication").and_then(Item::as_table_mut) {
+        Some(publication) => {
+            for key in ["journal", "volume", "issue", "pages", "year"] {
+                publication.remove(key);
+            }
+            publication.is_empty()
+        }
+        None => false,
+    };
+    if remove_table {
+        table.remove("publication");
+    }
+}
+
+fn paper_table(record: &PaperRecord) -> Table {
+    let mut table = Table::new();
+    apply_record(&mut table, record);
     table
 }
 
 fn insert(table: &mut Table, key: &str, value: impl Into<Value>) {
-    table.insert(key, Item::Value(value.into()));
+    let mut value = value.into();
+    if let Some(existing) = table.get(key).and_then(Item::as_value) {
+        *value.decor_mut() = existing.decor().clone();
+    }
+    table.insert(key, Item::Value(value));
 }
 
-fn insert_opt(table: &mut Table, key: &str, value: Option<&str>) {
-    if let Some(value) = value {
-        insert(table, key, value);
+fn set_opt(table: &mut Table, key: &str, value: Option<&str>) {
+    match value {
+        Some(value) => insert(table, key, value),
+        None => {
+            table.remove(key);
+        }
     }
 }
 
-fn insert_array(table: &mut Table, key: &str, values: &[String]) {
+fn set_i32(table: &mut Table, key: &str, value: Option<i32>) {
+    match value {
+        Some(value) => insert(table, key, i64::from(value)),
+        None => {
+            table.remove(key);
+        }
+    }
+}
+
+fn set_array(table: &mut Table, key: &str, values: &[String]) {
     if values.is_empty() {
+        table.remove(key);
         return;
     }
     let mut array = Array::new();
     for value in values {
         array.push(value.as_str());
     }
-    table.insert(key, Item::Value(Value::Array(array)));
+    insert(table, key, Value::Array(array));
 }
 
 fn matching_keys(papers: &BTreeMap<String, PaperRecord>, candidate: &PaperRecord) -> Vec<String> {
@@ -476,11 +571,11 @@ mod tests {
         let path = dir.path().join("cita.toml");
         fs::write(&path, "schema = 1 # keep\ncustom = 'yes'\n\n[papers.One]\ntitle = 'First'\nsource = 'inspire'\nsource_id = '1'\nunknown = 42 # also keep\n").unwrap();
         let mut manifest = Manifest::load(&path).unwrap();
-        manifest.add(resolved("Two", 2), None).unwrap();
+        manifest.add(resolved("Two", 2), None, false).unwrap();
         let after_add = fs::read_to_string(&path).unwrap();
         assert!(after_add.contains("# keep"));
         assert!(after_add.contains("unknown = 42 # also keep"));
-        let error = manifest.add_batch(vec![resolved("Three", 3), resolved("Two", 4)]);
+        let error = manifest.add_batch(vec![resolved("Three", 3), resolved("Two", 4)], false);
         assert!(matches!(error, Err(Error::KeyConflict(_))));
         assert_eq!(fs::read_to_string(&path).unwrap(), after_add);
     }
@@ -490,9 +585,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cita.toml");
         let mut manifest = Manifest::create(&path).unwrap();
-        manifest.add(resolved("One", 1), None).unwrap();
+        manifest.add(resolved("One", 1), None, false).unwrap();
         let before = fs::read_to_string(&path).unwrap();
-        let error = manifest.add(resolved("One", 2), None);
+        let error = manifest.add(resolved("One", 2), None, false);
         assert!(matches!(error, Err(Error::KeyConflict(key)) if key == "One"));
         assert_eq!(fs::read_to_string(&path).unwrap(), before);
     }
@@ -503,7 +598,7 @@ mod tests {
         let path = dir.path().join("cita.toml");
         let mut manifest = Manifest::create(&path).unwrap();
         manifest
-            .add_batch(vec![resolved("One", 1), resolved("Two", 2)])
+            .add_batch(vec![resolved("One", 1), resolved("Two", 2)], false)
             .unwrap();
         let before = fs::read_to_string(&path).unwrap();
         assert!(
@@ -522,12 +617,12 @@ mod tests {
         let mut first = resolved("One", 1);
         first.record.arxiv_ids = vec!["2401.00001v2".into()];
         first.record.dois = vec!["10.1000/ABC".into()];
-        manifest.add(first, None).unwrap();
+        manifest.add(first, None, false).unwrap();
 
         let mut same_arxiv = resolved("Other", 1);
         same_arxiv.record.arxiv_ids = vec!["2401.00001".into()];
         assert_eq!(
-            manifest.add(same_arxiv, None).unwrap(),
+            manifest.add(same_arxiv, None, false).unwrap(),
             AddOutcome::Existing("One".into())
         );
         assert_eq!(
@@ -544,17 +639,33 @@ mod tests {
         let mut item = resolved("One", 42);
         item.record.arxiv_ids = vec!["HEP-TH/9901001v2".into()];
         item.record.dois = vec!["10.1000/ABC".into()];
-        manifest.add(item, None).unwrap();
+        manifest.add(item, None, false).unwrap();
 
         for selector in ["One", "hep-th/9901001", "doi:10.1000/abc", "inspire:42"] {
-            let (key, record) = manifest.paper(selector).unwrap();
+            let (key, record) = manifest.find_paper(selector).unwrap();
             assert_eq!(key, "One");
             assert_eq!(record.title, "Paper 42");
         }
+        assert!(manifest.find_paper("missing").is_none());
         assert!(matches!(
             manifest.paper("missing"),
             Err(Error::PaperNotFound(selector)) if selector == "missing"
         ));
+    }
+
+    #[test]
+    fn exact_key_takes_precedence_over_locator_matching() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cita.toml");
+        let mut manifest = Manifest::create(&path).unwrap();
+        manifest.add(resolved("1207.7214", 1), None, false).unwrap();
+        let mut locator_match = resolved("Other", 2);
+        locator_match.record.arxiv_ids = vec!["1207.7214".into()];
+        manifest.add(locator_match, None, false).unwrap();
+
+        let (key, record) = manifest.find_paper("1207.7214").unwrap();
+        assert_eq!(key, "1207.7214");
+        assert_eq!(record.source_id.as_deref(), Some("1"));
     }
 
     #[test]
@@ -564,12 +675,12 @@ mod tests {
         let mut manifest = Manifest::create(&path).unwrap();
         let mut first = resolved("One", 1);
         first.record.arxiv_ids = vec!["HEP-TH/9901001v2".into()];
-        manifest.add(first, None).unwrap();
+        manifest.add(first, None, false).unwrap();
 
         let mut same_arxiv = resolved("Other", 1);
         same_arxiv.record.arxiv_ids = vec!["hep-th/9901001".into()];
         assert_eq!(
-            manifest.add(same_arxiv, None).unwrap(),
+            manifest.add(same_arxiv, None, false).unwrap(),
             AddOutcome::Existing("One".into())
         );
     }
@@ -581,13 +692,13 @@ mod tests {
         let mut manifest = Manifest::create(&path).unwrap();
         let mut first = resolved("One", 1);
         first.record.arxiv_ids = vec!["2401.00001".into()];
-        manifest.add(first, None).unwrap();
+        manifest.add(first, None, false).unwrap();
         let before = fs::read_to_string(&path).unwrap();
 
         let mut conflicting = resolved("Two", 2);
         conflicting.record.arxiv_ids = vec!["2401.00001v3".into()];
         assert!(matches!(
-            manifest.add(conflicting, None),
+            manifest.add(conflicting, None, false),
             Err(Error::IdentifierConflict(_))
         ));
         assert_eq!(fs::read_to_string(path).unwrap(), before);
@@ -622,7 +733,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cita.toml");
         let mut manifest = Manifest::create(&path).unwrap();
-        manifest.add(resolved("Aad:2012tfa", 1), None).unwrap();
+        manifest
+            .add(resolved("Aad:2012tfa", 1), None, false)
+            .unwrap();
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains(r#"[papers."Aad:2012tfa"]"#), "{text}");
         let reloaded = Manifest::load(&path).unwrap();
@@ -639,12 +752,214 @@ mod tests {
         )
         .unwrap();
         let mut manifest = Manifest::load(&path).unwrap();
-        manifest.add(resolved("Mid", 5), None).unwrap();
+        manifest.add(resolved("Mid", 5), None, false).unwrap();
         let text = fs::read_to_string(&path).unwrap();
         let alpha = text.find("[papers.Alpha]").unwrap();
         let mid = text.find("[papers.Mid]").unwrap();
         let zed = text.find("[papers.Zed]").unwrap();
         assert!(alpha < mid && mid < zed, "{text}");
         assert!(text.contains("# alpha comment"), "{text}");
+    }
+
+    #[test]
+    fn force_updates_metadata_in_place_preserving_comments_and_unknown_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cita.toml");
+        fs::write(
+            &path,
+            "schema = 1 # keep\n\n[papers.One]\ntitle = 'Old' # keep title comment\nauthors = ['Old Author'] # keep authors comment\nsource = 'inspire'\nsource_id = '1'\narxiv_ids = ['1207.7214'] # keep ids comment\nunknown = 42 # also keep\n\n[papers.One.publication]\njournal = 'Old Journal'\nunknown_nested = 'yes' # keep nested unknown\n",
+        )
+        .unwrap();
+        let mut manifest = Manifest::load(&path).unwrap();
+
+        let mut refreshed = resolved("Suggested", 1);
+        refreshed.record.title = "New".into();
+        refreshed.record.authors = vec!["New Author".into()];
+        refreshed.record.arxiv_ids = vec!["1207.7214".into()];
+        refreshed.record.dois = vec!["10.1000/new".into()];
+
+        assert_eq!(
+            manifest.add(refreshed.clone(), None, false).unwrap(),
+            AddOutcome::Existing("One".into())
+        );
+        assert_eq!(manifest.papers()["One"].title, "Old");
+
+        assert_eq!(
+            manifest.add(refreshed.clone(), None, true).unwrap(),
+            AddOutcome::Updated("One".into())
+        );
+        assert_eq!(manifest.papers()["One"].title, "New");
+        assert_eq!(
+            manifest.papers()["One"].dois,
+            vec!["10.1000/new".to_string()]
+        );
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# keep"), "{text}");
+        assert!(text.contains("# keep title comment"), "{text}");
+        assert!(text.contains("# keep authors comment"), "{text}");
+        assert!(text.contains("# keep ids comment"), "{text}");
+        assert!(text.contains("unknown = 42 # also keep"), "{text}");
+        assert!(
+            text.contains("unknown_nested = 'yes' # keep nested unknown"),
+            "{text}"
+        );
+        assert!(!text.contains("journal ="), "{text}");
+        assert!(
+            text.contains("title = \"New\"") || text.contains("title = 'New'"),
+            "{text}"
+        );
+        assert!(text.contains("10.1000/new"), "{text}");
+        let reloaded = Manifest::load(&path).unwrap();
+        assert_eq!(reloaded.papers()["One"], refreshed.record);
+    }
+
+    #[test]
+    fn force_equal_metadata_is_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cita.toml");
+        let mut manifest = Manifest::create(&path).unwrap();
+        let paper = resolved("One", 1);
+        manifest.add(paper.clone(), None, false).unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            manifest.add(paper, None, true).unwrap(),
+            AddOutcome::Existing("One".into())
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn explicit_key_rejects_renaming_an_existing_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cita.toml");
+        let mut manifest = Manifest::create(&path).unwrap();
+        manifest.add(resolved("One", 1), None, false).unwrap();
+        let mut refreshed = resolved("Other", 1);
+        refreshed.record.title = "Changed".into();
+        for force in [false, true] {
+            assert!(matches!(
+                manifest.add(refreshed.clone(), Some("Other"), force),
+                Err(Error::CannotRename { existing }) if existing == "One"
+            ));
+        }
+        assert_eq!(
+            manifest.add(refreshed, Some("One"), false).unwrap(),
+            AddOutcome::Existing("One".into())
+        );
+        assert_eq!(manifest.papers()["One"].title, "Paper 1");
+    }
+
+    #[test]
+    fn force_creates_and_removes_publication_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cita.toml");
+        let mut manifest = Manifest::create(&path).unwrap();
+        manifest.add(resolved("One", 1), None, false).unwrap();
+
+        let mut with_publication = resolved("One", 1);
+        with_publication.record.publication = Some(Publication {
+            journal: Some("Journal".into()),
+            year: Some(2025),
+            ..Publication::default()
+        });
+        assert_eq!(
+            manifest.add(with_publication.clone(), None, true).unwrap(),
+            AddOutcome::Updated("One".into())
+        );
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[papers.One.publication]"), "{text}");
+        assert!(text.contains("journal = \"Journal\""), "{text}");
+        assert_eq!(
+            Manifest::load(&path).unwrap().papers()["One"],
+            with_publication.record
+        );
+
+        let without_publication = resolved("One", 1);
+        assert_eq!(
+            manifest
+                .add(without_publication.clone(), None, true)
+                .unwrap(),
+            AddOutcome::Updated("One".into())
+        );
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("[papers.One.publication]"), "{text}");
+        assert_eq!(
+            Manifest::load(&path).unwrap().papers()["One"],
+            without_publication.record
+        );
+    }
+
+    #[test]
+    fn force_removes_empty_arrays_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cita.toml");
+        let mut initial = resolved("One", 1);
+        initial.record.authors = vec!["Author".into()];
+        initial.record.collaborations = vec!["Collaboration".into()];
+        let mut manifest = Manifest::create(&path).unwrap();
+        manifest.add(initial, None, false).unwrap();
+
+        let refreshed = resolved("One", 1);
+        assert_eq!(
+            manifest.add(refreshed.clone(), None, true).unwrap(),
+            AddOutcome::Updated("One".into())
+        );
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("authors ="), "{text}");
+        assert!(!text.contains("collaborations ="), "{text}");
+        assert_eq!(
+            Manifest::load(&path).unwrap().papers()["One"],
+            refreshed.record
+        );
+    }
+
+    #[test]
+    fn successful_force_update_batches_update_every_paper() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cita.toml");
+        let mut manifest = Manifest::create(&path).unwrap();
+        manifest
+            .add_batch(vec![resolved("One", 1), resolved("Two", 2)], false)
+            .unwrap();
+
+        let mut one = resolved("One", 1);
+        one.record.title = "Updated One".into();
+        let mut two = resolved("Two", 2);
+        two.record.title = "Updated Two".into();
+        assert_eq!(
+            manifest
+                .add_batch(vec![two.clone(), one.clone()], true)
+                .unwrap(),
+            vec![
+                AddOutcome::Updated("Two".into()),
+                AddOutcome::Updated("One".into())
+            ]
+        );
+        let reloaded = Manifest::load(&path).unwrap();
+        assert_eq!(reloaded.papers()["One"], one.record);
+        assert_eq!(reloaded.papers()["Two"], two.record);
+    }
+
+    #[test]
+    fn force_updates_are_all_or_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cita.toml");
+        let mut manifest = Manifest::create(&path).unwrap();
+        manifest
+            .add_batch(vec![resolved("One", 1), resolved("Two", 2)], false)
+            .unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+
+        let mut update_one = resolved("One", 1);
+        update_one.record.title = "Updated One".into();
+        // New identity trying to take an occupied key → KeyConflict; prior update
+        // in the batch must roll back.
+        let mut steal_key = resolved("Steal", 3);
+        steal_key.suggested_key = Some("Two".into());
+
+        let error = manifest.add_batch(vec![update_one, steal_key], true);
+        assert!(matches!(error, Err(Error::KeyConflict(_))));
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+        assert_eq!(manifest.papers()["One"].title, "Paper 1");
     }
 }

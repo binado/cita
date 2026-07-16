@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Provider name used by INSPIRE-backed records. `Locator::Inspire` selectors
 /// match records whose `source` equals this and whose `source_id` is the
@@ -59,8 +59,20 @@ pub struct PaperRecord {
     pub source_updated: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preprint_date: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_publication",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub publication: Option<Publication>,
+}
+
+fn deserialize_publication<'de, D>(deserializer: D) -> Result<Option<Publication>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<Publication>::deserialize(deserializer)?
+        .filter(|publication| publication != &Publication::default()))
 }
 
 /// What a metadata provider returns: a record plus an advisory key.
