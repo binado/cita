@@ -311,9 +311,13 @@ async fn open(
     } else {
         FetchPolicy::UseCache
     };
-    open_with(cwd, selector, policy, |path| {
-        opener::open(path).map_err(anyhow::Error::from)
-    })
+    open_with(
+        cwd,
+        selector,
+        policy,
+        |path| opener::open(path).map_err(anyhow::Error::from),
+        std::io::stdout(),
+    )
     .await
 }
 
@@ -322,12 +326,17 @@ async fn open_with(
     selector: &str,
     policy: FetchPolicy,
     launch: impl FnOnce(&Path) -> Result<()>,
+    mut output: impl Write,
 ) -> Result<()> {
-    let (key, _, outcome) = fetch_paper(cwd, selector, policy).await?;
-    print_fetch_outcome(&key, &outcome);
+    let (key, url, outcome) = fetch_paper(cwd, selector, policy).await?;
+    writeln!(
+        output,
+        "{}",
+        fetch_url_outcome_message(&key, &url, &outcome)
+    )?;
     let path = outcome.path();
     launch(path).with_context(|| format!("could not open {}", path.display()))?;
-    println!("Opened {}", path.display());
+    writeln!(output, "Opened {url}")?;
     Ok(())
 }
 
@@ -368,17 +377,14 @@ fn arxiv_url_for_selector(cwd: &Path, selector: &str) -> Result<String> {
     Ok(arxiv_pdf_url(paper)?.to_string())
 }
 
-fn print_fetch_outcome(key: &str, outcome: &FetchOutcome) {
-    match outcome {
-        FetchOutcome::Downloaded(path) => println!("Fetched {key}: {}", path.display()),
-        FetchOutcome::Cached(path) => println!("Already fetched {key}: {}", path.display()),
-    }
+fn print_fetch_url_outcome(key: &str, url: &str, outcome: &FetchOutcome) {
+    println!("{}", fetch_url_outcome_message(key, url, outcome));
 }
 
-fn print_fetch_url_outcome(key: &str, url: &str, outcome: &FetchOutcome) {
+fn fetch_url_outcome_message(key: &str, url: &str, outcome: &FetchOutcome) -> String {
     match outcome {
-        FetchOutcome::Downloaded(_) => println!("Fetched {key}: {url}"),
-        FetchOutcome::Cached(_) => println!("Already fetched {key}: {url}"),
+        FetchOutcome::Downloaded(_) => format!("Fetched {key}: {url}"),
+        FetchOutcome::Cached(_) => format!("Already fetched {key}: {url}"),
     }
 }
 
@@ -419,6 +425,7 @@ mod tests {
         fs::create_dir_all(pdf.parent().unwrap()).unwrap();
         fs::write(&pdf, b"%PDF-cached").unwrap();
         let launched = RefCell::new(None);
+        let mut output = Vec::new();
 
         open_with(
             directory.path(),
@@ -428,11 +435,16 @@ mod tests {
                 launched.replace(Some(path.to_owned()));
                 Ok(())
             },
+            &mut output,
         )
         .await
         .unwrap();
 
         assert_eq!(launched.into_inner(), Some(pdf));
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "Already fetched Example: https://arxiv.org/pdf/1207.7214\nOpened https://arxiv.org/pdf/1207.7214\n"
+        );
     }
 
     #[test]
