@@ -137,8 +137,11 @@ fn fetch_reuses_cached_pdf_and_reports_missing_arxiv_id() {
     let fetched = cita(&nested, &["fetch", "Zed:2020"]);
     assert_success(&fetched);
     let stdout = String::from_utf8_lossy(&fetched.stdout);
-    assert!(stdout.contains("Already fetched Zed:2020"), "{stdout}");
-    assert!(stdout.contains(pdf.to_string_lossy().as_ref()), "{stdout}");
+    assert_eq!(
+        stdout,
+        "Already fetched Zed:2020: https://arxiv.org/pdf/2001.00001\n"
+    );
+    assert!(!stdout.contains(pdf.to_string_lossy().as_ref()), "{stdout}");
     assert_eq!(
         fs::read_to_string(directory.path().join(".gitignore")).unwrap(),
         "# Cita document cache\n/.cita/files/\n"
@@ -147,6 +150,22 @@ fn fetch_reuses_cached_pdf_and_reports_missing_arxiv_id() {
     let missing = cita(&nested, &["fetch", "--force", "Alpha:2019"]);
     assert!(!missing.status.success());
     assert!(String::from_utf8_lossy(&missing.stderr).contains("paper has no arXiv identifier"));
+}
+
+#[test]
+fn fetch_dry_run_prints_url_without_creating_the_cache() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("cita.toml"), sample_manifest()).unwrap();
+
+    let fetched = cita(directory.path(), &["fetch", "--dry-run", "Zed:2020"]);
+
+    assert_success(&fetched);
+    assert_eq!(
+        String::from_utf8_lossy(&fetched.stdout),
+        "https://arxiv.org/pdf/2001.00001\n[dry run] skipped download\n"
+    );
+    assert!(!directory.path().join(".cita").exists());
+    assert!(!directory.path().join(".gitignore").exists());
 }
 
 #[test]

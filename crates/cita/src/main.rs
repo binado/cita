@@ -48,6 +48,9 @@ enum Command {
         /// Download even if a cached PDF already exists
         #[arg(long)]
         force: bool,
+        /// Print the arXiv PDF URL without downloading it
+        #[arg(long)]
+        dry_run: bool,
         /// Citation key or paper locator
         selector: String,
     },
@@ -95,8 +98,12 @@ async fn run() -> Result<()> {
         Some(Command::Add { key, locators }) => add(&cwd, key.as_deref(), &locators).await?,
         Some(Command::Remove { selectors }) => remove(&cwd, &selectors)?,
         Some(Command::List) => list(&cwd)?,
-        Some(Command::Fetch { force, selector }) => {
-            fetch(&cwd, &selector, force).await?;
+        Some(Command::Fetch {
+            force,
+            dry_run,
+            selector,
+        }) => {
+            fetch(&cwd, &selector, force, dry_run).await?;
         }
         Some(Command::Open {
             force,
@@ -268,14 +275,20 @@ fn list(cwd: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn fetch(cwd: &Path, selector: &str, force: bool) -> Result<()> {
+async fn fetch(cwd: &Path, selector: &str, force: bool, dry_run: bool) -> Result<()> {
+    if dry_run {
+        let url = arxiv_url_for_selector(cwd, selector)?;
+        println!("{url}");
+        println!("[dry run] skipped download");
+        return Ok(());
+    }
     let policy = if force {
         FetchPolicy::Force
     } else {
         FetchPolicy::UseCache
     };
-    let (key, outcome) = fetch_paper(cwd, selector, policy).await?;
-    print_fetch_outcome(&key, &outcome);
+    let (key, url, outcome) = fetch_paper(cwd, selector, policy).await?;
+    print_fetch_url_outcome(&key, &url, &outcome);
     Ok(())
 }
 
@@ -310,7 +323,7 @@ async fn open_with(
     policy: FetchPolicy,
     launch: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<()> {
-    let (key, outcome) = fetch_paper(cwd, selector, policy).await?;
+    let (key, _, outcome) = fetch_paper(cwd, selector, policy).await?;
     print_fetch_outcome(&key, &outcome);
     let path = outcome.path();
     launch(path).with_context(|| format!("could not open {}", path.display()))?;
@@ -335,23 +348,37 @@ async fn fetch_paper(
     cwd: &Path,
     selector: &str,
     policy: FetchPolicy,
-) -> Result<(String, FetchOutcome)> {
+) -> Result<(String, String, FetchOutcome)> {
     let manifest_path = find_manifest(cwd)?;
     let manifest = Manifest::load(&manifest_path)?;
     let (key, paper) = manifest.paper(selector)?;
+    let url = arxiv_pdf_url(paper)?.to_string();
     let project_root = manifest_path.parent().unwrap_or_else(|| Path::new("."));
     if policy != FetchPolicy::CacheOnly {
         ensure_cache_layout(project_root)?;
     }
     let store = DocumentStore::new(project_root.join(".cita/files"))?;
     let outcome = store.fetch(paper, policy).await?;
-    Ok((key.to_owned(), outcome))
+    Ok((key.to_owned(), url, outcome))
+}
+
+fn arxiv_url_for_selector(cwd: &Path, selector: &str) -> Result<String> {
+    let manifest = Manifest::load(find_manifest(cwd)?)?;
+    let (_, paper) = manifest.paper(selector)?;
+    Ok(arxiv_pdf_url(paper)?.to_string())
 }
 
 fn print_fetch_outcome(key: &str, outcome: &FetchOutcome) {
     match outcome {
         FetchOutcome::Downloaded(path) => println!("Fetched {key}: {}", path.display()),
         FetchOutcome::Cached(path) => println!("Already fetched {key}: {}", path.display()),
+    }
+}
+
+fn print_fetch_url_outcome(key: &str, url: &str, outcome: &FetchOutcome) {
+    match outcome {
+        FetchOutcome::Downloaded(_) => println!("Fetched {key}: {url}"),
+        FetchOutcome::Cached(_) => println!("Already fetched {key}: {url}"),
     }
 }
 

@@ -29,6 +29,7 @@ cita init                                                    # create cita.toml
 cita add 1207.7214 doi:10.1016/j.physletb.2012.08.020        # resolve and store papers
 cita list                                                    # show stored papers
 cita fetch Aad:2012tfa                                      # cache its arXiv PDF
+cita fetch --dry-run Aad:2012tfa                            # print its arXiv PDF URL
 cita open Aad:2012tfa                                       # cache and open its PDF
 cita open --browser Aad:2012tfa                             # open its arXiv PDF URL
 cita export --bibtex > references.bib                        # deterministic BibTeX
@@ -46,9 +47,10 @@ cita commit                                                  # commit only cita.
   citation key and is only valid with a single locator.
 - `cita remove <selector>...` — remove papers by citation key or locator.
 - `cita list` — list stored papers.
-- `cita fetch [--force] <selector>` — download the selected paper's arXiv
+- `cita fetch [--force] [--dry-run] <selector>` — download the selected paper's arXiv
   PDF into `.cita/files/`, or skip the download if a cached file already
-  exists. `--force` downloads again even when a cache file is present.
+  exists, and print its arXiv URL. `--force` downloads again even when a cache
+  file is present. `--dry-run` prints the URL without touching the local cache.
 - `cita open [--force | --no-download | --browser] <selector>` — open the PDF
   in the system's default application. By default, Cita uses the cached PDF or
   downloads it if needed. `--force` downloads a fresh copy, `--no-download`
