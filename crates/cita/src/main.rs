@@ -1,7 +1,7 @@
 mod git;
 
 use anyhow::{Context, Result, bail};
-use cita_core::{Locator, MetadataProvider, PaperRecord};
+use cita_core::{Locator, MetadataProvider, PaperRecord, ResolvedPaper, fallback_key};
 use cita_documents::{
     DocumentStore, Error as DocumentError, FetchOutcome, FetchPolicy, arxiv_pdf_url,
 };
@@ -61,8 +61,11 @@ enum Command {
         #[arg(long, conflicts_with = "dry_run")]
         force: bool,
         /// Print the arXiv PDF URL without downloading it
-        #[arg(long)]
+        #[arg(long, conflicts_with = "save")]
         dry_run: bool,
+        /// Store resolved metadata when the selector is not already present
+        #[arg(long)]
+        save: bool,
         /// Citation key or paper locator
         selector: String,
     },
@@ -77,6 +80,9 @@ enum Command {
         /// Refuse to download the PDF if it is not already cached
         #[arg(long)]
         no_download: bool,
+        /// Store resolved metadata when the selector is not already present
+        #[arg(long)]
+        save: bool,
         /// Citation key or paper locator
         selector: String,
     },
@@ -135,17 +141,19 @@ async fn run() -> Result<()> {
         Some(Command::Fetch {
             force,
             dry_run,
+            save,
             selector,
         }) => {
-            fetch(&cwd, &selector, force, dry_run).await?;
+            fetch(&cwd, &selector, force, dry_run, save).await?;
         }
         Some(Command::Open {
             force,
             browser,
             no_download,
+            save,
             selector,
         }) => {
-            open(&cwd, &selector, force, browser, no_download).await?;
+            open(&cwd, &selector, force, browser, no_download, save).await?;
         }
         Some(Command::Export { bibtex: true }) => export(&cwd)?,
         Some(Command::Export { bibtex: false }) => unreachable!("clap requires --bibtex"),
@@ -459,21 +467,34 @@ fn column_width<'a>(header: &str, values: impl Iterator<Item = &'a str>) -> usiz
     })
 }
 
-async fn fetch(cwd: &Path, selector: &str, force: bool, dry_run: bool) -> Result<()> {
-    if dry_run {
-        let url = arxiv_url_for_selector(cwd, selector)?;
-        println!("{url}");
-        println!("[dry run] skipped download");
-        return Ok(());
-    }
+#[derive(Debug)]
+enum PaperSelection {
+    Stored { key: String, record: PaperRecord },
+    Transient(ResolvedPaper),
+}
+
+#[derive(Debug)]
+struct SelectedPaper {
+    key: String,
+    record: PaperRecord,
+}
+
+async fn fetch(cwd: &Path, selector: &str, force: bool, dry_run: bool, save: bool) -> Result<()> {
     let policy = if force {
         FetchPolicy::Force
     } else {
         FetchPolicy::UseCache
     };
-    let (key, url, outcome) = fetch_paper(cwd, selector, policy).await?;
-    print_fetch_url_outcome(&key, &url, &outcome);
-    Ok(())
+    fetch_with(
+        cwd,
+        selector,
+        policy,
+        dry_run,
+        save,
+        || Ok(InspireProvider::new()?),
+        &mut std::io::stdout(),
+    )
+    .await
 }
 
 async fn open(
@@ -482,11 +503,18 @@ async fn open(
     force: bool,
     browser: bool,
     no_download: bool,
+    save: bool,
 ) -> Result<()> {
     if browser {
-        return open_in_browser_with(cwd, selector, |url| {
-            opener::open(url).map_err(anyhow::Error::from)
-        });
+        return open_in_browser_with(
+            cwd,
+            selector,
+            save,
+            || Ok(InspireProvider::new()?),
+            |url| opener::open(url).map_err(anyhow::Error::from),
+            &mut std::io::stdout(),
+        )
+        .await;
     }
     let policy = if force {
         FetchPolicy::Force
@@ -499,24 +527,145 @@ async fn open(
         cwd,
         selector,
         policy,
+        save,
+        || Ok(InspireProvider::new()?),
         |path| opener::open(path).map_err(anyhow::Error::from),
-        std::io::stdout(),
+        &mut std::io::stdout(),
     )
     .await
 }
 
-async fn open_with(
+async fn select_paper_with<P, F>(
+    manifest: &Manifest,
+    selector: &str,
+    provider_factory: F,
+) -> Result<PaperSelection>
+where
+    P: MetadataProvider,
+    F: FnOnce() -> Result<P>,
+{
+    if let Some((key, record)) = manifest.find_paper(selector) {
+        return Ok(PaperSelection::Stored {
+            key: key.to_owned(),
+            record: record.clone(),
+        });
+    }
+
+    let locator = selector.parse::<Locator>().map_err(|error| {
+        anyhow::Error::from(error).context(format!("paper `{selector}` was not found"))
+    })?;
+    let provider = provider_factory()?;
+    Ok(PaperSelection::Transient(provider.resolve(&locator).await?))
+}
+
+fn prepare_selection(
+    manifest: &mut Manifest,
+    selection: PaperSelection,
+    save: bool,
+    output: &mut impl Write,
+) -> Result<SelectedPaper> {
+    match selection {
+        PaperSelection::Stored { key, record } => {
+            if save {
+                writeln!(output, "Already present: {key}")?;
+            }
+            Ok(SelectedPaper { key, record })
+        }
+        PaperSelection::Transient(resolved) => {
+            let record = resolved.record.clone();
+            let key = if save {
+                match manifest.add(resolved, None)? {
+                    AddOutcome::Added(key) => {
+                        writeln!(output, "Added {key}")?;
+                        key
+                    }
+                    AddOutcome::Existing(key) => {
+                        writeln!(output, "Already present: {key}")?;
+                        key
+                    }
+                }
+            } else {
+                resolved
+                    .suggested_key
+                    .unwrap_or_else(|| fallback_key(&record))
+            };
+            Ok(SelectedPaper { key, record })
+        }
+    }
+}
+
+async fn select_for_action_with<P, F>(
+    cwd: &Path,
+    selector: &str,
+    save: bool,
+    provider_factory: F,
+    output: &mut impl Write,
+) -> Result<(PathBuf, SelectedPaper)>
+where
+    P: MetadataProvider,
+    F: FnOnce() -> Result<P>,
+{
+    let manifest_path = find_manifest(cwd)?;
+    let mut manifest = Manifest::load(&manifest_path)?;
+    let selection = select_paper_with(&manifest, selector, provider_factory).await?;
+    let selected = prepare_selection(&mut manifest, selection, save, output)?;
+    Ok((manifest_path, selected))
+}
+
+async fn fetch_with<P, F>(
     cwd: &Path,
     selector: &str,
     policy: FetchPolicy,
-    launch: impl FnOnce(&Path) -> Result<()>,
-    mut output: impl Write,
-) -> Result<()> {
-    let (key, url, outcome) = fetch_paper(cwd, selector, policy).await?;
+    dry_run: bool,
+    save: bool,
+    provider_factory: F,
+    output: &mut impl Write,
+) -> Result<()>
+where
+    P: MetadataProvider,
+    F: FnOnce() -> Result<P>,
+{
+    if dry_run && save {
+        bail!("--dry-run cannot be used with --save");
+    }
+    let (manifest_path, selected) =
+        select_for_action_with(cwd, selector, save, provider_factory, output).await?;
+    let url = arxiv_pdf_url(&selected.record)?.to_string();
+    if dry_run {
+        writeln!(output, "{url}")?;
+        writeln!(output, "[dry run] skipped download")?;
+        return Ok(());
+    }
+    let outcome = fetch_selected(&manifest_path, &selected.record, policy).await?;
     writeln!(
         output,
         "{}",
-        fetch_url_outcome_message(&key, &url, &outcome)
+        fetch_url_outcome_message(&selected.key, &url, &outcome)
+    )?;
+    Ok(())
+}
+
+async fn open_with<P, F>(
+    cwd: &Path,
+    selector: &str,
+    policy: FetchPolicy,
+    save: bool,
+    provider_factory: F,
+    launch: impl FnOnce(&Path) -> Result<()>,
+    output: &mut impl Write,
+) -> Result<()>
+where
+    P: MetadataProvider,
+    F: FnOnce() -> Result<P>,
+{
+    let (manifest_path, selected) =
+        select_for_action_with(cwd, selector, save, provider_factory, output).await?;
+    let url = arxiv_pdf_url(&selected.record)?.to_string();
+    let outcome = fetch_selected(&manifest_path, &selected.record, policy).await?;
+    writeln!(
+        output,
+        "{}",
+        fetch_url_outcome_message(&selected.key, &url, &outcome)
     )?;
     let path = outcome.path();
     launch(path).with_context(|| format!("could not open {}", path.display()))?;
@@ -524,28 +673,31 @@ async fn open_with(
     Ok(())
 }
 
-fn open_in_browser_with(
+async fn open_in_browser_with<P, F>(
     cwd: &Path,
     selector: &str,
+    save: bool,
+    provider_factory: F,
     launch: impl FnOnce(&str) -> Result<()>,
-) -> Result<()> {
-    let manifest = Manifest::load(find_manifest(cwd)?)?;
-    let (_, paper) = manifest.paper(selector)?;
-    let url = arxiv_pdf_url(paper)?;
+    output: &mut impl Write,
+) -> Result<()>
+where
+    P: MetadataProvider,
+    F: FnOnce() -> Result<P>,
+{
+    let (_, selected) =
+        select_for_action_with(cwd, selector, save, provider_factory, output).await?;
+    let url = arxiv_pdf_url(&selected.record)?;
     launch(url.as_str()).with_context(|| format!("could not open {url}"))?;
-    println!("Opened {url}");
+    writeln!(output, "Opened {url}")?;
     Ok(())
 }
 
-async fn fetch_paper(
-    cwd: &Path,
-    selector: &str,
+async fn fetch_selected(
+    manifest_path: &Path,
+    paper: &PaperRecord,
     policy: FetchPolicy,
-) -> Result<(String, String, FetchOutcome)> {
-    let manifest_path = find_manifest(cwd)?;
-    let manifest = Manifest::load(&manifest_path)?;
-    let (key, paper) = manifest.paper(selector)?;
-    let url = arxiv_pdf_url(paper)?.to_string();
+) -> Result<FetchOutcome> {
     let project_root = manifest_path.parent().unwrap_or_else(|| Path::new("."));
     if policy != FetchPolicy::CacheOnly {
         ensure_cache_layout(project_root)?;
@@ -555,7 +707,7 @@ async fn fetch_paper(
         .fetch(paper, policy)
         .await
         .map_err(|error| document_error_with_hint(error, policy))?;
-    Ok((key.to_owned(), url, outcome))
+    Ok(outcome)
 }
 
 fn document_error_with_hint(error: DocumentError, policy: FetchPolicy) -> anyhow::Error {
@@ -571,16 +723,6 @@ fn document_error_with_hint(error: DocumentError, policy: FetchPolicy) -> anyhow
         }
         error => error.into(),
     }
-}
-
-fn arxiv_url_for_selector(cwd: &Path, selector: &str) -> Result<String> {
-    let manifest = Manifest::load(find_manifest(cwd)?)?;
-    let (_, paper) = manifest.paper(selector)?;
-    Ok(arxiv_pdf_url(paper)?.to_string())
-}
-
-fn print_fetch_url_outcome(key: &str, url: &str, outcome: &FetchOutcome) {
-    println!("{}", fetch_url_outcome_message(key, url, outcome));
 }
 
 fn fetch_url_outcome_message(key: &str, url: &str, outcome: &FetchOutcome) -> String {
@@ -613,7 +755,59 @@ fn find_manifest(start: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
+    use async_trait::async_trait;
+    use cita_core::{INSPIRE_SOURCE, ProviderError};
+    use std::{
+        cell::RefCell,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    struct FakeProvider {
+        paper: ResolvedPaper,
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl MetadataProvider for FakeProvider {
+        async fn resolve(&self, _: &Locator) -> Result<ResolvedPaper, ProviderError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.paper.clone())
+        }
+    }
+
+    fn resolved(key: &str, source_id: &str, arxiv_id: Option<&str>) -> ResolvedPaper {
+        ResolvedPaper {
+            suggested_key: Some(key.into()),
+            record: PaperRecord {
+                title: "Resolved paper".into(),
+                source: INSPIRE_SOURCE.into(),
+                source_id: Some(source_id.into()),
+                arxiv_ids: arxiv_id.into_iter().map(str::to_owned).collect(),
+                ..PaperRecord::default()
+            },
+        }
+    }
+
+    fn fake_factory(
+        paper: ResolvedPaper,
+        factory_calls: Arc<AtomicUsize>,
+        resolve_calls: Arc<AtomicUsize>,
+    ) -> impl FnOnce() -> Result<FakeProvider> {
+        move || {
+            factory_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(FakeProvider {
+                paper,
+                calls: resolve_calls,
+            })
+        }
+    }
+
+    fn unused_provider() -> Result<FakeProvider> {
+        panic!("stored selectors must not construct a provider")
+    }
 
     #[tokio::test]
     async fn open_no_download_passes_the_cached_pdf_to_the_launcher() {
@@ -633,6 +827,8 @@ mod tests {
             directory.path(),
             "Example",
             FetchPolicy::CacheOnly,
+            false,
+            unused_provider,
             |path| {
                 launched.replace(Some(path.to_owned()));
                 Ok(())
@@ -649,8 +845,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn browser_open_passes_the_arxiv_pdf_url_to_the_launcher_without_creating_a_cache() {
+    #[tokio::test]
+    async fn browser_open_passes_the_arxiv_pdf_url_to_the_launcher_without_creating_a_cache() {
         let directory = tempfile::tempdir().unwrap();
         fs::write(
             directory.path().join("cita.toml"),
@@ -659,10 +855,19 @@ mod tests {
         .unwrap();
         let launched = RefCell::new(None);
 
-        open_in_browser_with(directory.path(), "Example", |url| {
-            launched.replace(Some(url.to_owned()));
-            Ok(())
-        })
+        let mut output = Vec::new();
+        open_in_browser_with(
+            directory.path(),
+            "Example",
+            false,
+            unused_provider,
+            |url| {
+                launched.replace(Some(url.to_owned()));
+                Ok(())
+            },
+            &mut output,
+        )
+        .await
         .unwrap();
 
         assert_eq!(
@@ -671,6 +876,10 @@ mod tests {
         );
         assert!(!directory.path().join(".cita").exists());
         assert!(!directory.path().join(".gitignore").exists());
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "Opened https://arxiv.org/pdf/hep-th/9901001\n"
+        );
     }
 
     #[test]
@@ -682,6 +891,378 @@ mod tests {
         ] {
             assert!(Cli::try_parse_from(arguments).is_err());
         }
+    }
+
+    #[test]
+    fn save_argument_rules_match_document_modes() {
+        assert!(
+            Cli::try_parse_from(["cita", "fetch", "--dry-run", "--save", "1207.7214"]).is_err()
+        );
+        for arguments in [
+            vec!["cita", "open", "--save", "1207.7214"],
+            vec!["cita", "open", "--save", "--browser", "1207.7214"],
+            vec!["cita", "open", "--save", "--no-download", "1207.7214"],
+            vec!["cita", "open", "--save", "--force", "1207.7214"],
+        ] {
+            assert!(Cli::try_parse_from(arguments).is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn selection_constructs_the_provider_only_for_valid_manifest_misses() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cita.toml");
+        fs::write(
+            &path,
+            "schema = 1\n\n[papers.Example]\ntitle = 'Example'\nsource = 'inspire'\narxiv_ids = ['1207.7214']\n",
+        )
+        .unwrap();
+        let manifest = Manifest::load(path).unwrap();
+
+        let stored = select_paper_with(&manifest, "Example", unused_provider)
+            .await
+            .unwrap();
+        assert!(matches!(
+            stored,
+            PaperSelection::Stored { key, .. } if key == "Example"
+        ));
+
+        let factory_calls = Arc::new(AtomicUsize::new(0));
+        let resolve_calls = Arc::new(AtomicUsize::new(0));
+        let transient = select_paper_with(
+            &manifest,
+            "2401.00001",
+            fake_factory(
+                resolved("New", "2", Some("2401.00001")),
+                factory_calls.clone(),
+                resolve_calls.clone(),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(transient, PaperSelection::Transient(_)));
+        assert_eq!(factory_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(resolve_calls.load(Ordering::SeqCst), 1);
+
+        let factory_calls = Arc::new(AtomicUsize::new(0));
+        let error = select_paper_with(
+            &manifest,
+            "not-a-key-or-locator",
+            fake_factory(
+                resolved("Unused", "3", None),
+                factory_calls.clone(),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("paper `not-a-key-or-locator` was not found")
+        );
+        assert!(format!("{error:#}").contains("invalid locator"));
+        assert_eq!(factory_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn transient_dry_run_resolves_once_and_does_not_change_the_manifest() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cita.toml");
+        Manifest::create(&path).unwrap();
+        let before = fs::read(&path).unwrap();
+        let factory_calls = Arc::new(AtomicUsize::new(0));
+        let resolve_calls = Arc::new(AtomicUsize::new(0));
+        let mut output = Vec::new();
+
+        fetch_with(
+            directory.path(),
+            "1207.7214",
+            FetchPolicy::UseCache,
+            true,
+            false,
+            fake_factory(
+                resolved("Resolved:2012", "1", Some("1207.7214")),
+                factory_calls.clone(),
+                resolve_calls.clone(),
+            ),
+            &mut output,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(factory_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(resolve_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fs::read(path).unwrap(), before);
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "https://arxiv.org/pdf/1207.7214\n[dry run] skipped download\n"
+        );
+        assert!(!directory.path().join(".cita").exists());
+    }
+
+    #[tokio::test]
+    async fn transient_fetch_reuses_a_prepopulated_cache_without_saving() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cita.toml");
+        Manifest::create(&path).unwrap();
+        let before = fs::read(&path).unwrap();
+        let pdf = directory.path().join(".cita/files/arxiv/1207.7214.pdf");
+        fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+        fs::write(&pdf, b"%PDF-cached").unwrap();
+        let mut output = Vec::new();
+
+        fetch_with(
+            directory.path(),
+            "1207.7214",
+            FetchPolicy::UseCache,
+            false,
+            false,
+            fake_factory(
+                resolved("Resolved:2012", "1", Some("1207.7214")),
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            &mut output,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(fs::read(path).unwrap(), before);
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "Already fetched Resolved:2012: https://arxiv.org/pdf/1207.7214\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn transient_local_and_browser_open_use_injected_launchers() {
+        let directory = tempfile::tempdir().unwrap();
+        Manifest::create(directory.path().join("cita.toml")).unwrap();
+        let pdf = directory.path().join(".cita/files/arxiv/1207.7214.pdf");
+        fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+        fs::write(&pdf, b"%PDF-cached").unwrap();
+        let local_launch = RefCell::new(None);
+        let mut local_output = Vec::new();
+
+        open_with(
+            directory.path(),
+            "1207.7214",
+            FetchPolicy::CacheOnly,
+            false,
+            fake_factory(
+                resolved("Resolved:2012", "1", Some("1207.7214")),
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            |path| {
+                local_launch.replace(Some(path.to_owned()));
+                Ok(())
+            },
+            &mut local_output,
+        )
+        .await
+        .unwrap();
+        assert_eq!(local_launch.into_inner(), Some(pdf));
+
+        let browser_launch = RefCell::new(None);
+        let mut browser_output = Vec::new();
+        open_in_browser_with(
+            directory.path(),
+            "2401.00001",
+            false,
+            fake_factory(
+                resolved("Resolved:2024", "2", Some("2401.00001")),
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            |url| {
+                browser_launch.replace(Some(url.to_owned()));
+                Ok(())
+            },
+            &mut browser_output,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            browser_launch.into_inner().as_deref(),
+            Some("https://arxiv.org/pdf/2401.00001")
+        );
+        assert_eq!(
+            String::from_utf8(browser_output).unwrap(),
+            "Opened https://arxiv.org/pdf/2401.00001\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn save_adds_before_the_action_and_uses_the_saved_key() {
+        let directory = tempfile::tempdir().unwrap();
+        Manifest::create(directory.path().join("cita.toml")).unwrap();
+        let pdf = directory.path().join(".cita/files/arxiv/1207.7214.pdf");
+        fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+        fs::write(pdf, b"%PDF-cached").unwrap();
+        let mut output = Vec::new();
+
+        fetch_with(
+            directory.path(),
+            "1207.7214",
+            FetchPolicy::UseCache,
+            false,
+            true,
+            fake_factory(
+                resolved("Saved:2012", "1", Some("1207.7214")),
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            &mut output,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            Manifest::load(directory.path().join("cita.toml"))
+                .unwrap()
+                .find_paper("Saved:2012")
+                .is_some()
+        );
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "Added Saved:2012\nAlready fetched Saved:2012: https://arxiv.org/pdf/1207.7214\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn save_reports_identity_overlap_with_the_existing_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cita.toml");
+        fs::write(
+            &path,
+            "schema = 1\n\n[papers.Existing]\ntitle = 'Existing'\nsource = 'inspire'\ndois = ['10.1000/existing']\n",
+        )
+        .unwrap();
+        let before = fs::read(&path).unwrap();
+        let mut overlap = resolved("Suggested", "unused", Some("2401.00001"));
+        overlap.record.source_id = None;
+        overlap.record.dois = vec!["10.1000/EXISTING".into()];
+        let mut output = Vec::new();
+
+        let (_, selected) = select_for_action_with(
+            directory.path(),
+            "2401.00001",
+            true,
+            fake_factory(
+                overlap,
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            &mut output,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(selected.key, "Existing");
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "Already present: Existing\n"
+        );
+        assert_eq!(fs::read(path).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn saved_metadata_remains_after_cache_missing_arxiv_and_launcher_failures() {
+        let directory = tempfile::tempdir().unwrap();
+        Manifest::create(directory.path().join("cita.toml")).unwrap();
+        let mut output = Vec::new();
+        let cache_error = open_with(
+            directory.path(),
+            "1207.7214",
+            FetchPolicy::CacheOnly,
+            true,
+            fake_factory(
+                resolved("CacheMiss", "1", Some("1207.7214")),
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            |_| panic!("cache miss must not launch"),
+            &mut output,
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{cache_error:#}").contains("PDF is not cached"));
+
+        let mut output = Vec::new();
+        let arxiv_error = open_in_browser_with(
+            directory.path(),
+            "2401.00001",
+            true,
+            fake_factory(
+                resolved("NoArxiv", "2", None),
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            |_| panic!("missing arXiv id must not launch"),
+            &mut output,
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{arxiv_error:#}").contains("paper has no arXiv identifier"));
+
+        let mut output = Vec::new();
+        let launcher_error = open_in_browser_with(
+            directory.path(),
+            "2501.00001",
+            true,
+            fake_factory(
+                resolved("LaunchFail", "3", Some("2501.00001")),
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            |_| bail!("launcher failed"),
+            &mut output,
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{launcher_error:#}").contains("launcher failed"));
+
+        let manifest = Manifest::load(directory.path().join("cita.toml")).unwrap();
+        for key in ["CacheMiss", "NoArxiv", "LaunchFail"] {
+            assert!(manifest.find_paper(key).is_some(), "missing {key}");
+        }
+    }
+
+    #[tokio::test]
+    async fn insertion_failure_prevents_the_document_action() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join("cita.toml"),
+            "schema = 1\n\n[papers.Conflict]\ntitle = 'Existing'\nsource = 'inspire'\nsource_id = '1'\n",
+        )
+        .unwrap();
+        let launches = Arc::new(AtomicUsize::new(0));
+        let launched = launches.clone();
+        let mut output = Vec::new();
+
+        let error = open_in_browser_with(
+            directory.path(),
+            "2401.00001",
+            true,
+            fake_factory(
+                resolved("Conflict", "2", Some("2401.00001")),
+                Arc::new(AtomicUsize::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+            ),
+            move |_| {
+                launched.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+            &mut output,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(format!("{error:#}").contains("citation key conflict"));
+        assert_eq!(launches.load(Ordering::SeqCst), 0);
+        assert!(output.is_empty());
     }
 
     #[test]

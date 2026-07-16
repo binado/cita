@@ -130,16 +130,21 @@ impl Manifest {
         &self.papers
     }
 
-    /// Find a stored paper using the same citation-key or locator syntax as
-    /// [`Self::remove_batch`].
-    pub fn paper(&self, selector: &str) -> Result<(&str, &PaperRecord), Error> {
-        let key = find_selector(&self.papers, selector)
-            .ok_or_else(|| Error::PaperNotFound(selector.to_owned()))?;
+    /// Find a stored paper by exact citation key, then by locator.
+    pub fn find_paper(&self, selector: &str) -> Option<(&str, &PaperRecord)> {
+        let key = find_selector(&self.papers, selector)?;
         let (key, record) = self
             .papers
             .get_key_value(key)
             .expect("selector resolved to a present key");
-        Ok((key, record))
+        Some((key, record))
+    }
+
+    /// Find a stored paper using the same citation-key or locator syntax as
+    /// [`Self::remove_batch`], returning an error when it is absent.
+    pub fn paper(&self, selector: &str) -> Result<(&str, &PaperRecord), Error> {
+        self.find_paper(selector)
+            .ok_or_else(|| Error::PaperNotFound(selector.to_owned()))
     }
 
     pub fn add(&mut self, paper: ResolvedPaper, key: Option<&str>) -> Result<AddOutcome, Error> {
@@ -547,14 +552,30 @@ mod tests {
         manifest.add(item, None).unwrap();
 
         for selector in ["One", "hep-th/9901001", "doi:10.1000/abc", "inspire:42"] {
-            let (key, record) = manifest.paper(selector).unwrap();
+            let (key, record) = manifest.find_paper(selector).unwrap();
             assert_eq!(key, "One");
             assert_eq!(record.title, "Paper 42");
         }
+        assert!(manifest.find_paper("missing").is_none());
         assert!(matches!(
             manifest.paper("missing"),
             Err(Error::PaperNotFound(selector)) if selector == "missing"
         ));
+    }
+
+    #[test]
+    fn exact_key_takes_precedence_over_locator_matching() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cita.toml");
+        let mut manifest = Manifest::create(&path).unwrap();
+        manifest.add(resolved("1207.7214", 1), None).unwrap();
+        let mut locator_match = resolved("Other", 2);
+        locator_match.record.arxiv_ids = vec!["1207.7214".into()];
+        manifest.add(locator_match, None).unwrap();
+
+        let (key, record) = manifest.find_paper("1207.7214").unwrap();
+        assert_eq!(key, "1207.7214");
+        assert_eq!(record.source_id.as_deref(), Some("1"));
     }
 
     #[test]

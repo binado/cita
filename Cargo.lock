@@ -149,6 +149,7 @@ version = "0.1.0"
 dependencies = [
  "anstyle",
  "anyhow",
+ "async-trait",
  "cita-core",
  "cita-documents",
  "cita-inspire-client",
