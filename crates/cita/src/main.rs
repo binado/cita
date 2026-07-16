@@ -372,12 +372,15 @@ async fn fetch_paper(
     let outcome = store
         .fetch(paper, policy)
         .await
-        .map_err(document_error_with_hint)?;
+        .map_err(|error| document_error_with_hint(error, policy))?;
     Ok((key.to_owned(), url, outcome))
 }
 
-fn document_error_with_hint(error: DocumentError) -> anyhow::Error {
+fn document_error_with_hint(error: DocumentError, policy: FetchPolicy) -> anyhow::Error {
     match error {
+        error @ DocumentError::InvalidCachedPdf(_) if policy == FetchPolicy::CacheOnly => {
+            anyhow::Error::from(error).context("drop --no-download and retry with --force")
+        }
         error @ DocumentError::InvalidCachedPdf(_) => {
             anyhow::Error::from(error).context("retry with --force")
         }

@@ -220,6 +220,24 @@ fn fetch_suggests_force_for_an_invalid_cached_pdf() {
 }
 
 #[test]
+fn open_no_download_suggests_dropping_the_flag_for_an_invalid_cached_pdf() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("cita.toml"), sample_manifest()).unwrap();
+    let pdf = directory.path().join(".cita/files/arxiv/2001.00001.pdf");
+    fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+    fs::write(pdf, b"not a PDF").unwrap();
+
+    let opened = cita(directory.path(), &["open", "--no-download", "Zed:2020"]);
+
+    assert!(!opened.status.success());
+    let stderr = String::from_utf8_lossy(&opened.stderr);
+    assert!(
+        stderr.contains("drop --no-download and retry with --force"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn commit_is_scoped_and_leaves_unrelated_staging_intact() {
     let directory = tempfile::tempdir().unwrap();
     assert_success(&git(directory.path(), &["init", "-q"]));
