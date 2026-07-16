@@ -136,6 +136,62 @@ source = "inspire"
 }
 
 #[test]
+fn order_desc_reverses_the_sort() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("cita.toml"), sample_manifest()).unwrap();
+
+    let ascending = cita(directory.path(), &["list", "--sort-by", "key"]);
+    assert_success(&ascending);
+    let ascending = String::from_utf8(ascending.stdout).unwrap();
+    assert!(ascending.find("Alpha:2019").unwrap() < ascending.find("Zed:2020").unwrap());
+
+    let descending = cita(
+        directory.path(),
+        &["list", "--sort-by", "key", "--order", "desc"],
+    );
+    assert_success(&descending);
+    let descending = String::from_utf8(descending.stdout).unwrap();
+    assert!(descending.find("Zed:2020").unwrap() < descending.find("Alpha:2019").unwrap());
+}
+
+#[test]
+fn order_desc_keeps_missing_years_last() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(
+        directory.path().join("cita.toml"),
+        r#"schema = 1
+
+[papers."Zulu:1"]
+title = "Paper one"
+year = 1990
+source = "inspire"
+
+[papers."Alpha:2"]
+title = "Paper two"
+year = 2020
+source = "inspire"
+
+[papers."Undated:3"]
+title = "Paper three"
+source = "inspire"
+"#,
+    )
+    .unwrap();
+
+    let list = cita(
+        directory.path(),
+        &["list", "--sort-by", "year", "--order", "desc"],
+    );
+    assert_success(&list);
+    let list = String::from_utf8(list.stdout).unwrap();
+    let alpha = list.find("Alpha:2").unwrap();
+    let zulu = list.find("Zulu:1").unwrap();
+    let undated = list.find("Undated:3").unwrap();
+    assert!(alpha < zulu, "descending years: 2020 before 1990");
+    assert!(zulu < undated, "missing years still sort last");
+}
+
+#[test]
 fn sort_by_author_reorders_rows() {
     let directory = tempfile::tempdir().unwrap();
     fs::write(

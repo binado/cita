@@ -45,9 +45,12 @@ enum Command {
     },
     /// List stored papers
     List {
-        /// Sort order for the listing
+        /// Field to sort the listing by
         #[arg(long, value_enum, default_value_t = SortBy::Key)]
         sort_by: SortBy,
+        /// Sort direction
+        #[arg(long, value_enum, default_value_t = Order::Asc)]
+        order: Order,
         /// Truncate long titles instead of wrapping them across lines
         #[arg(long)]
         no_wrap_title: bool,
@@ -87,7 +90,7 @@ enum Command {
     Commit,
 }
 
-/// Sort order for `cita list`.
+/// Field to sort `cita list` by.
 #[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
 enum SortBy {
     #[default]
@@ -95,6 +98,14 @@ enum SortBy {
     Title,
     Author,
     Year,
+}
+
+/// Sort direction for `cita list`.
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+enum Order {
+    #[default]
+    Asc,
+    Desc,
 }
 
 #[tokio::main]
@@ -118,8 +129,9 @@ async fn run() -> Result<()> {
         Some(Command::Remove { selectors }) => remove(&cwd, &selectors)?,
         Some(Command::List {
             sort_by,
+            order,
             no_wrap_title,
-        }) => list(&cwd, sort_by, !no_wrap_title)?,
+        }) => list(&cwd, sort_by, order, !no_wrap_title)?,
         Some(Command::Fetch {
             force,
             dry_run,
@@ -318,7 +330,16 @@ fn wrap(title: &str, width: usize) -> Vec<String> {
     lines
 }
 
-fn list(cwd: &Path, sort_by: SortBy, wrap_title: bool) -> Result<()> {
+/// Applies `order` to a field comparison, leaving `Equal` untouched so ties
+/// still fall back to the prior (stable) order.
+fn ordered(comparison: std::cmp::Ordering, order: Order) -> std::cmp::Ordering {
+    match order {
+        Order::Asc => comparison,
+        Order::Desc => comparison.reverse(),
+    }
+}
+
+fn list(cwd: &Path, sort_by: SortBy, order: Order, wrap_title: bool) -> Result<()> {
     let manifest = Manifest::load(find_manifest(cwd)?)?;
     if manifest.papers().is_empty() {
         return Ok(());
@@ -336,11 +357,20 @@ fn list(cwd: &Path, sort_by: SortBy, wrap_title: bool) -> Result<()> {
         .collect();
 
     match sort_by {
-        SortBy::Key => {}
-        SortBy::Title => rows.sort_by(|a, b| a.title.cmp(&b.title)),
-        SortBy::Author => rows.sort_by(|a, b| a.author.cmp(&b.author)),
-        SortBy::Year => rows.sort_by(|a, b| {
-            (a.year_num.is_none(), a.year_num).cmp(&(b.year_num.is_none(), b.year_num))
+        SortBy::Key => {
+            if let Order::Desc = order {
+                rows.reverse();
+            }
+        }
+        SortBy::Title => rows.sort_by(|a, b| ordered(a.title.cmp(&b.title), order)),
+        SortBy::Author => rows.sort_by(|a, b| ordered(a.author.cmp(&b.author), order)),
+        // Missing years always sort last, independent of direction (like SQL's
+        // NULLS LAST); only the comparison between two present years flips.
+        SortBy::Year => rows.sort_by(|a, b| match (a.year_num, b.year_num) {
+            (None, None) => std::cmp::Ordering::Equal,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (Some(a_year), Some(b_year)) => ordered(a_year.cmp(&b_year), order),
         }),
     }
 
@@ -653,6 +683,7 @@ mod tests {
     fn list_accepts_no_wrap_title_flag() {
         let Command::List {
             sort_by: _,
+            order: _,
             no_wrap_title,
         } = Cli::try_parse_from(["cita", "list", "--no-wrap-title"])
             .unwrap()
@@ -662,6 +693,30 @@ mod tests {
             panic!("expected List command");
         };
         assert!(no_wrap_title);
+    }
+
+    #[test]
+    fn list_order_defaults_to_ascending() {
+        let Command::List { order, .. } = Cli::try_parse_from(["cita", "list"])
+            .unwrap()
+            .command
+            .unwrap()
+        else {
+            panic!("expected List command");
+        };
+        assert!(matches!(order, Order::Asc));
+    }
+
+    #[test]
+    fn list_accepts_order_desc() {
+        let Command::List { order, .. } = Cli::try_parse_from(["cita", "list", "--order", "desc"])
+            .unwrap()
+            .command
+            .unwrap()
+        else {
+            panic!("expected List command");
+        };
+        assert!(matches!(order, Order::Desc));
     }
 
     #[test]
