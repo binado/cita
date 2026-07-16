@@ -169,6 +169,24 @@ fn fetch_dry_run_prints_url_without_creating_the_cache() {
 }
 
 #[test]
+fn fetch_force_and_dry_run_are_mutually_exclusive() {
+    let directory = tempfile::tempdir().unwrap();
+
+    let fetched = cita(
+        directory.path(),
+        &["fetch", "--force", "--dry-run", "Zed:2020"],
+    );
+
+    assert!(!fetched.status.success());
+    assert!(
+        String::from_utf8_lossy(&fetched.stderr).contains("cannot be used with"),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&fetched.stderr)
+    );
+    assert!(!directory.path().join(".cita").exists());
+}
+
+#[test]
 fn open_no_download_errors_on_a_cache_miss_without_creating_the_cache() {
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("cita.toml"), sample_manifest()).unwrap();

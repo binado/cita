@@ -46,7 +46,7 @@ enum Command {
     /// Fetch a paper's arXiv PDF into the local cache
     Fetch {
         /// Download even if a cached PDF already exists
-        #[arg(long)]
+        #[arg(long, conflicts_with = "dry_run")]
         force: bool,
         /// Print the arXiv PDF URL without downloading it
         #[arg(long)]
