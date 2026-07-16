@@ -1,84 +1,40 @@
-//! INSPIRE metadata provider for Cita, built on a reusable async INSPIRE
-//! literature API client.
-//!
-//! The client deliberately covers only direct literature lookup. It retains
-//! unknown JSON fields, making typed consumers forward-compatible with API
-//! additions without coupling them to the full INSPIRE schema. On top of it,
-//! [`InspireProvider`] implements `cita_core::MetadataProvider`, mapping
-//! raw INSPIRE records into provider-neutral resolved papers.
-//!
-//! ```no_run
-//! # async fn example() -> Result<(), cita_inspire_client::Error> {
-//! use cita_inspire_client::{Client, LiteratureId};
-//!
-//! let client = Client::new()?;
-//! let record = client
-//!     .literature(LiteratureId::arxiv("1207.7214")?)
-//!     .await?;
-//! println!("{}", record.metadata.titles[0].title);
-//! # Ok(())
-//! # }
-//! ```
+//! Direct BibTeX access to the INSPIRE literature API.
 
-mod model;
-mod provider;
-
-pub use model::*;
-pub use provider::InspireProvider;
-use reqwest::StatusCode;
-use std::time::Duration;
+use biblatex::RawBibliography;
+use cita_core::Locator;
+use reqwest::{StatusCode, header::RETRY_AFTER};
+use std::time::{Duration, SystemTime};
 use thiserror::Error;
 use url::Url;
 
 const DEFAULT_BASE_URL: &str = "https://inspirehep.net/";
 const DEFAULT_USER_AGENT: &str = concat!("cita-inspire-client/", env!("CARGO_PKG_VERSION"));
+const MAX_BATCH_KEYS: usize = 100;
+const MAX_ENCODED_QUERY: usize = 6 * 1024;
+const MAX_429_RETRIES: usize = 3;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LiteratureId {
-    Record(u64),
-    Arxiv(String),
-    Doi(String),
-}
-
-impl LiteratureId {
-    pub fn record(id: u64) -> Result<Self, Error> {
-        if id == 0 {
-            return Err(Error::InvalidIdentifier(
-                "record id must be positive".into(),
-            ));
-        }
-        Ok(Self::Record(id))
-    }
-
-    pub fn arxiv(id: impl Into<String>) -> Result<Self, Error> {
-        let id = id.into();
-        validate_arxiv(&id)?;
-        Ok(Self::Arxiv(id))
-    }
-
-    pub fn doi(doi: impl Into<String>) -> Result<Self, Error> {
-        let doi = doi.into();
-        validate_doi(&doi)?;
-        Ok(Self::Doi(doi))
-    }
+#[derive(Clone, Debug)]
+pub struct BatchResponse {
+    pub requested_keys: Vec<String>,
+    pub bibtex: String,
 }
 
 #[derive(Clone, Debug)]
 pub struct Client {
     http: reqwest::Client,
     base_url: Url,
+    retry_fallback: Duration,
 }
 
 impl Client {
     pub fn new() -> Result<Self, Error> {
         ClientBuilder::new().build()
     }
-
     pub fn builder() -> ClientBuilder {
         ClientBuilder::new()
     }
 
-    pub async fn literature(&self, id: LiteratureId) -> Result<LiteratureRecord, Error> {
+    pub async fn lookup(&self, locator: &Locator) -> Result<String, Error> {
         let mut url = self.base_url.clone();
         {
             let mut segments = url
@@ -86,45 +42,102 @@ impl Client {
                 .map_err(|_| Error::InvalidBaseUrl(self.base_url.to_string()))?;
             segments.pop_if_empty();
             segments.push("api");
-            match &id {
-                LiteratureId::Record(value) => {
-                    if *value == 0 {
-                        return Err(Error::InvalidIdentifier(
-                            "record id must be positive".into(),
-                        ));
-                    }
+            match locator {
+                Locator::Inspire(id) => {
                     segments.push("literature");
-                    segments.push(&value.to_string());
+                    segments.push(&id.to_string());
                 }
-                LiteratureId::Arxiv(value) => {
-                    validate_arxiv(value)?;
+                Locator::Arxiv(id) => {
                     segments.push("arxiv");
-                    segments.push(value);
+                    segments.push(id);
                 }
-                LiteratureId::Doi(value) => {
-                    validate_doi(value)?;
+                Locator::Doi(doi) => {
                     segments.push("doi");
-                    segments.push(value);
+                    segments.push(doi);
                 }
             }
         }
+        url.query_pairs_mut().append_pair("format", "bibtex");
+        self.request(url, locator.to_string()).await
+    }
 
-        let response = self.http.get(url).send().await.map_err(Error::Transport)?;
-        let status = response.status();
-        if status == StatusCode::NOT_FOUND {
-            return Err(Error::NotFound(id));
+    pub async fn lookup_key(&self, key: &str) -> Result<String, Error> {
+        validate_key(key)?;
+        let url = self.search_url(&[key.to_owned()])?;
+        self.request(url, format!("texkey:{key}")).await
+    }
+
+    /// Fetch sequential direct-search batches in deterministic input order.
+    pub async fn lookup_keys(&self, keys: &[String]) -> Result<Vec<BatchResponse>, Error> {
+        let chunks = batch_keys(keys)?;
+        let mut responses = Vec::with_capacity(chunks.len());
+        for requested_keys in chunks {
+            let url = self.search_url(&requested_keys)?;
+            let label = requested_keys.join(", ");
+            let bibtex = self.request(url, format!("texkeys {label}")).await?;
+            responses.push(BatchResponse {
+                requested_keys,
+                bibtex,
+            });
         }
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::HttpStatus { status, body });
+        Ok(responses)
+    }
+
+    fn search_url(&self, keys: &[String]) -> Result<Url, Error> {
+        let mut url = self
+            .base_url
+            .join("api/literature")
+            .map_err(|_| Error::InvalidBaseUrl(self.base_url.to_string()))?;
+        let query = keys
+            .iter()
+            .map(|key| format!("texkey:{key}"))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        url.query_pairs_mut()
+            .append_pair("q", &query)
+            .append_pair("format", "bibtex")
+            .append_pair("size", &keys.len().to_string());
+        Ok(url)
+    }
+
+    async fn request(&self, url: Url, resource: String) -> Result<String, Error> {
+        let mut retries = 0;
+        loop {
+            let response = self
+                .http
+                .get(url.clone())
+                .send()
+                .await
+                .map_err(Error::Transport)?;
+            let status = response.status();
+            if status == StatusCode::TOO_MANY_REQUESTS && retries < MAX_429_RETRIES {
+                retries += 1;
+                let delay = response
+                    .headers()
+                    .get(RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(retry_after_delay)
+                    .unwrap_or(self.retry_fallback);
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+            if status == StatusCode::NOT_FOUND {
+                return Err(Error::NotFound(resource));
+            }
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                return Err(Error::HttpStatus { status, body });
+            }
+            let body = response.text().await.map_err(Error::Transport)?;
+            validate_bibtex_body(&body)?;
+            return Ok(body);
         }
-        response.json().await.map_err(Error::MalformedResponse)
     }
 }
 
 impl Default for Client {
     fn default() -> Self {
-        Self::new().expect("the default INSPIRE client configuration is valid")
+        Self::new().expect("default INSPIRE configuration is valid")
     }
 }
 
@@ -133,6 +146,7 @@ pub struct ClientBuilder {
     base_url: String,
     user_agent: String,
     timeout: Duration,
+    retry_fallback: Duration,
 }
 
 impl ClientBuilder {
@@ -141,37 +155,41 @@ impl ClientBuilder {
             base_url: DEFAULT_BASE_URL.into(),
             user_agent: DEFAULT_USER_AGENT.into(),
             timeout: Duration::from_secs(30),
+            retry_fallback: Duration::from_secs(5),
         }
     }
-
-    pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
+    pub fn base_url(mut self, value: impl Into<String>) -> Self {
+        self.base_url = value.into();
         self
     }
-
-    pub fn user_agent(mut self, user_agent: impl Into<String>) -> Self {
-        self.user_agent = user_agent.into();
+    pub fn user_agent(mut self, value: impl Into<String>) -> Self {
+        self.user_agent = value.into();
         self
     }
-
-    pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+    pub fn timeout(mut self, value: Duration) -> Self {
+        self.timeout = value;
         self
     }
-
+    pub fn retry_fallback(mut self, value: Duration) -> Self {
+        self.retry_fallback = value;
+        self
+    }
     pub fn build(self) -> Result<Client, Error> {
         let mut base_url =
             Url::parse(&self.base_url).map_err(|_| Error::InvalidBaseUrl(self.base_url.clone()))?;
         if !base_url.path().ends_with('/') {
-            let path = format!("{}/", base_url.path());
-            base_url.set_path(&path);
+            base_url.set_path(&format!("{}/", base_url.path()));
         }
         let http = reqwest::Client::builder()
             .user_agent(self.user_agent)
             .timeout(self.timeout)
             .build()
             .map_err(Error::Transport)?;
-        Ok(Client { http, base_url })
+        Ok(Client {
+            http,
+            base_url,
+            retry_fallback: self.retry_fallback,
+        })
     }
 }
 
@@ -183,64 +201,102 @@ impl Default for ClientBuilder {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("invalid literature identifier: {0}")]
-    InvalidIdentifier(String),
     #[error("invalid INSPIRE base URL: {0}")]
     InvalidBaseUrl(String),
-    #[error("request to INSPIRE failed: {0}")]
+    #[error("unsafe INSPIRE texkey `{0}`")]
+    UnsafeKey(String),
+    #[error("INSPIRE request failed: {0}")]
     Transport(#[source] reqwest::Error),
-    #[error("INSPIRE record not found: {0:?}")]
-    NotFound(LiteratureId),
+    #[error("INSPIRE did not find {0}")]
+    NotFound(String),
     #[error("INSPIRE returned HTTP {status}: {body}")]
     HttpStatus { status: StatusCode, body: String },
-    #[error("INSPIRE returned a malformed response: {0}")]
-    MalformedResponse(#[source] reqwest::Error),
+    #[error("INSPIRE returned malformed BibTeX: {0}")]
+    MalformedBibtex(String),
 }
 
-fn validate_arxiv(id: &str) -> Result<(), Error> {
-    // `strip_arxiv_version` trims surrounding whitespace, so a padded id would
-    // otherwise validate here yet be stored (and later pushed into the request
-    // path) verbatim. Reject whitespace up front, matching `validate_doi`.
-    if id.bytes().any(|c| c.is_ascii_whitespace()) {
-        return Err(Error::InvalidIdentifier(format!("invalid arXiv id `{id}`")));
-    }
-    let without_version = cita_core::strip_arxiv_version(id);
-    let modern = {
-        let mut parts = without_version.split('.');
-        matches!((parts.next(), parts.next(), parts.next()), (Some(a), Some(b), None)
-            if a.len() == 4 && a.bytes().all(|c| c.is_ascii_digit())
-            && (b.len() == 4 || b.len() == 5) && b.bytes().all(|c| c.is_ascii_digit()))
-    };
-    let legacy = without_version
-        .split_once('/')
-        .is_some_and(|(archive, number)| {
-            !archive.is_empty()
-                && archive
-                    .bytes()
-                    .all(|c| c.is_ascii_alphabetic() || matches!(c, b'.' | b'-'))
-                && number.len() == 7
-                && number.bytes().all(|c| c.is_ascii_digit())
+pub fn batch_keys(keys: &[String]) -> Result<Vec<Vec<String>>, Error> {
+    let mut batches: Vec<Vec<String>> = Vec::new();
+    for key in keys {
+        validate_key(key)?;
+        let needs_new = batches.last().is_some_and(|batch| {
+            batch.len() == MAX_BATCH_KEYS || {
+                let mut candidate = batch.clone();
+                candidate.push(key.clone());
+                encoded_query_len(&candidate) > MAX_ENCODED_QUERY
+            }
         });
-    if modern || legacy {
+        if needs_new || batches.is_empty() {
+            batches.push(Vec::new());
+        }
+        batches.last_mut().expect("batch exists").push(key.clone());
+    }
+    Ok(batches)
+}
+
+fn encoded_query_len(keys: &[String]) -> usize {
+    let query = keys
+        .iter()
+        .map(|key| format!("texkey:{key}"))
+        .collect::<Vec<_>>()
+        .join(" or ");
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    serializer.append_pair("q", &query);
+    serializer.finish().len()
+}
+
+fn validate_key(key: &str) -> Result<(), Error> {
+    if !key.is_empty()
+        && key.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'+' | b'-')
+        })
+    {
         Ok(())
     } else {
-        Err(Error::InvalidIdentifier(format!("invalid arXiv id `{id}`")))
+        Err(Error::UnsafeKey(key.to_owned()))
     }
 }
 
-fn validate_doi(doi: &str) -> Result<(), Error> {
-    let valid = doi.starts_with("10.")
-        && doi.split_once('/').is_some_and(|(registrant, suffix)| {
-            registrant.len() > 3
-                && registrant[3..].bytes().all(|c| c.is_ascii_digit())
-                && !suffix.trim().is_empty()
-                && !doi.bytes().any(|c| c.is_ascii_whitespace())
-        });
-    if valid {
-        Ok(())
-    } else {
-        Err(Error::InvalidIdentifier(format!("invalid DOI `{doi}`")))
+fn retry_after_delay(value: &str) -> Option<Duration> {
+    value
+        .parse::<u64>()
+        .ok()
+        .map(Duration::from_secs)
+        .or_else(|| {
+            httpdate::parse_http_date(value)
+                .ok()
+                .map(|time| time.duration_since(SystemTime::now()).unwrap_or_default())
+        })
+}
+
+fn validate_bibtex_body(body: &str) -> Result<(), Error> {
+    let raw =
+        RawBibliography::parse(body).map_err(|error| Error::MalformedBibtex(error.to_string()))?;
+    if !raw.preamble.is_empty() || !raw.abbreviations.is_empty() {
+        return Err(Error::MalformedBibtex(
+            "response contains unsupported BibTeX directives".into(),
+        ));
     }
+    let mut cursor = 0;
+    for entry in raw.entries {
+        if !body[cursor..entry.span.start].trim().is_empty() {
+            return Err(Error::MalformedBibtex(
+                "response contains non-entry content".into(),
+            ));
+        }
+        cursor = entry
+            .span
+            .end
+            .checked_add(1)
+            .filter(|end| *end <= body.len() && body.as_bytes()[*end - 1] == b'}')
+            .ok_or_else(|| Error::MalformedBibtex("entry has no closing brace".into()))?;
+    }
+    if !body[cursor..].trim().is_empty() {
+        return Err(Error::MalformedBibtex(
+            "response contains non-entry content".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -252,117 +308,84 @@ mod tests {
         thread,
     };
 
-    fn server(status: &str, body: &str, delay: Duration) -> (String, thread::JoinHandle<String>) {
+    fn server(
+        responses: Vec<(&'static str, &'static str, &'static str)>,
+    ) -> (String, thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
-        let status = status.to_owned();
-        let body = body.to_owned();
         let handle = thread::spawn(move || {
+            responses.into_iter().map(|(status, headers, body)| {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0_u8; 4096];
+            let mut request = [0; 16384];
             let length = stream.read(&mut request).unwrap();
-            thread::sleep(delay);
-            let response = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            let _ = stream.write_all(response.as_bytes());
-            String::from_utf8_lossy(&request[..length])
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .to_owned()
+            write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\n{headers}Connection: close\r\n\r\n{body}", body.len()).unwrap();
+            String::from_utf8_lossy(&request[..length]).lines().next().unwrap().to_owned()
+        }).collect()
         });
         (format!("http://{address}/"), handle)
     }
 
-    fn fixture() -> &'static str {
-        r#"{"id":"42","metadata":{"titles":[{"title":"Example","new_title_field":true}],"new_metadata_field":{"kept":true}},"new_record_field":7}"#
+    #[tokio::test]
+    async fn single_lookup_requests_bibtex() {
+        let bib = "@article{A,title={A}}";
+        let (base, handle) = server(vec![("200 OK", "", bib)]);
+        let client = Client::builder().base_url(base).build().unwrap();
+        assert_eq!(
+            client.lookup(&"1207.7214".parse().unwrap()).await.unwrap(),
+            bib
+        );
+        assert!(handle.join().unwrap()[0].contains("GET /api/arxiv/1207.7214?format=bibtex "));
     }
 
     #[tokio::test]
-    async fn constructs_record_arxiv_legacy_and_encoded_doi_urls() {
-        let cases = [
-            (LiteratureId::record(42).unwrap(), "/api/literature/42"),
-            (
-                LiteratureId::arxiv("2401.00001").unwrap(),
-                "/api/arxiv/2401.00001",
-            ),
-            (
-                LiteratureId::arxiv("hep-th/9901001").unwrap(),
-                "/api/arxiv/hep-th%2F9901001",
-            ),
-            (
-                LiteratureId::doi("10.1000/a/b").unwrap(),
-                "/api/doi/10.1000%2Fa%2Fb",
-            ),
-        ];
-        for (id, expected_path) in cases {
-            let (base_url, handle) = server("200 OK", fixture(), Duration::ZERO);
-            let client = Client::builder().base_url(base_url).build().unwrap();
-            let record = client.literature(id).await.unwrap();
-            assert_eq!(record.id.as_deref(), Some("42"));
-            assert!(record.extra.contains_key("new_record_field"));
-            assert!(record.metadata.extra.contains_key("new_metadata_field"));
-            assert_eq!(record.metadata.titles[0].extra["new_title_field"], true);
-            let request_line = handle.join().unwrap();
-            assert!(request_line.contains(expected_path), "{request_line}");
-        }
+    async fn retries_three_rate_limits() {
+        let bib = "@article{A,title={A}}";
+        let (base, handle) = server(vec![
+            ("429 Too Many Requests", "Retry-After: 0\r\n", ""),
+            ("429 Too Many Requests", "Retry-After: 0\r\n", ""),
+            ("429 Too Many Requests", "Retry-After: 0\r\n", ""),
+            ("200 OK", "", bib),
+        ]);
+        let client = Client::builder().base_url(base).build().unwrap();
+        assert_eq!(client.lookup_key("A").await.unwrap(), bib);
+        assert_eq!(handle.join().unwrap().len(), 4);
     }
 
     #[tokio::test]
-    async fn distinguishes_not_found_http_and_malformed_responses() {
-        let (base_url, not_found_server) = server("404 Not Found", "{}", Duration::ZERO);
-        let client = Client::builder().base_url(base_url).build().unwrap();
+    async fn reports_status_and_malformed_body_errors() {
+        let (base, handle) = server(vec![("500 Server Error", "", "broken")]);
+        let client = Client::builder().base_url(base).build().unwrap();
         assert!(matches!(
-            client.literature(LiteratureId::Record(1)).await,
-            Err(Error::NotFound(LiteratureId::Record(1)))
+            client.lookup_key("A").await,
+            Err(Error::HttpStatus { status, .. }) if status == StatusCode::INTERNAL_SERVER_ERROR
         ));
-        not_found_server.join().unwrap();
+        handle.join().unwrap();
 
-        let (base_url, error_server) = server("503 Service Unavailable", "down", Duration::ZERO);
-        let client = Client::builder().base_url(base_url).build().unwrap();
+        let (base, handle) = server(vec![("200 OK", "", "not BibTeX")]);
+        let client = Client::builder().base_url(base).build().unwrap();
         assert!(matches!(
-            client.literature(LiteratureId::Record(1)).await,
-            Err(Error::HttpStatus {
-                status: StatusCode::SERVICE_UNAVAILABLE,
-                ..
-            })
+            client.lookup_key("A").await,
+            Err(Error::MalformedBibtex(_))
         ));
-        error_server.join().unwrap();
-
-        let (base_url, malformed_server) = server("200 OK", "not-json", Duration::ZERO);
-        let client = Client::builder().base_url(base_url).build().unwrap();
-        assert!(matches!(
-            client.literature(LiteratureId::Record(1)).await,
-            Err(Error::MalformedResponse(_))
-        ));
-        malformed_server.join().unwrap();
-    }
-
-    #[tokio::test]
-    async fn applies_configured_timeout() {
-        let (base_url, handle) = server("200 OK", fixture(), Duration::from_millis(200));
-        let client = Client::builder()
-            .base_url(base_url)
-            .timeout(Duration::from_millis(20))
-            .build()
-            .unwrap();
-        match client.literature(LiteratureId::Record(1)).await {
-            Err(Error::Transport(error)) => assert!(error.is_timeout()),
-            result => panic!("expected timeout, got {result:?}"),
-        }
         handle.join().unwrap();
     }
 
     #[test]
-    fn validates_identifiers_and_base_urls() {
-        assert!(LiteratureId::record(0).is_err());
-        assert!(LiteratureId::arxiv("bad").is_err());
-        // Whitespace-padded ids would strip to a valid form but be stored and
-        // requested verbatim, so they must be rejected outright.
-        assert!(LiteratureId::arxiv(" 1207.7214 ").is_err());
-        assert!(LiteratureId::doi("not-a-doi").is_err());
-        assert!(Client::builder().base_url("not a URL").build().is_err());
+    fn splits_at_one_hundred_keys_and_encoded_limit() {
+        let keys = (0..101)
+            .map(|index| format!("K{index}"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            batch_keys(&keys)
+                .unwrap()
+                .iter()
+                .map(Vec::len)
+                .collect::<Vec<_>>(),
+            [100, 1]
+        );
+        let long = (0..3)
+            .map(|index| format!("K{index}{}", "x".repeat(3000)))
+            .collect::<Vec<_>>();
+        assert_eq!(batch_keys(&long).unwrap().len(), 2);
     }
 }

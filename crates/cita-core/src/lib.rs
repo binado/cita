@@ -1,12 +1,5 @@
-//! Provider-neutral vocabulary for Cita: paper models, locators,
-//! citation-key helpers, and the `MetadataProvider` trait.
+//! Locator parsing and identifier normalization shared by Cita crates.
 
-mod key;
 mod locator;
-mod model;
-mod provider;
 
-pub use key::{fallback_key, validate_key};
-pub use locator::{Locator, normalize_arxiv, normalize_doi, strip_arxiv_version};
-pub use model::{INSPIRE_SOURCE, PaperRecord, Publication, ResolvedPaper};
-pub use provider::{MetadataProvider, ProviderError};
+pub use locator::{Error, Locator, normalize_arxiv, normalize_doi, strip_arxiv_version};

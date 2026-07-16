@@ -1,6 +1,6 @@
 //! arXiv PDF download and local cache management for Cita.
 
-use cita_core::{Locator, PaperRecord};
+use cita_core::Locator;
 use reqwest::StatusCode;
 use std::{
     fs,
@@ -54,15 +54,7 @@ impl DocumentStore {
         DocumentStoreBuilder::new(cache_root)
     }
 
-    pub async fn fetch(
-        &self,
-        paper: &PaperRecord,
-        policy: FetchPolicy,
-    ) -> Result<FetchOutcome, Error> {
-        let arxiv_id = paper
-            .arxiv_ids
-            .first()
-            .ok_or(Error::MissingArxivIdentifier)?;
+    pub async fn fetch(&self, arxiv_id: &str, policy: FetchPolicy) -> Result<FetchOutcome, Error> {
         let arxiv_id = validated_arxiv_id(arxiv_id)?;
         let destination = cache_path(&self.cache_root, &arxiv_id);
 
@@ -177,8 +169,6 @@ impl DocumentStoreBuilder {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("paper has no arXiv identifier, so no PDF can be fetched")]
-    MissingArxivIdentifier,
     #[error("paper contains an invalid arXiv identifier: `{0}`")]
     InvalidArxivIdentifier(String),
     #[error("invalid arXiv base URL: {0}")]
@@ -220,11 +210,7 @@ fn validated_arxiv_id(value: &str) -> Result<String, Error> {
     }
 }
 
-pub fn arxiv_pdf_url(paper: &PaperRecord) -> Result<Url, Error> {
-    let arxiv_id = paper
-        .arxiv_ids
-        .first()
-        .ok_or(Error::MissingArxivIdentifier)?;
+pub fn arxiv_pdf_url(arxiv_id: &str) -> Result<Url, Error> {
     let arxiv_id = validated_arxiv_id(arxiv_id)?;
     let base_url =
         Url::parse(DEFAULT_BASE_URL).expect("the built-in arXiv base URL must always be valid");
@@ -281,21 +267,11 @@ fn has_pdf_signature(file: &mut fs::File) -> Result<bool, std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cita_core::INSPIRE_SOURCE;
     use std::{
         io::{Read, Write},
         net::TcpListener,
         thread,
     };
-
-    fn paper(arxiv_ids: &[&str]) -> PaperRecord {
-        PaperRecord {
-            title: "Example".into(),
-            source: INSPIRE_SOURCE.into(),
-            arxiv_ids: arxiv_ids.iter().map(|id| (*id).to_owned()).collect(),
-            ..PaperRecord::default()
-        }
-    }
 
     fn server(status: &str, body: &[u8]) -> (String, thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -331,7 +307,7 @@ mod tests {
             .unwrap();
 
         let outcome = store
-            .fetch(&paper(&["1207.7214"]), FetchPolicy::UseCache)
+            .fetch("1207.7214", FetchPolicy::UseCache)
             .await
             .unwrap();
         let expected = directory.path().join("arxiv/1207.7214.pdf");
@@ -341,7 +317,7 @@ mod tests {
 
         assert_eq!(
             store
-                .fetch(&paper(&["1207.7214"]), FetchPolicy::UseCache)
+                .fetch("1207.7214", FetchPolicy::UseCache)
                 .await
                 .unwrap(),
             FetchOutcome::Cached(expected)
@@ -358,7 +334,7 @@ mod tests {
             .unwrap();
 
         let outcome = store
-            .fetch(&paper(&["hep-th/9901001"]), FetchPolicy::UseCache)
+            .fetch("hep-th/9901001", FetchPolicy::UseCache)
             .await
             .unwrap();
         assert_eq!(
@@ -381,10 +357,7 @@ mod tests {
             .unwrap();
 
         assert!(matches!(
-            store
-                .fetch(&paper(&["1207.7214"]), FetchPolicy::Force)
-                .await
-                .unwrap(),
+            store.fetch("1207.7214", FetchPolicy::Force).await.unwrap(),
             FetchOutcome::Downloaded(_)
         ));
         assert_eq!(fs::read(destination).unwrap(), b"%PDF-new");
@@ -401,7 +374,7 @@ mod tests {
 
         assert_eq!(
             store
-                .fetch(&paper(&["1207.7214"]), FetchPolicy::CacheOnly)
+                .fetch("1207.7214", FetchPolicy::CacheOnly)
                 .await
                 .unwrap(),
             FetchOutcome::Cached(destination)
@@ -410,7 +383,7 @@ mod tests {
         let missing = directory.path().join("arxiv/2101.00001.pdf");
         assert!(matches!(
             store
-                .fetch(&paper(&["2101.00001"]), FetchPolicy::CacheOnly)
+                .fetch("2101.00001", FetchPolicy::CacheOnly)
                 .await,
             Err(Error::NotCached(path)) if path == missing
         ));
@@ -419,16 +392,16 @@ mod tests {
     #[test]
     fn builds_public_arxiv_pdf_urls_for_browser_opening() {
         assert_eq!(
-            arxiv_pdf_url(&paper(&["1207.7214"])).unwrap().as_str(),
+            arxiv_pdf_url("1207.7214").unwrap().as_str(),
             "https://arxiv.org/pdf/1207.7214"
         );
         assert_eq!(
-            arxiv_pdf_url(&paper(&["hep-th/9901001"])).unwrap().as_str(),
+            arxiv_pdf_url("hep-th/9901001").unwrap().as_str(),
             "https://arxiv.org/pdf/hep-th/9901001"
         );
         assert!(matches!(
-            arxiv_pdf_url(&paper(&[])),
-            Err(Error::MissingArxivIdentifier)
+            arxiv_pdf_url(""),
+            Err(Error::InvalidArxivIdentifier(_))
         ));
     }
 
@@ -437,13 +410,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let store = DocumentStore::new(directory.path()).unwrap();
         assert!(matches!(
-            store.fetch(&paper(&[]), FetchPolicy::UseCache).await,
-            Err(Error::MissingArxivIdentifier)
+            store.fetch("", FetchPolicy::UseCache).await,
+            Err(Error::InvalidArxivIdentifier(_))
         ));
         assert!(matches!(
-            store
-                .fetch(&paper(&["not-an-id"]), FetchPolicy::UseCache)
-                .await,
+            store.fetch("not-an-id", FetchPolicy::UseCache).await,
             Err(Error::InvalidArxivIdentifier(_))
         ));
 
@@ -456,9 +427,7 @@ mod tests {
         fs::create_dir_all(destination.parent().unwrap()).unwrap();
         fs::write(&destination, b"%PDF-existing").unwrap();
         assert!(matches!(
-            store
-                .fetch(&paper(&["1207.7214"]), FetchPolicy::Force)
-                .await,
+            store.fetch("1207.7214", FetchPolicy::Force).await,
             Err(Error::InvalidDownloadedPdf(_))
         ));
         assert_eq!(fs::read(destination).unwrap(), b"%PDF-existing");
@@ -474,9 +443,7 @@ mod tests {
             .build()
             .unwrap();
         assert!(matches!(
-            store
-                .fetch(&paper(&["1207.7214"]), FetchPolicy::UseCache)
-                .await,
+            store.fetch("1207.7214", FetchPolicy::UseCache).await,
             Err(Error::HttpStatus {
                 status: StatusCode::NOT_FOUND,
                 ..
@@ -489,7 +456,7 @@ mod tests {
         fs::write(&destination, b"broken").unwrap();
         assert!(matches!(
             store
-                .fetch(&paper(&["1207.7214"]), FetchPolicy::UseCache)
+                .fetch("1207.7214", FetchPolicy::UseCache)
                 .await,
             Err(Error::InvalidCachedPdf(path)) if path == destination
         ));

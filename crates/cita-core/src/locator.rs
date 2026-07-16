@@ -1,5 +1,11 @@
-use crate::ProviderError;
 use std::{fmt, str::FromStr};
+use thiserror::Error as ThisError;
+
+#[derive(Clone, Debug, PartialEq, Eq, ThisError)]
+pub enum Error {
+    #[error("invalid paper locator: {0}")]
+    InvalidLocator(String),
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Locator {
@@ -25,7 +31,7 @@ impl fmt::Display for Locator {
 }
 
 impl FromStr for Locator {
-    type Err = ProviderError;
+    type Err = Error;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         let input = input.trim();
@@ -51,8 +57,8 @@ impl FromStr for Locator {
     }
 }
 
-fn invalid(input: &str) -> ProviderError {
-    ProviderError::InvalidLocator(format!(
+fn invalid(input: &str) -> Error {
+    Error::InvalidLocator(format!(
         "`{input}` (use an arXiv id or an explicit arxiv:, doi:, or inspire: locator)"
     ))
 }

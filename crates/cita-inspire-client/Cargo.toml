@@ -1,6 +1,6 @@
 [package]
 name = "cita-inspire-client"
-description = "INSPIRE metadata provider for Cita, built on a reusable async INSPIRE literature API client"
+description = "Direct BibTeX client for INSPIRE literature"
 readme = "../../README.md"
 keywords = ["inspirehep", "literature", "physics", "api"]
 categories = ["api-bindings", "science"]
@@ -12,12 +12,12 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-async-trait.workspace = true
+biblatex.workspace = true
 cita-core = { path = "../cita-core" }
+httpdate.workspace = true
 reqwest.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 url.workspace = true
 
 [dev-dependencies]

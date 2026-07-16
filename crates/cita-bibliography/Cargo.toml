@@ -1,6 +1,6 @@
 [package]
-name = "cita-manifest"
-description = "Manifest storage and BibTeX export for Cita"
+name = "cita-bibliography"
+description = "Canonical BibTeX storage for Cita"
 readme = "../../README.md"
 keywords = ["bibliography", "bibtex", "citations"]
 categories = ["command-line-utilities", "science"]
@@ -12,12 +12,10 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+biblatex.workspace = true
 cita-core = { path = "../cita-core" }
-serde.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
-toml.workspace = true
-toml_edit.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
