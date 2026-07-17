@@ -1,134 +1,86 @@
-# cita
+# Cita
 
-`cita` is a small, Git-friendly bibliography database. Version 0 resolves
-literature through INSPIRE, stores citation metadata in a human-editable
-`cita.toml` manifest, and exports deterministic BibTeX. It is written in Rust
-(edition 2024, MSRV 1.88).
+Cita is a Git-friendly bibliography CLI. It keeps authoritative source snapshots
+in `cita.toml` and deterministically generates the tracked `references.bib`.
+INSPIRE records retain typed JSON metadata plus INSPIRE's exact BibTeX; imported
+standalone BibTeX entries retain their exact source bytes.
 
-## Installation
+Requires Rust 1.88 or newer.
 
-Install the CLI from source with Cargo:
+## Quick start
 
-```console
-cargo install --path crates/cita
+```bash
+cita init
+cita add 1207.7214 doi:10.1016/j.physletb.2012.08.020
+cita import local-references.bib
+cita list
+cita sync
+cita fetch 1207.7214
+cita commit
 ```
 
-This builds and installs the `cita` binary into `~/.cargo/bin`. Make sure that
-directory is on your `PATH`.
+Supported locators are bare arXiv IDs and explicit `arxiv:`, `doi:`, or
+`inspire:` locators. Selectors first match an exact local citation key, then a
+provider ID, normalized DOI, or normalized arXiv ID.
 
-To build the whole workspace without installing:
+## Commands
 
-```console
-cargo build --workspace --release
-```
+- `cita init` creates an empty schema-2 project. If only `references.bib`
+  exists, it imports every standalone entry. Existing schema-2 projects are
+  validated; schema 1 is explicitly unsupported.
+- `cita import <path|->` atomically imports all standalone entries from a file
+  or stdin.
+- `cita add [--key K] <locator>...` resolves INSPIRE JSON and authoritative
+  BibTeX. `--key` keeps an independent local key and accepts one locator.
+- `cita sync` refreshes only INSPIRE snapshots by stable record ID and leaves
+  imported entries byte-for-byte unchanged.
+- `cita remove <selector>...` removes a batch atomically.
+- `cita list [--sort-by key|title|author|year] [--order asc|desc]` displays
+  source-neutral projections.
+- `cita generate` repairs a missing or edited `references.bib` from the
+  authoritative manifest.
+- `cita fetch [--force] [--dry-run | --save] <selector>` manages the arXiv PDF
+  cache. Without `--save`, an unmatched locator uses INSPIRE JSON only.
+- `cita open [--force | --no-download | --browser] [--save] <selector>` opens a
+  cached/downloaded PDF or its arXiv URL.
+- `cita commit` validates consistency and commits only `cita.toml` and
+  `references.bib`, leaving unrelated staged changes intact.
 
-## Usage
+## Storage rules
 
-```console
-cita init                                                    # create cita.toml
-cita add 1207.7214 doi:10.1016/j.physletb.2012.08.020        # resolve and store papers
-cita add --force 1207.7214                                   # refresh stored metadata from INSPIRE
-cita list                                                    # show stored papers
-cita fetch Aad:2012tfa                                      # cache its arXiv PDF
-cita fetch --dry-run 1207.7214                              # resolve and print a PDF URL transiently
-cita fetch --save 1207.7214                                 # resolve, store, and cache a paper
-cita open Aad:2012tfa                                       # cache and open its PDF
-cita open --browser --save 1207.7214                        # store it and open its arXiv PDF URL
-cita export --bibtex > references.bib                        # deterministic BibTeX
-cita commit                                                  # commit only cita.toml
-```
+`cita.toml` is the sole authority. Each sorted local key contains one tagged
+source snapshot (`inspire` or `bibtex`). Snapshots are strictly validated and
+duplicate normalized DOI, arXiv, or provider identities are rejected across all
+sources.
 
-### Commands
+`references.bib` behaves like a lockfile: entries are sorted by local key,
+separated by one blank line, and end with one newline. Preserved field bytes are
+unchanged; only the citation-key token may be re-keyed. Every normal command
+checks its exact bytes against the manifest and reports drift. Use `cita
+generate` to repair it.
 
-- `cita init` — create `cita.toml` at the Git repository root (or the current
-  directory if not in a repo), create the local PDF cache, and add that cache
-  to `.gitignore`. Re-running it on a valid Cita project is safe.
-- `cita add [-f|--force] [--key <key>] <locator>...` — resolve one or more
-  papers through INSPIRE and store them. A bare token is treated as an arXiv
-  id; use `arxiv:`, `doi:`, or `inspire:` prefixes for explicit locators.
-  `--key` overrides the citation key and is only valid with a single locator.
-  It cannot rename a paper already stored under a different citation key.
-  Without `--force`, a paper already present by identity is left unchanged.
-  With `--force`, differing metadata is overwritten in place under the existing
-  citation key.
-- `cita remove <selector>...` — remove papers by citation key or locator.
-- `cita list` — list stored papers.
-- `cita fetch [--force] [--dry-run | --save] <selector>` — download the selected
-  paper's arXiv PDF into `.cita/files/`, or skip the download if a cached file
-  already exists, and print its arXiv URL. A valid arXiv, DOI, or INSPIRE
-  locator that is absent from the manifest is resolved transiently by default;
-  `--save` stores its metadata first (a later download failure does not roll
-  that write back). If `--save` finds the paper already present by identity but
-  with different metadata, Cita leaves the manifest unchanged, warns on
-  standard error, uses the freshly resolved metadata for the current document
-  action, and suggests `cita add --force <selector>`. `--force` downloads again
-  even when a cache file is present. `--dry-run` prints the URL without touching
-  the local cache and cannot be combined with `--save`.
-- `cita open [--force | --no-download | --browser] [--save] <selector>` — open
-  the PDF in the system's default application. As with `fetch`, missing locators
-  are resolved through INSPIRE; without `--save`, metadata is not written to
-  `cita.toml`. By default, Cita uses the cached PDF or downloads it if needed.
-  `--force` downloads a fresh copy, `--no-download` errors on a cache miss, and
-  `--browser` opens the arXiv PDF URL without downloading or touching the local
-  cache. `--save` is valid in every open mode.
-- `cita export --bibtex` — write deterministic BibTeX to standard output.
-- `cita commit` — stage and commit only `cita.toml`, leaving any other staged
-  changes intact. The commit message is generated by diffing the previously
-  committed manifest against the current one.
+Mutations validate and render the complete candidate in memory, atomically
+persist `references.bib` first, and persist `cita.toml` as the commit point.
 
-## Workspace architecture
+## Workspace
 
-The workspace contains one binary and four library crates:
+- `cita-core`: locators, neutral `Reference` vocabulary, and provider traits.
+- `cita-bibliography`: standalone BibTeX snapshot projection, raw-entry
+  preservation, re-keying, and `biblatex`-based generic rendering.
+- `cita-inspire-client`: typed INSPIRE JSON/BibTeX snapshots and stable-ID
+  refreshes.
+- `cita-manifest`: schema-2 validation, identity indexes, deterministic TOML,
+  output verification, and coordinated writes.
+- `cita-documents`: validated arXiv PDF downloads and atomic caching.
+- `cita`: CLI wiring, discovery, selectors, and scoped Git commits.
 
-- `cita` — the CLI binary (manifest discovery, scoped Git commits, wiring).
-- `cita-core` — provider-neutral models, locators, identifier normalization,
-  and the `MetadataProvider` trait.
-- `cita-manifest` — the `cita.toml` storage engine and BibTeX export.
-- `cita-documents` — arXiv PDF download, validation, and atomic local caching.
-- `cita-inspire-client` — an INSPIRE metadata provider built on a reusable
-  async literature API client.
+## Development
 
-PDFs are local cache data and are not committed by `cita commit`. Cita uses the
-first arXiv identifier stored for a paper. Stored identifiers are versionless,
-so a download gets the latest available version; use `--force` to replace an
-existing cached copy. For `fetch` and `open`, exact stored citation keys take
-precedence over locator matching. An arbitrary missing citation key cannot be
-resolved; the missing selector must be a valid arXiv, DOI, or INSPIRE locator.
-Papers without an arXiv identifier cannot be fetched.
-The `.gitignore` change made by `cita init` is also left for your normal Git
-workflow because `cita commit` remains scoped to `cita.toml`.
-
-## Testing
-
-Tests are hermetic: the INSPIRE and document-client suites spin up local
-`TcpListener`s instead of hitting the network, and CLI/manifest tests use
-temporary directories, so no test contacts INSPIRE or arXiv.
-
-```console
-cargo test --workspace                     # unit + integration tests
-cargo test -p cita-manifest manifest       # one crate, filter by name substring
-cargo test --test cli                       # the CLI integration suite only
-```
-
-Before pushing, match what CI runs:
-
-```console
+```bash
+cargo build --workspace
+cargo test --workspace
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo build --workspace
 ```
 
-CI (`.github/workflows/ci.yml`) runs fmt-check, clippy-as-errors, test, and
-build on both Rust `1.88` and `stable`.
-
-## Contributing
-
-Commits follow the [Conventional Commits](https://www.conventionalcommits.org)
-format: `<type>: <description>` (for example `fix: correct MSRV to 1.88`).
-Common types used in this repo are `fix`, `feat`, `refactor`, `chore`, `ci`,
-`docs`, and `test`.
-
-## License
-
-Licensed under the [MIT License](LICENSE).
+Provider and document tests are hermetic and use local TCP listeners.

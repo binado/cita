@@ -4,6 +4,7 @@ members = [
     "crates/cita-core",
     "crates/cita-documents",
     "crates/cita-inspire-client",
+    "crates/cita-bibliography",
     "crates/cita-manifest",
 ]
 resolver = "2"
@@ -19,8 +20,9 @@ authors = ["Bernardo Veronese"]
 [workspace.dependencies]
 anstyle = "1"
 anyhow = "1.0.94"
-async-trait = "0.1.83"
+biblatex = "0.12"
 clap = { version = "4.5.23", features = ["derive"] }
+httpdate = "1"
 opener = "0.8.5"
 reqwest = { version = "0.12.9", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0.216", features = ["derive"] }
@@ -28,8 +30,6 @@ serde_json = "1.0.133"
 tempfile = "3.14.0"
 terminal_size = "0.4"
 thiserror = "2.0.7"
-tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "time"] }
 toml = "0.8.19"
-toml_edit = { version = "0.22.22", features = ["serde"] }
-unicode-normalization = "0.1.24"
 url = "2.5.4"

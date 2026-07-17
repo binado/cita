@@ -1,6 +1,6 @@
 [package]
 name = "cita-core"
-description = "Provider-neutral models, locators, and citation-key helpers for Cita"
+description = "Locator parsing and identifier normalization for Cita"
 readme = "../../README.md"
 keywords = ["bibliography", "bibtex", "citations"]
 categories = ["command-line-utilities", "science"]
@@ -12,7 +12,5 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-async-trait.workspace = true
 serde.workspace = true
 thiserror.workspace = true
-unicode-normalization.workspace = true

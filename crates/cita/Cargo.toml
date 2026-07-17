@@ -22,12 +22,9 @@ clap.workspace = true
 cita-core = { path = "../cita-core" }
 cita-documents = { path = "../cita-documents" }
 cita-inspire-client = { path = "../cita-inspire-client" }
+cita-bibliography = { path = "../cita-bibliography" }
 cita-manifest = { path = "../cita-manifest" }
 opener.workspace = true
 tempfile.workspace = true
 terminal_size.workspace = true
 tokio.workspace = true
-
-[dev-dependencies]
-async-trait.workspace = true
-toml.workspace = true

@@ -1,154 +1,104 @@
-# CLAUDE.md
-
-This file provides guidance to AI agents when working with code in this repository.
+# AGENTS.md
 
 ## What this is
 
-Cita is a Git-friendly bibliography database CLI. It resolves literature through
-INSPIRE, stores citation metadata in a human-editable `cita.toml` manifest, and
-exports deterministic BibTeX. Rust edition 2024, MSRV **1.88** (the `let ... && ...`
-let-chains used throughout require it).
+Cita is a Git-friendly bibliography CLI. Provider snapshots are authoritative
+in schema-2 `cita.toml`; `references.bib` is a deterministic, tracked generated
+artifact. Rust edition 2024, MSRV 1.88.
 
 ## Commands
 
 ```bash
 cargo build --workspace
-cargo test --workspace                     # unit + integration tests
-cargo test -p cita-manifest manifest    # one crate, filter by name substring
-cargo test --test cli                       # the CLI integration suite only
-cargo fmt --all -- --check                  # CI runs this exact form
-cargo clippy --workspace --all-targets -- -D warnings   # warnings are hard errors in CI
-cargo run -p cita -- add 1207.7214       # run the binary
+cargo test --workspace
+cargo test -p cita-bibliography
+cargo test --test cli
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo run -p cita -- add 1207.7214
+cargo run -p cita -- import local.bib
+cargo run -p cita -- generate
 ```
 
-CI (`.github/workflows/ci.yml`) runs fmt-check, clippy-as-errors, test, and build on
-both `1.88` and `stable`. Match it before pushing. Tests are hermetic: the
-inspire-client and documents suites spin up local `TcpListener`s instead of hitting
-the network, and CLI/manifest tests use `tempfile` dirs — no test contacts INSPIRE
-or arXiv.
+CI runs format, clippy-as-errors, test, and build on 1.88 and stable. Tests are
+hermetic; INSPIRE and arXiv suites use local `TcpListener`s.
 
 ## Commit messages
 
-Commits must follow the [Conventional Commits](https://www.conventionalcommits.org)
-format: `<type>: <description>` (e.g. `fix: correct MSRV to 1.88`, `refactor: split
-manifest engine out of cita-core`). Common types used in this repo: `fix`,
-`feat`, `refactor`, `chore`, `ci`, `docs`, `test`.
+Use Conventional Commits: `<type>: <description>`.
 
 ## Workspace architecture
 
-Five crates. `cita-core` is the light, provider-neutral vocabulary everything else
-shares; the three middle crates never depend on each other; the binary is wiring only.
-
-```
-cita-core (light: serde, thiserror, async-trait, unicode-normalization)
-   ↑                    ↑                         ↑
-cita-manifest        cita-inspire-client      cita-documents
-(+ toml, toml_edit,  (+ reqwest, serde_json,  (+ reqwest, tempfile,
-   tempfile)            url)                     url)
-   ↑                    ↑                         ↑
-   └────────────────────┴────── cita ─────────────┘   (binary)
+```text
+cita-core
+   ↑                ↑                      ↑
+cita-bibliography ← cita-inspire-client   cita-documents
+   └──────────┬────────┘                   │
+        cita-manifest ─────────────────────┤
+              └──────── cita ──────────────┘
 ```
 
-- **`cita-core`** — models (`PaperRecord`, `ResolvedPaper`, `Publication`),
-  `Locator` parsing, identifier normalization (`strip_arxiv_version`,
-  `normalize_arxiv`, `normalize_doi`), citation-key helpers, the `MetadataProvider`
-  trait, and the `INSPIRE_SOURCE` constant. No I/O, no provider knowledge beyond that
-  constant.
-- **`cita-manifest`** — the `cita.toml` storage engine (`Manifest`,
-  `AddOutcome`, `Error`) and `export_bibtex`. The only crate that touches
-  `toml`/`toml_edit`; it owns comment-preserving and atomic manifest edits.
-- **`cita-inspire-client`** — INSPIRE metadata provider built on a reusable async
-  literature API client. `src/provider.rs` implements core's `MetadataProvider`,
-  mapping raw INSPIRE records into `ResolvedPaper`. Knows nothing about manifests.
-- **`cita-documents`** — resolves a paper's first arXiv id to a PDF URL, validates
-  downloads, and atomically caches them beneath `.cita/files/arxiv`. Knows nothing
-  about manifests.
-- **`cita`** (binary) — CLI, manifest discovery, and scoped Git commits. Depends on
-  all four; contains no domain logic of its own.
+- `cita-core`: `Reference`, provider traits, locators, and normalization.
+- `cita-bibliography`: strict standalone BibTeX snapshots, projections,
+  raw-entry re-keying, and generic `biblatex::Entry` rendering.
+- `cita-inspire-client`: typed INSPIRE JSON/BibTeX snapshots, stable-record-ID
+  refresh batches, bounded queries, and 429 retries; parses and cross-checks
+  its BibTeX through `cita-bibliography`.
+- `cita-manifest`: schema-2 authority, identity indexes, deterministic TOML,
+  generated bibliography verification, and coordinated writes.
+- `cita-documents`: accepts a validated arXiv ID and atomically caches PDFs
+  beneath `.cita/files/arxiv`.
+- `cita`: CLI, parent discovery, sync reconciliation, and scoped Git commits.
 
-## Key design decisions
+## Key decisions
 
-**Map-based paper storage (`crates/cita-core/src/model.rs`,
-`crates/cita-manifest/src/manifest.rs`).** Papers are stored as
-`[papers.<citation-key>]` TOML tables and held in memory as
-`BTreeMap<String, PaperRecord>`. `PaperRecord` is the single stored form (no key
-field); `ResolvedPaper` is what a provider returns — a `record` plus an advisory
-`suggested_key` that is consumed at key-choice time and never stored. Key uniqueness
-is structural: a duplicate `[papers.X]` table in a hand-written file is a TOML parse
-error, and the map cannot hold two entries under one key. The one place the map is
-weaker by default is guarded explicitly: `insert_papers` refuses to
-`BTreeMap::insert` over an occupied key when the identities differ
-(`Error::KeyConflict`) rather than silently replacing the existing paper.
+### Source snapshots and raw entries
 
-**Manifest holds two views of the same file.** A typed
-`BTreeMap<String, PaperRecord>` (parsed via `toml` + serde, used for all logic) and a
-`toml_edit::DocumentMut` (used for edits). The `DocumentMut` path is what preserves
-user comments and unknown TOML fields across `add`/`remove`. Any mutation must update
-**both** in lockstep. Manifest reads reject `schema != 1`.
+`cita.toml` snapshots are authoritative; projections are derived. INSPIRE stores
+selected typed JSON fields plus authoritative BibTeX. Imports store one exact
+standalone entry. BibTeX parsing uses raw spans plus semantic `biblatex` parsing.
+Rendering sorts by local key, changes only the raw key token, joins entries with
+one blank line, and appends one newline. Do not add a handwritten writer.
 
-**Ordering rule.** `save()` always renders `[papers.<key>]` tables key-sorted
-(`sort_paper_tables` assigns `Table::set_position` in key order before serializing).
-Hand-edited order is normalized on the next write; comments travel with their tables.
-`list` and `export_bibtex` iterate the sorted map directly, so all output is
-stable/diff-friendly with no per-call sorting.
+Only entries and whitespace are allowed. Reject directives, comments/non-entry
+content, malformed or duplicate entries, missing titles, texkeys outside
+`[A-Za-z0-9._:+-]+`, and duplicate normalized DOI/eprint identities.
 
-**Batch operations are all-or-nothing.** `insert_papers` / `remove_batch` snapshot
-`self.papers` into `original` and restore it on any error before returning, and only
-call `save()` after all validation passes. `save()` itself is atomic: write to a
-`NamedTempFile` in the same directory, `sync_all`, then `persist` (rename). Tests
-`preserves_comments_unknown_fields_and_is_atomic_on_conflict`,
-`removals_are_all_or_nothing`, `key_collision_with_different_identity_is_a_conflict`
-(all in `cita-manifest`), and `multi_remove_is_atomic` (in `tests/cli.rs`) guard
-this — keep them green.
+### Atomic mutations
 
-**Identity & de-duplication.** Papers are considered the same when their
-`(source, source_id)` pair, any arXiv id, or any DOI overlaps *after normalization*
-(arXiv: strip trailing `vN`, lowercase; DOI: trim + lowercase). Adding a paper that
-overlaps an existing one is a no-op (`AddOutcome::Existing`); overlapping identifiers
-that map to *different* records of the same source is an `IdentifierConflict` error.
-`validate_papers` re-checks global uniqueness after every mutation.
-`Locator::Inspire(id)` selectors match `source == INSPIRE_SOURCE && source_id ==
-Some(id.to_string())`.
+Add, import, remove, and sync validate a complete candidate before writing.
+Persist and sync `references.bib` first, then persist and sync `cita.toml` as the
+commit point. The old manifest remains authoritative after an interrupted
+second write, and `cita generate` repairs detectable drift.
 
-**Locators (`crates/cita-core/src/locator.rs`).** User input parses into
-`Locator::{Inspire,Arxiv,Doi}`. A bare token is only accepted as arXiv; DOI and
-INSPIRE require explicit `doi:` / `inspire:` prefixes. `--key` is only valid when
-adding exactly one locator.
+### INSPIRE sync
 
-**Citation keys (`crates/cita-core/src/key.rs`).** Keys appear in BibTeX entries
-and as quoted TOML table keys, so `validate_key` rejects whitespace, commas, braces,
-quotes, and backslashes. Keys like `Aad:2012tfa` round-trip as quoted table keys
-(`[papers."Aad:2012tfa"]`).
+Refresh by stable INSPIRE record ID. Batch at 100 records or a 6 KiB encoded `q`
+value. Fetch JSON and BibTeX searches sequentially and match each raw entry to
+exactly one JSON record through returned texkeys. Retry 429 three times using
+`Retry-After` capped at sixty seconds, otherwise five seconds, and report each
+retry on stderr.
 
-**Determinism.** BibTeX collapses internal whitespace but otherwise passes TeX
-through verbatim; `@article` vs `@misc` is chosen by whether a journal is present.
-For `@article` the year prefers `publication.year` (the journal year) and falls back
-to the record's citation-display year; `@misc` uses the record year.
+Every managed record and returned result must be explained. Local citation keys
+are independent from provider texkeys and never change during refresh. Imported
+BibTeX snapshots cause no network request.
 
-**Document cache (`crates/cita-documents`).** `cita fetch` and `cita open` use the
-first stored arXiv id, fetch the latest version because stored ids are versionless,
-and cache validated PDFs under `.cita/files/arxiv`. Modern ids become files such as
-`1207.7214.pdf`; legacy ids retain their archive directory, such as
-`hep-th/9901001.pdf`. Downloads use a same-directory temporary file plus atomic
-persist. The cache is ignored by Git and is not removed with manifest entries.
+### Selectors and documents
 
-**Scoped Git commits (`crates/cita/src/git.rs`).** `cita commit` stages and
-commits *only* `cita.toml` (via `git commit --only -- cita.toml`), leaving any
-other staged changes intact. Commit messages are generated by diffing the old
-committed manifest against the current one (added/removed/modified keys → semantic
-subject + body). If the HEAD blob is not a readable current-format manifest, the
-commit proceeds with the generic subject `references: update bibliography`. Git is
-invoked as a subprocess; there is no libgit2 dependency.
+Exact local key wins, then provider ID, normalized DOI, and normalized arXiv ID.
+Transient `fetch` and `open` resolve INSPIRE JSON only unless `--save` requires
+the full snapshot. Documents use the projected arXiv ID; stored IDs are
+versionless and cache paths retain legacy arXiv archive directories.
 
-**Forward-compatible API parsing (`cita-inspire-client`).** Model structs capture
-unknown JSON fields into `extra` maps so new INSPIRE fields don't break
-deserialization. Preserve this pattern when editing
-`crates/cita-inspire-client/src/model.rs`.
+### Git
 
-## Error handling convention
+`cita commit` validates consistency and stages only `cita.toml` and
+`references.bib`. Commit messages derive added, removed, and modified local keys
+and projected titles. If the HEAD manifest exists but is unreadable, warn on
+stderr and use `references: update bibliography`. A path missing from HEAD is
+expected absence; any other git failure is an error, never a first commit.
 
-Library crates (`cita-core`, `cita-manifest`, `cita-inspire-client`,
-`cita-documents`) use
-`thiserror` enums for typed, matchable errors. The binary uses `anyhow` for
-context-rich propagation; `main` prints `error: {:#}` and exits non-zero. When adding
-a failure mode to a library, add a typed variant rather than a stringly-typed error.
+## Error handling
+
+Library crates use typed `thiserror` enums. The binary uses `anyhow` for context.
+Add typed library variants for new failure modes.
