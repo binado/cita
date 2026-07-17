@@ -73,9 +73,14 @@ fn server(responses: Vec<(&'static str, String)>) -> (String, thread::JoinHandle
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut bytes = [0; 32768];
                 let length = stream.read(&mut bytes).unwrap();
+                let headers = if status.starts_with("429") {
+                    "Retry-After: 0\r\n"
+                } else {
+                    ""
+                };
                 write!(
                     stream,
-                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",
                     body.len()
                 )
                 .unwrap();
@@ -261,6 +266,38 @@ fn add_uses_json_and_bibtex_and_preserves_an_explicit_local_key() {
 }
 
 #[test]
+fn cli_prints_every_inspire_retry_to_stderr() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    let json = json_record(42, "Provider:42", "Provider title", "2401.00042");
+    let bib = entry("Provider:42", "Provider title", "eprint={2401.00042},");
+    let (base, handle) = server(vec![
+        ("429 Too Many Requests", String::new()),
+        ("429 Too Many Requests", String::new()),
+        ("429 Too Many Requests", String::new()),
+        ("200 OK", json),
+        ("200 OK", bib),
+    ]);
+    let output = cita_with_server(directory.path(), &["add", "2401.00042"], &base);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    for attempt in 1..=3 {
+        let message = format!("attempt {attempt} of 3");
+        assert_eq!(stderr.matches(&message).count(), 1, "{stderr}");
+    }
+    assert_eq!(
+        stderr.matches("INSPIRE rate limited").count(),
+        3,
+        "{stderr}"
+    );
+    assert_eq!(handle.join().unwrap().len(), 5);
+}
+
+#[test]
 fn drift_blocks_reads_and_generate_repairs_output() {
     let directory = tempfile::tempdir().unwrap();
     fs::write(
@@ -418,6 +455,42 @@ fn list_sorts_by_title_and_author() {
     let by_author = success(cita(directory.path(), &["list", "--sort-by", "author"]));
     let [early, later, undated] = key_positions(&by_author, ["K.early", "K.later", "K.undated"]);
     assert!(early < undated && undated < later, "{by_author}");
+}
+
+#[test]
+fn list_displays_authors_then_collaboration_then_placeholder() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    let input = [
+        entry("One", "One", "author={Alice},"),
+        entry("Many", "Many", "author={Alice and Bob},"),
+        entry("Team", "Team", "collaboration={ATLAS Collaboration},"),
+        entry("Nobody", "Nobody", "note={none},"),
+    ]
+    .join("\n");
+    success(cita_stdin(directory.path(), &["import", "-"], &input));
+    let output = success(cita(directory.path(), &["list"]));
+    let one = output
+        .lines()
+        .find(|line| line.starts_with("One "))
+        .unwrap();
+    let many = output
+        .lines()
+        .find(|line| line.starts_with("Many "))
+        .unwrap();
+    let team = output
+        .lines()
+        .find(|line| line.starts_with("Team "))
+        .unwrap();
+    let nobody = output
+        .lines()
+        .find(|line| line.starts_with("Nobody "))
+        .unwrap();
+    assert!(one.contains("Alice"), "{one}");
+    assert!(!one.contains("et al."), "{one}");
+    assert!(many.contains("Alice et al."), "{many}");
+    assert!(team.contains("ATLAS Collaboration"), "{team}");
+    assert!(nobody.contains('—'), "{nobody}");
 }
 
 #[test]

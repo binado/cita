@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use cita_core::ReferenceSource;
-use cita_manifest::{BIBLIOGRAPHY_FILE, Manifest, StoredReference};
+use cita_manifest::{BIBLIOGRAPHY_FILE, Manifest, SourceSnapshot};
 use std::{
     collections::BTreeMap,
     fs,
@@ -106,8 +106,8 @@ fn parse_committed_manifest(bytes: &[u8]) -> Result<Manifest> {
 }
 
 fn commit_message(
-    old: Option<&BTreeMap<String, StoredReference>>,
-    new: &BTreeMap<String, StoredReference>,
+    old: Option<&BTreeMap<String, SourceSnapshot>>,
+    new: &BTreeMap<String, SourceSnapshot>,
 ) -> (String, String) {
     let Some(old) = old else {
         return (
@@ -142,9 +142,9 @@ fn plural(count: usize) -> &'static str {
     }
 }
 fn body_lines<'a>(
-    removed: impl IntoIterator<Item = (&'a String, &'a StoredReference)>,
-    added: impl IntoIterator<Item = (&'a String, &'a StoredReference)>,
-    modified: impl IntoIterator<Item = (&'a String, &'a StoredReference)>,
+    removed: impl IntoIterator<Item = (&'a String, &'a SourceSnapshot)>,
+    added: impl IntoIterator<Item = (&'a String, &'a SourceSnapshot)>,
+    modified: impl IntoIterator<Item = (&'a String, &'a SourceSnapshot)>,
 ) -> String {
     removed
         .into_iter()
@@ -162,9 +162,8 @@ fn body_lines<'a>(
         .collect::<Vec<_>>()
         .join("\n")
 }
-fn title(item: &StoredReference) -> String {
-    item.source
-        .project()
+fn title(item: &SourceSnapshot) -> String {
+    item.project()
         .map(|reference| reference.title)
         .unwrap_or_else(|error| format!("unknown title ({error})"))
 }

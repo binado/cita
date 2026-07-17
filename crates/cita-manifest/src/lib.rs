@@ -18,7 +18,7 @@ pub const MANIFEST_FILE: &str = "cita.toml";
 pub const BIBLIOGRAPHY_FILE: &str = "references.bib";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum SourceSnapshot {
     Inspire(Box<InspireSnapshot>),
     Bibtex(BibtexSnapshot),
@@ -49,17 +49,10 @@ impl ReferenceSource for SourceSnapshot {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct StoredReference {
-    pub source: SourceSnapshot,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectedReference {
     pub key: String,
     pub reference: Reference,
-    pub managed: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -78,7 +71,7 @@ pub enum AddOutcome {
 pub struct Manifest {
     path: PathBuf,
     bibliography_path: PathBuf,
-    references: BTreeMap<String, StoredReference>,
+    references: BTreeMap<String, SourceSnapshot>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -86,7 +79,7 @@ pub struct Manifest {
 struct ManifestData {
     schema: u32,
     #[serde(default)]
-    references: BTreeMap<String, StoredReference>,
+    references: BTreeMap<String, SourceSnapshot>,
 }
 
 #[derive(Debug, Error)]
@@ -123,6 +116,8 @@ pub enum Error {
     ReferenceNotFound(String),
     #[error("invalid source for `{key}`: {message}")]
     InvalidSource { key: String, message: String },
+    #[error("invalid INSPIRE refresh record set: {message}")]
+    RefreshRecordSet { message: String },
     #[error(transparent)]
     Bibtex(#[from] cita_bibliography::Error),
     #[error("could not serialize manifest: {0}")]
@@ -164,14 +159,7 @@ impl Manifest {
         })?;
         let references = parse_bibtex(&source)?
             .into_iter()
-            .map(|(key, snapshot)| {
-                (
-                    key,
-                    StoredReference {
-                        source: SourceSnapshot::Bibtex(snapshot),
-                    },
-                )
-            })
+            .map(|(key, snapshot)| (key, SourceSnapshot::Bibtex(snapshot)))
             .collect::<BTreeMap<_, _>>();
         validate_references(&references)?;
         let manifest = Self {
@@ -234,39 +222,42 @@ impl Manifest {
     pub fn bibliography_path(&self) -> &Path {
         &self.bibliography_path
     }
-    pub fn references(&self) -> &BTreeMap<String, StoredReference> {
+    pub fn references(&self) -> &BTreeMap<String, SourceSnapshot> {
         &self.references
+    }
+
+    pub fn inspire_record_ids(&self) -> Vec<u64> {
+        self.references
+            .values()
+            .filter_map(|source| source.inspire().map(|snapshot| snapshot.record_id))
+            .collect()
     }
 
     pub fn projected(&self) -> Result<Vec<ProjectedReference>, Error> {
         self.references
             .iter()
-            .map(|(key, stored)| {
+            .map(|(key, source)| {
                 Ok(ProjectedReference {
                     key: key.clone(),
-                    reference: stored
-                        .source
-                        .project()
-                        .map_err(|error| Error::InvalidSource {
-                            key: key.clone(),
-                            message: error.to_string(),
-                        })?,
-                    managed: matches!(stored.source, SourceSnapshot::Inspire(_)),
+                    reference: source.project().map_err(|error| Error::InvalidSource {
+                        key: key.clone(),
+                        message: error.to_string(),
+                    })?,
                 })
             })
             .collect()
     }
 
     pub fn find(&self, selector: &str) -> Result<Option<ProjectedReference>, Error> {
-        if let Some(stored) = self.references.get(selector) {
-            return Ok(Some(projected(selector, stored)?));
+        if let Some(source) = self.references.get(selector) {
+            return Ok(Some(projected(selector, source)?));
         }
         let locator = match selector.parse::<Locator>() {
             Ok(locator) => locator,
             Err(_) => return Ok(None),
         };
-        for (key, stored) in &self.references {
-            let item = projected(key, stored)?;
+        for (key, source) in &self.references {
+            let item = projected(key, source)?;
             let matches = match &locator {
                 Locator::Inspire(id) => item
                     .reference
@@ -296,17 +287,12 @@ impl Manifest {
         for item in pending {
             validate_key(&item.key)?;
             match candidate.get(&item.key) {
-                Some(existing) if existing.source == item.source => {
+                Some(existing) if existing == &item.source => {
                     outcomes.push(AddOutcome::Existing(item.key))
                 }
                 Some(_) => return Err(Error::KeyConflict { key: item.key }),
                 None => {
-                    candidate.insert(
-                        item.key.clone(),
-                        StoredReference {
-                            source: item.source,
-                        },
-                    );
+                    candidate.insert(item.key.clone(), item.source);
                     outcomes.push(AddOutcome::Added(item.key));
                 }
             }
@@ -332,39 +318,54 @@ impl Manifest {
         let mut candidate = self.references.clone();
         let mut removed = Vec::new();
         for key in keys {
-            let stored = candidate.remove(&key).expect("selected key exists");
-            removed.push(projected(&key, &stored)?);
+            let source = candidate.remove(&key).expect("selected key exists");
+            removed.push(projected(&key, &source)?);
         }
         self.persist_candidate(&candidate)?;
         self.references = candidate;
         Ok(removed)
     }
 
-    pub fn replace_inspire(
-        &mut self,
-        refreshed: BTreeMap<String, InspireSnapshot>,
-    ) -> Result<bool, Error> {
+    pub fn replace_inspire(&mut self, refreshed: Vec<InspireSnapshot>) -> Result<bool, Error> {
         let expected = self
             .references
             .iter()
-            .filter_map(|(key, stored)| stored.source.inspire().map(|_| key.clone()))
+            .filter_map(|(key, source)| {
+                source
+                    .inspire()
+                    .map(|snapshot| (snapshot.record_id, key.clone()))
+            })
+            .collect::<HashMap<_, _>>();
+        let mut returned = HashMap::with_capacity(refreshed.len());
+        for snapshot in refreshed {
+            let record_id = snapshot.record_id;
+            if !expected.contains_key(&record_id) {
+                return Err(Error::RefreshRecordSet {
+                    message: format!("returned unexpected record {record_id}"),
+                });
+            }
+            if returned.insert(record_id, snapshot).is_some() {
+                return Err(Error::RefreshRecordSet {
+                    message: format!("returned duplicate record {record_id}"),
+                });
+            }
+        }
+        let missing = expected
+            .keys()
+            .filter(|record_id| !returned.contains_key(record_id))
+            .copied()
             .collect::<Vec<_>>();
-        if refreshed.len() != expected.len()
-            || expected.iter().any(|key| !refreshed.contains_key(key))
-        {
-            return Err(Error::InvalidSource {
-                key: "sync".into(),
-                message: "refresh did not return every managed local key".into(),
+        if !missing.is_empty() {
+            return Err(Error::RefreshRecordSet {
+                message: format!("did not return records {missing:?}"),
             });
         }
         let mut candidate = self.references.clone();
-        for (key, snapshot) in refreshed {
-            candidate.insert(
-                key,
-                StoredReference {
-                    source: SourceSnapshot::Inspire(Box::new(snapshot)),
-                },
-            );
+        for (record_id, key) in expected {
+            let snapshot = returned
+                .remove(&record_id)
+                .expect("record-set reconciliation checked completeness");
+            candidate.insert(key, SourceSnapshot::Inspire(Box::new(snapshot)));
         }
         validate_references(&candidate)?;
         let changed = candidate != self.references;
@@ -408,10 +409,7 @@ impl Manifest {
         )
     }
 
-    fn persist_candidate(
-        &self,
-        candidate: &BTreeMap<String, StoredReference>,
-    ) -> Result<(), Error> {
+    fn persist_candidate(&self, candidate: &BTreeMap<String, SourceSnapshot>) -> Result<(), Error> {
         validate_references(candidate)?;
         let bibliography = render_bibliography(candidate)?;
         let manifest = render_manifest(candidate)?;
@@ -421,37 +419,30 @@ impl Manifest {
     }
 }
 
-fn projected(key: &str, stored: &StoredReference) -> Result<ProjectedReference, Error> {
+fn projected(key: &str, source: &SourceSnapshot) -> Result<ProjectedReference, Error> {
     Ok(ProjectedReference {
         key: key.into(),
-        reference: stored
-            .source
-            .project()
-            .map_err(|error| Error::InvalidSource {
-                key: key.into(),
-                message: error.to_string(),
-            })?,
-        managed: matches!(stored.source, SourceSnapshot::Inspire(_)),
+        reference: source.project().map_err(|error| Error::InvalidSource {
+            key: key.into(),
+            message: error.to_string(),
+        })?,
     })
 }
 
-fn validate_references(references: &BTreeMap<String, StoredReference>) -> Result<(), Error> {
+fn validate_references(references: &BTreeMap<String, SourceSnapshot>) -> Result<(), Error> {
     let mut identities: HashMap<String, String> = HashMap::new();
-    for (key, stored) in references {
+    for (key, source) in references {
         validate_key(key)?;
-        if let SourceSnapshot::Inspire(snapshot) = &stored.source {
+        if let SourceSnapshot::Inspire(snapshot) = source {
             snapshot.validate().map_err(|error| Error::InvalidSource {
                 key: key.clone(),
                 message: error.to_string(),
             })?;
         }
-        let reference = stored
-            .source
-            .project()
-            .map_err(|error| Error::InvalidSource {
-                key: key.clone(),
-                message: error.to_string(),
-            })?;
+        let reference = source.project().map_err(|error| Error::InvalidSource {
+            key: key.clone(),
+            message: error.to_string(),
+        })?;
         if reference.title.trim().is_empty() {
             return Err(Error::InvalidSource {
                 key: key.clone(),
@@ -494,22 +485,18 @@ fn record_identity(
     Ok(())
 }
 
-fn render_bibliography(references: &BTreeMap<String, StoredReference>) -> Result<String, Error> {
+fn render_bibliography(references: &BTreeMap<String, SourceSnapshot>) -> Result<String, Error> {
     if references.is_empty() {
         return Ok(String::new());
     }
     let mut entries = Vec::with_capacity(references.len());
-    for (key, stored) in references {
-        entries.push(
-            rename_entry(stored.source.raw_bibtex(), key)?
-                .trim()
-                .to_owned(),
-        );
+    for (key, source) in references {
+        entries.push(rename_entry(source.raw_bibtex(), key)?.trim().to_owned());
     }
     Ok(format!("{}\n", entries.join("\n\n")))
 }
 
-fn render_manifest(references: &BTreeMap<String, StoredReference>) -> Result<String, Error> {
+fn render_manifest(references: &BTreeMap<String, SourceSnapshot>) -> Result<String, Error> {
     let mut output = toml::to_string_pretty(&ManifestData {
         schema: SCHEMA,
         references: references.clone(),
@@ -547,6 +534,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cita_inspire_client::Title;
 
     fn imported(key: &str, title: &str, extra: &str) -> PendingReference {
         PendingReference {
@@ -554,6 +542,40 @@ mod tests {
             source: SourceSnapshot::Bibtex(
                 BibtexSnapshot::new(format!("@misc{{{key},title={{{title}}},{extra}}}")).unwrap(),
             ),
+        }
+    }
+
+    fn inspire(local_key: &str, provider_key: &str, record_id: u64) -> PendingReference {
+        PendingReference {
+            key: local_key.into(),
+            source: SourceSnapshot::Inspire(Box::new(InspireSnapshot {
+                record_id,
+                updated: "2026-01-01".into(),
+                texkeys: vec![provider_key.into()],
+                bibtex: format!("@misc{{{provider_key},title={{Record {record_id}}}}}"),
+                titles: vec![Title {
+                    title: format!("Record {record_id}"),
+                }],
+                authors: Vec::new(),
+                collaborations: Vec::new(),
+                publication_info: Vec::new(),
+                arxiv_eprints: Vec::new(),
+                dois: Vec::new(),
+                urls: Vec::new(),
+                document_types: Vec::new(),
+                preprint_date: None,
+                earliest_date: None,
+            })),
+        }
+    }
+
+    fn updated(pending: PendingReference, timestamp: &str) -> InspireSnapshot {
+        let SourceSnapshot::Inspire(snapshot) = pending.source else {
+            unreachable!()
+        };
+        InspireSnapshot {
+            updated: timestamp.into(),
+            ..*snapshot
         }
     }
 
@@ -569,6 +591,8 @@ mod tests {
             .unwrap();
         let text = fs::read_to_string(dir.path().join(MANIFEST_FILE)).unwrap();
         assert!(text.contains("schema = 2"));
+        assert!(text.contains("[references.Alpha]"), "{text}");
+        assert!(!text.contains("[references.Alpha.source]"), "{text}");
         let loaded = Manifest::load_verified(dir.path().join(MANIFEST_FILE)).unwrap();
         assert!(
             loaded
@@ -636,5 +660,91 @@ mod tests {
             Manifest::load(dir.path().join(MANIFEST_FILE)),
             Err(Error::UnsupportedSchema { found: 1 })
         ));
+    }
+
+    #[test]
+    fn nested_schema_two_shape_and_unknown_fields_are_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        manifest
+            .add_batch(vec![imported("Alpha", "First", "")])
+            .unwrap();
+        let path = dir.path().join(MANIFEST_FILE);
+        let flat = fs::read_to_string(&path).unwrap();
+
+        let nested = flat.replace("[references.Alpha]", "[references.Alpha.source]");
+        fs::write(&path, &nested).unwrap();
+        assert!(matches!(Manifest::load(&path), Err(Error::Invalid { .. })));
+        assert_eq!(fs::read_to_string(&path).unwrap(), nested);
+
+        fs::write(&path, format!("{flat}unknown = true\n")).unwrap();
+        assert!(matches!(Manifest::load(&path), Err(Error::Invalid { .. })));
+    }
+
+    #[test]
+    fn refresh_reconciles_out_of_order_ids_without_changing_local_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        manifest
+            .add_batch(vec![
+                inspire("LocalA", "ProviderA", 1),
+                inspire("LocalB", "ProviderB", 2),
+                imported("Imported", "Imported", ""),
+            ])
+            .unwrap();
+        assert_eq!(manifest.inspire_record_ids(), [1, 2]);
+
+        let refreshed = vec![
+            updated(inspire("ignored", "ProviderB", 2), "2026-02-02"),
+            updated(inspire("ignored", "ProviderA", 1), "2026-02-01"),
+        ];
+        assert!(manifest.replace_inspire(refreshed).unwrap());
+        assert_eq!(
+            manifest.references()["LocalA"].inspire().unwrap().record_id,
+            1
+        );
+        assert_eq!(
+            manifest.references()["LocalB"].inspire().unwrap().record_id,
+            2
+        );
+        assert!(manifest.references().contains_key("Imported"));
+        let bibliography = fs::read_to_string(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
+        assert!(bibliography.contains("@misc{LocalA,"), "{bibliography}");
+        assert!(bibliography.contains("@misc{LocalB,"), "{bibliography}");
+    }
+
+    #[test]
+    fn invalid_refresh_record_sets_leave_both_files_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        manifest
+            .add_batch(vec![
+                inspire("LocalA", "ProviderA", 1),
+                inspire("LocalB", "ProviderB", 2),
+            ])
+            .unwrap();
+        let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
+        let before_bibliography = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
+        let one = updated(inspire("ignored", "ProviderA", 1), "new");
+        let two = updated(inspire("ignored", "ProviderB", 2), "new");
+        let unexpected = updated(inspire("ignored", "ProviderC", 3), "new");
+        for returned in [
+            vec![one.clone()],
+            vec![one.clone(), one.clone(), two.clone()],
+            vec![one.clone(), two.clone(), unexpected.clone()],
+        ] {
+            assert!(matches!(
+                manifest.replace_inspire(returned),
+                Err(Error::RefreshRecordSet { .. })
+            ));
+            assert_eq!(
+                fs::read(dir.path().join(MANIFEST_FILE)).unwrap(),
+                before_manifest
+            );
+            assert_eq!(
+                fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap(),
+                before_bibliography
+            );
+        }
     }
 }

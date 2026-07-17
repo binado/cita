@@ -9,7 +9,7 @@ use cita_core::{
     normalize_doi,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, ops::Range};
 use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -31,8 +31,9 @@ impl BibtexSnapshot {
     }
 
     pub fn key(&self) -> Result<String, Error> {
-        Ok(parse_without_semantics(&self.bibtex)?
-            .into_keys()
+        Ok(scan_raw_entries(&self.bibtex)?
+            .into_iter()
+            .map(|entry| entry.key)
             .next()
             .expect("snapshot validation requires one entry"))
     }
@@ -60,47 +61,21 @@ pub enum Error {
 
 /// Parse every standalone entry while retaining its exact raw entry block.
 pub fn parse(source: &str) -> Result<BTreeMap<String, BibtexSnapshot>, Error> {
-    let raw =
-        RawBibliography::parse(source).map_err(|error| Error::InvalidBibtex(error.to_string()))?;
-    if !raw.preamble.is_empty() || !raw.abbreviations.is_empty() {
-        return Err(Error::UnsupportedContent(
-            "@preamble and @string directives are not supported".into(),
-        ));
-    }
+    let raw_entries = scan_raw_entries(source)?;
     let semantic =
         Bibliography::parse(source).map_err(|error| Error::InvalidBibtex(error.to_string()))?;
     let mut entries = BTreeMap::new();
-    let mut cursor = 0;
-    for raw_entry in &raw.entries {
-        if !source[cursor..raw_entry.span.start].trim().is_empty() {
-            return Err(Error::UnsupportedContent(
-                "only complete BibTeX entries and whitespace are allowed".into(),
-            ));
-        }
-        let end = raw_entry
-            .span
-            .end
-            .checked_add(1)
-            .filter(|end| *end <= source.len() && source.as_bytes()[*end - 1] == b'}')
-            .ok_or_else(|| Error::InvalidBibtex("entry has no closing brace".into()))?;
-        let key = raw_entry.v.key.v.to_owned();
-        validate_key(&key)?;
+    for raw_entry in raw_entries {
+        let key = raw_entry.key;
         let parsed = semantic
             .get(&key)
             .ok_or_else(|| Error::InvalidBibtex(format!("could not parse entry `{key}`")))?;
         validate_semantic(parsed)?;
         let snapshot = BibtexSnapshot {
-            bibtex: source[raw_entry.span.start..end].to_owned(),
+            bibtex: source[raw_entry.entry_range].to_owned(),
         };
-        if entries.insert(key.clone(), snapshot).is_some() {
-            return Err(Error::KeyConflict(key));
-        }
-        cursor = end;
-    }
-    if !source[cursor..].trim().is_empty() {
-        return Err(Error::UnsupportedContent(
-            "comments, directives, and non-entry content are not supported".into(),
-        ));
+        let previous = entries.insert(key, snapshot);
+        debug_assert!(previous.is_none(), "scanner rejects duplicate keys");
     }
     if semantic.len() != entries.len() {
         return Err(Error::UnsupportedContent(
@@ -111,14 +86,14 @@ pub fn parse(source: &str) -> Result<BTreeMap<String, BibtexSnapshot>, Error> {
 }
 
 pub fn project_bibtex(source: &str) -> Result<Reference, Error> {
-    let raw = parse_without_semantics(source)?;
+    let raw = scan_raw_entries(source)?;
     if raw.len() != 1 {
         return Err(Error::InvalidBibtex(format!(
             "expected one standalone entry, found {}",
             raw.len()
         )));
     }
-    let key = raw.keys().next().expect("length checked");
+    let key = &raw[0].key;
     let semantic =
         Bibliography::parse(source).map_err(|error| Error::InvalidBibtex(error.to_string()))?;
     let entry = semantic
@@ -185,7 +160,16 @@ pub fn project_bibtex(source: &str) -> Result<Reference, Error> {
     })
 }
 
-fn parse_without_semantics(source: &str) -> Result<BTreeMap<String, String>, Error> {
+#[derive(Debug)]
+struct RawEntry {
+    key: String,
+    entry_range: Range<usize>,
+    key_range: Range<usize>,
+}
+
+/// Locate and validate complete raw entries without applying BibTeX semantics.
+/// This is the sole authority for all raw source and span invariants.
+fn scan_raw_entries(source: &str) -> Result<Vec<RawEntry>, Error> {
     let raw =
         RawBibliography::parse(source).map_err(|error| Error::InvalidBibtex(error.to_string()))?;
     if !raw.preamble.is_empty() || !raw.abbreviations.is_empty() {
@@ -193,28 +177,58 @@ fn parse_without_semantics(source: &str) -> Result<BTreeMap<String, String>, Err
             "directives are not supported".into(),
         ));
     }
-    let mut entries = BTreeMap::new();
+    let mut entries = Vec::with_capacity(raw.entries.len());
+    let mut keys = std::collections::BTreeSet::new();
     let mut cursor = 0;
     for item in raw.entries {
-        if !source[cursor..item.span.start].trim().is_empty() {
+        let start = item.span.start;
+        let end = item
+            .span
+            .end
+            .checked_add(1)
+            .filter(|end| start <= *end && *end <= source.len())
+            .ok_or_else(|| Error::InvalidBibtex("entry has an invalid source range".into()))?;
+        if source
+            .get(cursor..start)
+            .is_none_or(|gap| !gap.trim().is_empty())
+        {
             return Err(Error::UnsupportedContent(
-                "non-entry content is not supported".into(),
+                "only complete BibTeX entries and whitespace are allowed".into(),
             ));
         }
-        let end = item.span.end + 1;
+        if source.as_bytes().get(end - 1) != Some(&b'}') {
+            return Err(Error::InvalidBibtex("entry has no closing brace".into()));
+        }
+        source
+            .get(start..end)
+            .ok_or_else(|| Error::InvalidBibtex("entry is not on UTF-8 boundaries".into()))?;
+        let key_range = item.v.key.span.clone();
+        let raw_key = source.get(key_range.clone()).ok_or_else(|| {
+            Error::InvalidBibtex("citation key has an invalid source range".into())
+        })?;
         let key = item.v.key.v.to_owned();
+        if raw_key != key {
+            return Err(Error::InvalidBibtex(
+                "citation key source range does not match parsed key".into(),
+            ));
+        }
         validate_key(&key)?;
-        if entries
-            .insert(key.clone(), source[item.span.start..end].into())
-            .is_some()
-        {
+        if !keys.insert(key.clone()) {
             return Err(Error::KeyConflict(key));
         }
+        entries.push(RawEntry {
+            key,
+            entry_range: start..end,
+            key_range,
+        });
         cursor = end;
     }
-    if !source[cursor..].trim().is_empty() {
+    if source
+        .get(cursor..)
+        .is_none_or(|gap| !gap.trim().is_empty())
+    {
         return Err(Error::UnsupportedContent(
-            "non-entry content is not supported".into(),
+            "comments, directives, and non-entry content are not supported".into(),
         ));
     }
     Ok(entries)
@@ -256,16 +270,14 @@ pub fn validate_key(key: &str) -> Result<(), Error> {
 /// Change only the citation-key token of one complete raw entry.
 pub fn rename_entry(source: &str, new_key: &str) -> Result<String, Error> {
     validate_key(new_key)?;
-    let raw =
-        RawBibliography::parse(source).map_err(|error| Error::InvalidBibtex(error.to_string()))?;
-    if raw.entries.len() != 1 || !raw.preamble.is_empty() || !raw.abbreviations.is_empty() {
+    let raw = scan_raw_entries(source)?;
+    if raw.len() != 1 {
         return Err(Error::InvalidBibtex(
             "expected exactly one entry to rename".into(),
         ));
     }
-    let span = raw.entries[0].v.key.span.clone();
     let mut renamed = source.to_owned();
-    renamed.replace_range(span, new_key);
+    renamed.replace_range(raw[0].key_range.clone(), new_key);
     BibtexSnapshot::new(renamed.clone())?;
     Ok(renamed)
 }
@@ -372,12 +384,36 @@ mod tests {
     fn rejects_non_standalone_content() {
         assert!(parse("% comment\n@article{A,title={A}}").is_err());
         assert!(parse("@string{x={x}}").is_err());
+        assert!(parse("@preamble{\"x\"}").is_err());
+        assert!(parse("@article{A,title={A}} trailing").is_err());
+        assert!(parse("@article{A,title={A}}\n% outside").is_err());
+    }
+
+    #[test]
+    fn raw_scanner_rejects_bad_boundaries_keys_and_duplicates() {
+        assert!(parse("@misc{A,title={A}").is_err());
+        assert!(parse("@misc{bad key,title={A}}").is_err());
+        assert!(matches!(
+            parse("@misc{A,title={One}}\n\n@misc{A,title={Two}}"),
+            Err(Error::KeyConflict(key)) if key == "A"
+        ));
+    }
+
+    #[test]
+    fn raw_scanner_preserves_each_exact_entry_block() {
+        let first = "@misc{Z,\n title = {Zed}\n}";
+        let second = "@article{A,title={Alpha}}";
+        let source = format!(" \n{first}\n\t\n{second}\n ");
+        let parsed = parse(&source).unwrap();
+        assert_eq!(parsed["Z"].bibtex, first);
+        assert_eq!(parsed["A"].bibtex, second);
     }
 
     #[test]
     fn renaming_changes_only_key_token() {
         let raw = "@misc{Old,title={Old}}";
         assert_eq!(rename_entry(raw, "New").unwrap(), "@misc{New,title={Old}}");
+        assert!(rename_entry("% outside\n@misc{Old,title={Old}}", "New").is_err());
     }
 
     #[test]

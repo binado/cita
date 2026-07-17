@@ -2,11 +2,11 @@ mod git;
 
 use anyhow::{Context, Result, bail};
 use cita_bibliography::parse as parse_bibtex;
-use cita_core::{Locator, Reference, ReferenceSource};
+use cita_core::{Locator, MetadataProvider, Reference, ReferenceSource};
 use cita_documents::{
     DocumentStore, Error as DocumentError, FetchOutcome, FetchPolicy, arxiv_pdf_url,
 };
-use cita_inspire_client::Client;
+use cita_inspire_client::{Client, RetryEvent};
 use cita_manifest::{
     AddOutcome, BIBLIOGRAPHY_FILE, MANIFEST_FILE, Manifest, PendingReference, SourceSnapshot,
 };
@@ -207,11 +207,16 @@ fn import(cwd: &Path, input: &str) -> Result<()> {
 }
 
 fn inspire_client() -> Result<Client> {
-    let builder = Client::builder();
-    Ok(match env::var("CITA_INSPIRE_BASE_URL") {
-        Ok(base) => builder.base_url(base).build()?,
-        Err(_) => builder.build()?,
-    })
+    let mut builder = Client::builder().on_retry(|event: &RetryEvent| {
+        eprintln!(
+            "INSPIRE rate limited the request for {}; retrying in {:?} (attempt {} of {})",
+            event.resource, event.delay, event.attempt, event.max_retries
+        );
+    });
+    if let Ok(base) = env::var("CITA_INSPIRE_BASE_URL") {
+        builder = builder.base_url(base);
+    }
+    Ok(builder.build()?)
 }
 
 async fn add(cwd: &Path, explicit_key: Option<&str>, values: &[String]) -> Result<()> {
@@ -225,7 +230,7 @@ async fn add(cwd: &Path, explicit_key: Option<&str>, values: &[String]) -> Resul
     let client = inspire_client()?;
     let mut pending = Vec::with_capacity(locators.len());
     for locator in &locators {
-        let snapshot = client.resolve_snapshot(locator).await?;
+        let snapshot = client.resolve(locator).await?;
         let key = explicit_key
             .map(str::to_owned)
             .or_else(|| snapshot.texkeys.first().cloned())
@@ -253,44 +258,19 @@ fn print_add(outcome: AddOutcome) {
 
 async fn sync(cwd: &Path) -> Result<()> {
     let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
-    let managed = manifest
-        .references()
-        .iter()
-        .filter_map(|(key, stored)| {
-            stored
-                .source
-                .inspire()
-                .map(|snapshot| (key.clone(), snapshot.record_id))
-        })
-        .collect::<Vec<_>>();
-    let unmanaged = manifest.references().len() - managed.len();
-    let ids = managed.iter().map(|(_, id)| *id).collect::<Vec<_>>();
-    let refreshed = inspire_client()?.refresh_records(&ids).await?;
-    let by_id = refreshed
-        .into_iter()
-        .map(|snapshot| (snapshot.record_id, snapshot))
-        .collect::<std::collections::HashMap<_, _>>();
-    let mut by_key = std::collections::BTreeMap::new();
-    for (key, id) in managed.iter().cloned() {
-        by_key.insert(
-            key,
-            by_id
-                .get(&id)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("INSPIRE did not refresh record {id}"))?,
-        );
-    }
-    let changed = manifest.replace_inspire(by_key)?;
+    let ids = manifest.inspire_record_ids();
+    let managed = ids.len();
+    let unmanaged = manifest.references().len() - managed;
+    let provider_ids = ids.iter().map(u64::to_string).collect::<Vec<_>>();
+    let refreshed = inspire_client()?.refresh(&provider_ids).await?;
+    let changed = manifest.replace_inspire(refreshed)?;
     if changed {
         println!(
             "Synced {} managed references; left {unmanaged} imported unchanged",
-            managed.len()
+            managed
         );
     } else {
-        println!(
-            "Already in sync: {} managed, {unmanaged} imported",
-            managed.len()
-        );
+        println!("Already in sync: {} managed, {unmanaged} imported", managed);
     }
     Ok(())
 }
@@ -335,7 +315,7 @@ async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
     })?;
     let client = inspire_client()?;
     if save {
-        let snapshot = client.resolve_snapshot(&locator).await?;
+        let snapshot = client.resolve(&locator).await?;
         let key = snapshot
             .texkeys
             .first()
@@ -476,7 +456,12 @@ fn list(cwd: &Path, sort_by: SortBy, order: Order, wrap_title: bool) -> Result<(
             let author = match item.reference.authors.first() {
                 Some(first) if item.reference.authors.len() > 1 => format!("{first} et al."),
                 Some(first) => first.clone(),
-                None => "—".into(),
+                None => item
+                    .reference
+                    .collaborations
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "—".into()),
             };
             Row {
                 key: item.key,

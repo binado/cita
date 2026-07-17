@@ -2,10 +2,11 @@
 //! local `TcpListener`.
 
 use cita_core::Locator;
-use cita_inspire_client::{Client, Error};
+use cita_inspire_client::{Client, Error, RetryEvent};
 use std::{
     io::{Read, Write},
     net::TcpListener,
+    sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -91,6 +92,35 @@ async fn retries_a_429_using_retry_after_and_succeeds() {
     let requests = handle.join().unwrap();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0], requests[1]);
+}
+
+#[tokio::test]
+async fn retry_observer_receives_each_event_before_retry() {
+    let (base, handle) = server(vec![
+        response("429 Too Many Requests", "Retry-After: 0\r\n", ""),
+        response("429 Too Many Requests", "Retry-After: 0\r\n", ""),
+        response("200 OK", "", &json_record(42)),
+    ]);
+    let events = Arc::new(Mutex::new(Vec::<RetryEvent>::new()));
+    let observed = Arc::clone(&events);
+    let client = Client::builder()
+        .base_url(&base)
+        .retry_fallback(Duration::ZERO)
+        .on_retry(move |event| observed.lock().unwrap().push(event.clone()))
+        .build()
+        .unwrap();
+    client
+        .resolve_reference(&Locator::Inspire(42))
+        .await
+        .unwrap();
+    assert_eq!(handle.join().unwrap().len(), 3);
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].resource, "inspire:42");
+    assert_eq!(events[0].delay, Duration::ZERO);
+    assert_eq!(events[0].attempt, 1);
+    assert_eq!(events[1].attempt, 2);
+    assert!(events.iter().all(|event| event.max_retries == 3));
 }
 
 #[tokio::test]
