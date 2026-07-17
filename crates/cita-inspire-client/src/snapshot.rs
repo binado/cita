@@ -3,7 +3,7 @@ use cita_core::{
     Identifiers, ProjectionError, Publication, Reference, ReferenceSource, normalize_arxiv,
     normalize_doi,
 };
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -34,6 +34,25 @@ pub struct InspireSnapshot {
     pub earliest_date: Option<String>,
 }
 
+/// The strict JSON subset selected from permissive INSPIRE wire records.
+/// BibTeX is attached only when constructing a durable snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SelectedRecord {
+    pub(crate) record_id: u64,
+    pub(crate) updated: String,
+    pub(crate) texkeys: Vec<String>,
+    pub(crate) titles: Vec<Title>,
+    pub(crate) authors: Vec<Author>,
+    pub(crate) collaborations: Vec<Collaboration>,
+    pub(crate) publication_info: Vec<PublicationInfo>,
+    pub(crate) arxiv_eprints: Vec<ArxivEprint>,
+    pub(crate) dois: Vec<Doi>,
+    pub(crate) urls: Vec<UrlValue>,
+    pub(crate) document_types: Vec<String>,
+    pub(crate) preprint_date: Option<String>,
+    pub(crate) earliest_date: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Title {
@@ -44,11 +63,7 @@ pub struct Title {
 #[serde(deny_unknown_fields)]
 pub struct Author {
     pub full_name: String,
-    #[serde(
-        default,
-        deserialize_with = "one_or_many",
-        skip_serializing_if = "Vec::is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub role: Vec<String>,
 }
 
@@ -105,23 +120,6 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-pub(crate) fn one_or_many<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Value {
-        One(String),
-        Many(Vec<String>),
-    }
-    Option::<Value>::deserialize(deserializer).map(|value| match value {
-        None => Vec::new(),
-        Some(Value::One(value)) => vec![value],
-        Some(Value::Many(values)) => values,
-    })
-}
-
 impl InspireSnapshot {
     pub fn validate(&self) -> Result<(), ProjectionError> {
         if self.record_id == 0 {
@@ -157,6 +155,35 @@ impl InspireSnapshot {
     }
 }
 
+impl SelectedRecord {
+    pub(crate) fn record_id(&self) -> u64 {
+        self.record_id
+    }
+
+    pub(crate) fn texkeys(&self) -> &[String] {
+        &self.texkeys
+    }
+
+    pub(crate) fn into_snapshot(self, bibtex: String) -> InspireSnapshot {
+        InspireSnapshot {
+            record_id: self.record_id,
+            updated: self.updated,
+            texkeys: self.texkeys,
+            bibtex,
+            titles: self.titles,
+            authors: self.authors,
+            collaborations: self.collaborations,
+            publication_info: self.publication_info,
+            arxiv_eprints: self.arxiv_eprints,
+            dois: self.dois,
+            urls: self.urls,
+            document_types: self.document_types,
+            preprint_date: self.preprint_date,
+            earliest_date: self.earliest_date,
+        }
+    }
+}
+
 fn identifiers_match(json: &Reference, bib: &Reference) -> bool {
     let json_has_identifiers =
         !json.identifiers.dois.is_empty() || !json.identifiers.arxiv.is_empty();
@@ -175,68 +202,105 @@ fn identifiers_match(json: &Reference, bib: &Reference) -> bool {
 
 impl ReferenceSource for InspireSnapshot {
     fn project(&self) -> Result<Reference, ProjectionError> {
-        let title = self
-            .titles
-            .first()
-            .map(|item| item.title.trim().to_owned())
-            .filter(|value| !value.is_empty())
-            .ok_or(ProjectionError::MissingTitle)?;
-        let publication_info = select_publication(self);
-        let publication = publication_info.map(to_publication);
-        let arxiv = unique(
-            self.arxiv_eprints
-                .iter()
-                .map(|item| normalize_arxiv(&item.value)),
-        );
-        let dois = unique(self.dois.iter().map(|item| normalize_doi(&item.value)));
-        let year = publication
-            .as_ref()
-            .and_then(|item| item.year)
-            .or_else(|| date_year(self.preprint_date.as_deref()))
-            .or_else(|| date_year(self.earliest_date.as_deref()))
-            .or_else(|| arxiv.first().and_then(|id| arxiv_year(id)));
-        let primary_category = self
-            .arxiv_eprints
-            .first()
-            .and_then(|item| item.categories.first())
-            .cloned();
-        let mut providers = BTreeMap::new();
-        providers.insert("inspire".into(), vec![self.record_id.to_string()]);
-        Ok(Reference {
-            title,
-            authors: self
-                .authors
-                .iter()
-                .filter(|author| {
-                    author.role.is_empty()
-                        || author
-                            .role
-                            .iter()
-                            .any(|role| role.eq_ignore_ascii_case("author"))
-                })
-                .map(|author| author.full_name.clone())
-                .collect(),
-            collaborations: self
-                .collaborations
-                .iter()
-                .map(|item| item.value.clone())
-                .collect(),
-            year,
-            publication,
-            url: self.urls.first().map(|url| url.value.clone()).or_else(|| {
-                Some(format!(
-                    "https://inspirehep.net/literature/{}",
-                    self.record_id
-                ))
-            }),
-            primary_category,
-            identifiers: Identifiers {
-                dois,
-                arxiv,
-                providers,
-            },
-        })
+        project_selected(
+            self.record_id,
+            &self.titles,
+            &self.authors,
+            &self.collaborations,
+            &self.publication_info,
+            &self.arxiv_eprints,
+            &self.dois,
+            &self.urls,
+            self.preprint_date.as_deref(),
+            self.earliest_date.as_deref(),
+        )
     }
+}
+
+impl ReferenceSource for SelectedRecord {
+    fn project(&self) -> Result<Reference, ProjectionError> {
+        project_selected(
+            self.record_id,
+            &self.titles,
+            &self.authors,
+            &self.collaborations,
+            &self.publication_info,
+            &self.arxiv_eprints,
+            &self.dois,
+            &self.urls,
+            self.preprint_date.as_deref(),
+            self.earliest_date.as_deref(),
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_selected(
+    record_id: u64,
+    titles: &[Title],
+    authors: &[Author],
+    collaborations: &[Collaboration],
+    publication_info: &[PublicationInfo],
+    arxiv_eprints: &[ArxivEprint],
+    dois: &[Doi],
+    urls: &[UrlValue],
+    preprint_date: Option<&str>,
+    earliest_date: Option<&str>,
+) -> Result<Reference, ProjectionError> {
+    let title = titles
+        .first()
+        .map(|item| item.title.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .ok_or(ProjectionError::MissingTitle)?;
+    let publication = select_publication(publication_info).map(to_publication);
+    let arxiv = unique(
+        arxiv_eprints
+            .iter()
+            .map(|item| normalize_arxiv(&item.value)),
+    );
+    let dois = unique(dois.iter().map(|item| normalize_doi(&item.value)));
+    let year = publication
+        .as_ref()
+        .and_then(|item| item.year)
+        .or_else(|| date_year(preprint_date))
+        .or_else(|| date_year(earliest_date))
+        .or_else(|| arxiv.first().and_then(|id| arxiv_year(id)));
+    let primary_category = arxiv_eprints
+        .first()
+        .and_then(|item| item.categories.first())
+        .cloned();
+    let mut providers = BTreeMap::new();
+    providers.insert("inspire".into(), vec![record_id.to_string()]);
+    Ok(Reference {
+        title,
+        authors: authors
+            .iter()
+            .filter(|author| {
+                author.role.is_empty()
+                    || author
+                        .role
+                        .iter()
+                        .any(|role| role.eq_ignore_ascii_case("author"))
+            })
+            .map(|author| author.full_name.clone())
+            .collect(),
+        collaborations: collaborations
+            .iter()
+            .map(|item| item.value.clone())
+            .collect(),
+        year,
+        publication,
+        url: urls
+            .first()
+            .map(|url| url.value.clone())
+            .or_else(|| Some(format!("https://inspirehep.net/literature/{record_id}"))),
+        primary_category,
+        identifiers: Identifiers {
+            dois,
+            arxiv,
+            providers,
+        },
+    })
 }
 
 fn unique(values: impl IntoIterator<Item = String>) -> Vec<String> {
@@ -247,24 +311,19 @@ fn unique(values: impl IntoIterator<Item = String>) -> Vec<String> {
         .collect()
 }
 
-fn select_publication(snapshot: &InspireSnapshot) -> Option<&PublicationInfo> {
+fn select_publication(publication_info: &[PublicationInfo]) -> Option<&PublicationInfo> {
     let visible = |item: &&PublicationInfo| !item.hidden && item.journal_title.is_some();
-    snapshot
-        .publication_info
+    publication_info
         .iter()
         .filter(visible)
         .find(|item| item.curated_relation && (item.page_start.is_some() || item.artid.is_some()))
         .or_else(|| {
-            snapshot
-                .publication_info
-                .iter()
-                .filter(visible)
-                .find(|item| {
-                    item.year.is_some()
-                        && (item.journal_volume.is_some()
-                            || item.page_start.is_some()
-                            || item.artid.is_some())
-                })
+            publication_info.iter().filter(visible).find(|item| {
+                item.year.is_some()
+                    && (item.journal_volume.is_some()
+                        || item.page_start.is_some()
+                        || item.artid.is_some())
+            })
         })
 }
 
@@ -374,5 +433,18 @@ mod tests {
             "unknown": true
         }"#;
         assert!(serde_json::from_str::<InspireSnapshot>(json).is_err());
+    }
+
+    #[test]
+    fn durable_author_roles_require_the_stored_array_form() {
+        assert!(
+            serde_json::from_str::<Author>(r#"{"full_name":"A. Author","role":"author"}"#).is_err()
+        );
+        assert_eq!(
+            serde_json::from_str::<Author>(r#"{"full_name":"A. Author","role":["author"]}"#)
+                .unwrap()
+                .role,
+            ["author"]
+        );
     }
 }

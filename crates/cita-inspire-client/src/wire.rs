@@ -1,14 +1,13 @@
 use crate::{
     Error,
     snapshot::{
-        ArxivEprint, Author, Collaboration, Doi, InspireSnapshot, PublicationInfo, Title, UrlValue,
-        one_or_many,
+        ArxivEprint, Author, Collaboration, Doi, PublicationInfo, SelectedRecord, Title, UrlValue,
     },
 };
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 /// Permissive INSPIRE API response types. Unknown wire fields are deliberately
-/// ignored; conversion selects the strict subset stored in `InspireSnapshot`.
+/// ignored; conversion selects the strict subset stored in `SelectedRecord`.
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct LiteratureRecord {
     #[serde(default)]
@@ -26,22 +25,17 @@ impl LiteratureRecord {
             .or(self.metadata.control_number)
     }
 
-    pub(crate) fn texkeys(&self) -> &[String] {
-        &self.metadata.texkeys
-    }
-
-    pub(crate) fn into_snapshot(self, bibtex: String) -> Result<InspireSnapshot, Error> {
+    pub(crate) fn into_selected(self) -> Result<SelectedRecord, Error> {
         let record_id = self
             .record_id()
             .ok_or_else(|| Error::Malformed("record has no numeric id".into()))?;
         let metadata = self.metadata;
-        Ok(InspireSnapshot {
+        Ok(SelectedRecord {
             record_id,
             updated: self
                 .updated
                 .ok_or_else(|| Error::Malformed("record has no update timestamp".into()))?,
             texkeys: metadata.texkeys,
-            bibtex,
             titles: metadata
                 .titles
                 .into_iter()
@@ -195,6 +189,23 @@ pub(crate) struct SearchHits {
     pub(crate) hits: Vec<LiteratureRecord>,
 }
 
+fn one_or_many<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        One(String),
+        Many(Vec<String>),
+    }
+    Option::<Value>::deserialize(deserializer).map(|value| match value {
+        None => Vec::new(),
+        Some(Value::One(value)) => vec![value],
+        Some(Value::Many(values)) => values,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,6 +221,7 @@ mod tests {
                 "titles": [{"title": "First", "subtitle": "ignored"}],
                 "authors": [
                     {"full_name": "Aad, G.", "raw_affiliations": [{"value":"ignored"}]},
+                    {"full_name": "Writer", "role": ["author"]},
                     {"full_name": "Editor", "role": "editor"}
                 ],
                 "texkeys": ["Aad:2012tfa"],
@@ -225,14 +237,14 @@ mod tests {
             }
         }))
         .unwrap();
-        let snapshot = record
-            .into_snapshot(
-                "@article{Aad:2012tfa,title={First},doi={10.1/ABC},eprint={1207.7214}}".into(),
-            )
-            .unwrap();
-        let projected = snapshot.project().unwrap();
+        let selected = record.into_selected().unwrap();
+        let projected = selected.project().unwrap();
         assert_eq!(projected.year, Some(2012));
-        assert_eq!(projected.authors, ["Aad, G."]);
+        assert_eq!(projected.authors, ["Aad, G.", "Writer"]);
+        let snapshot = selected.into_snapshot(
+            "@article{Aad:2012tfa,title={First},doi={10.1/ABC},eprint={1207.7214}}".into(),
+        );
+        assert_eq!(snapshot.project().unwrap(), projected);
         snapshot.validate().unwrap();
     }
 }

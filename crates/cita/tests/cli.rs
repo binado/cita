@@ -168,7 +168,11 @@ fn arxiv_library(directory: &Path) {
 }
 
 fn cached_pdf(directory: &Path, bytes: &[u8]) {
-    let pdf = directory.join(".cita/files/arxiv/2001.00001.pdf");
+    cached_pdf_for(directory, "2001.00001", bytes);
+}
+
+fn cached_pdf_for(directory: &Path, arxiv: &str, bytes: &[u8]) {
+    let pdf = directory.join(format!(".cita/files/arxiv/{arxiv}.pdf"));
     fs::create_dir_all(pdf.parent().unwrap()).unwrap();
     fs::write(pdf, bytes).unwrap();
 }
@@ -351,6 +355,45 @@ fn sync_refreshes_managed_records_by_id_and_leaves_imports_unchanged() {
     assert!(bibliography.contains("Fresh"));
     assert!(bibliography.contains("@misc{Imported,"));
     assert!(bibliography.contains("Untouched"));
+}
+
+#[test]
+fn stale_provider_texkeys_remain_selectable_for_save_and_remove() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    let initial_json = json_record(42, "Provider:Old", "Old", "2401.00042");
+    let initial_bib = entry("Provider:Old", "Old", "eprint={2401.00042},");
+    let (base, handle) = server(vec![("200 OK", initial_json), ("200 OK", initial_bib)]);
+    success(cita_with_server(
+        directory.path(),
+        &["add", "2401.00042"],
+        &base,
+    ));
+    handle.join().unwrap();
+
+    let fresh = json_record(42, "Provider:New", "Fresh", "2401.00042");
+    let search_json = format!(r#"{{"hits":{{"hits":[{fresh}]}}}}"#);
+    let fresh_bib = entry("Provider:New", "Fresh", "eprint={2401.00042},");
+    let (base, handle) = server(vec![("200 OK", search_json), ("200 OK", fresh_bib)]);
+    success(cita_with_server(directory.path(), &["sync"], &base));
+    handle.join().unwrap();
+
+    cached_pdf_for(directory.path(), "2401.00042", b"%PDF-cached");
+    assert_eq!(
+        success(cita_with_server(
+            directory.path(),
+            &["fetch", "--save", "inspire:42"],
+            "http://127.0.0.1:1/",
+        )),
+        concat!(
+            "Already present: Provider:Old\n",
+            "Already fetched Provider:Old: https://arxiv.org/pdf/2401.00042\n"
+        )
+    );
+    assert_eq!(
+        success(cita(directory.path(), &["remove", "inspire:42"])),
+        "Removed Provider:Old\n"
+    );
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use crate::{InspireSnapshot, wire::SearchResponse};
+use crate::{InspireSnapshot, snapshot::SelectedRecord, wire::SearchResponse};
 use cita_bibliography::parse as parse_bibtex;
 use cita_core::{Locator, MetadataProvider, ProviderError, Reference, ReferenceSource};
 use reqwest::{StatusCode, header::RETRY_AFTER};
@@ -58,7 +58,6 @@ impl Client {
     pub async fn resolve_reference(&self, locator: &Locator) -> Result<Reference, Error> {
         self.lookup_json(locator)
             .await?
-            .into_snapshot(String::new())?
             .project()
             .map_err(|error| Error::Malformed(error.to_string()))
     }
@@ -66,7 +65,7 @@ impl Client {
     pub async fn resolve_snapshot(&self, locator: &Locator) -> Result<InspireSnapshot, Error> {
         let record = self.lookup_json(locator).await?;
         let bibtex = self.lookup_bibtex(locator).await?;
-        let snapshot = record.into_snapshot(bibtex)?;
+        let snapshot = record.into_snapshot(bibtex);
         snapshot
             .validate()
             .map_err(|error| Error::Malformed(error.to_string()))?;
@@ -82,7 +81,12 @@ impl Client {
                 .await?;
             let response: SearchResponse =
                 serde_json::from_str(&json).map_err(|error| Error::Malformed(error.to_string()))?;
-            let mut records = response.hits.hits;
+            let mut records = response
+                .hits
+                .hits
+                .into_iter()
+                .map(|record| record.into_selected())
+                .collect::<Result<Vec<_>, _>>()?;
             let bibtex = self
                 .request(bib_url, format!("INSPIRE records {batch:?}"))
                 .await?;
@@ -91,7 +95,7 @@ impl Client {
             for id in batch {
                 let position = records
                     .iter()
-                    .position(|record| record.record_id() == Some(id))
+                    .position(|record| record.record_id() == id)
                     .ok_or(Error::NotFound(format!("inspire:{id}")))?;
                 let record = records.remove(position);
                 let matching = bib_entries
@@ -109,7 +113,7 @@ impl Client {
                     .remove(&matching[0])
                     .expect("matching key exists")
                     .bibtex;
-                let snapshot = record.into_snapshot(bibtex)?;
+                let snapshot = record.into_snapshot(bibtex);
                 snapshot
                     .validate()
                     .map_err(|error| Error::Malformed(error.to_string()))?;
@@ -124,10 +128,12 @@ impl Client {
         Ok(output)
     }
 
-    async fn lookup_json(&self, locator: &Locator) -> Result<crate::wire::LiteratureRecord, Error> {
+    async fn lookup_json(&self, locator: &Locator) -> Result<SelectedRecord, Error> {
         let url = self.record_url(locator, "json")?;
         let body = self.request(url, locator.to_string()).await?;
-        serde_json::from_str(&body).map_err(|error| Error::Malformed(error.to_string()))
+        let record = serde_json::from_str::<crate::wire::LiteratureRecord>(&body)
+            .map_err(|error| Error::Malformed(error.to_string()))?;
+        record.into_selected()
     }
 
     async fn lookup_bibtex(&self, locator: &Locator) -> Result<String, Error> {

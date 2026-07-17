@@ -79,6 +79,20 @@ fn search_bibtex(ids: &[u64]) -> String {
 }
 
 #[tokio::test]
+async fn json_only_resolution_performs_exactly_one_request() {
+    let (base, handle) = server(vec![response("200 OK", "", &json_record(42))]);
+    let reference = client(&base)
+        .resolve_reference(&Locator::Inspire(42))
+        .await
+        .unwrap();
+    assert_eq!(reference.title, "Title 42");
+    let requests = handle.join().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].contains("format=json"), "{}", requests[0]);
+    assert!(!requests[0].contains("format=bibtex"), "{}", requests[0]);
+}
+
+#[tokio::test]
 async fn retries_a_429_using_retry_after_and_succeeds() {
     let (base, handle) = server(vec![
         response("429 Too Many Requests", "Retry-After: 0\r\n", ""),

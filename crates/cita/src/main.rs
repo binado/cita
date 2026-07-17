@@ -8,7 +8,8 @@ use cita_documents::{
 };
 use cita_inspire_client::{Client, RetryEvent};
 use cita_manifest::{
-    AddOutcome, BIBLIOGRAPHY_FILE, MANIFEST_FILE, Manifest, PendingReference, SourceSnapshot,
+    AddOutcome, BIBLIOGRAPHY_FILE, KeyRequest, MANIFEST_FILE, Manifest, PendingReference,
+    SourceSnapshot,
 };
 use clap::{CommandFactory, Parser, Subcommand};
 use std::{
@@ -195,7 +196,7 @@ fn import(cwd: &Path, input: &str) -> Result<()> {
     let pending = parse_bibtex(&source)?
         .into_iter()
         .map(|(key, snapshot)| PendingReference {
-            key,
+            key: KeyRequest::Exact(key),
             source: SourceSnapshot::Bibtex(snapshot),
         })
         .collect();
@@ -231,12 +232,12 @@ async fn add(cwd: &Path, explicit_key: Option<&str>, values: &[String]) -> Resul
     let mut pending = Vec::with_capacity(locators.len());
     for locator in &locators {
         let snapshot = client.resolve(locator).await?;
-        let key = explicit_key
-            .map(str::to_owned)
-            .or_else(|| snapshot.texkeys.first().cloned())
-            .ok_or_else(|| {
+        let key = match explicit_key {
+            Some(key) => KeyRequest::Exact(key.to_owned()),
+            None => KeyRequest::Suggested(snapshot.texkeys.first().cloned().ok_or_else(|| {
                 anyhow::anyhow!("INSPIRE record {} has no citation key", snapshot.record_id)
-            })?;
+            })?),
+        };
         pending.push(PendingReference {
             key,
             source: SourceSnapshot::Inspire(Box::new(snapshot)),
@@ -265,12 +266,9 @@ async fn sync(cwd: &Path) -> Result<()> {
     let refreshed = inspire_client()?.refresh(&provider_ids).await?;
     let changed = manifest.replace_inspire(refreshed)?;
     if changed {
-        println!(
-            "Synced {} managed references; left {unmanaged} imported unchanged",
-            managed
-        );
+        println!("Synced {managed} managed references; left {unmanaged} imported unchanged");
     } else {
-        println!("Already in sync: {} managed, {unmanaged} imported", managed);
+        println!("Already in sync: {managed} managed, {unmanaged} imported");
     }
     Ok(())
 }
@@ -324,7 +322,7 @@ async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
         let reference = snapshot.project()?;
         let outcome = manifest
             .add_batch(vec![PendingReference {
-                key: key.clone(),
+                key: KeyRequest::Suggested(key.clone()),
                 source: SourceSnapshot::Inspire(Box::new(snapshot)),
             }])?
             .pop()

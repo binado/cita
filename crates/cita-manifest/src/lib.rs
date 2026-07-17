@@ -56,8 +56,28 @@ pub struct ProjectedReference {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum KeyRequest {
+    Exact(String),
+    Suggested(String),
+}
+
+impl KeyRequest {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Exact(key) | Self::Suggested(key) => key,
+        }
+    }
+
+    fn into_string(self) -> String {
+        match self {
+            Self::Exact(key) | Self::Suggested(key) => key,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PendingReference {
-    pub key: String,
+    pub key: KeyRequest,
     pub source: SourceSnapshot,
 }
 
@@ -106,6 +126,8 @@ pub enum Error {
     BibliographyDrift { path: PathBuf },
     #[error("citation key conflict: `{key}` has different source content")]
     KeyConflict { key: String },
+    #[error("cannot rename existing reference `{existing}` to `{requested}` during add")]
+    CannotRename { existing: String, requested: String },
     #[error("identifier conflict: {identity} is shared by `{first}` and `{second}`")]
     IdentityConflict {
         identity: String,
@@ -285,15 +307,39 @@ impl Manifest {
         let mut candidate = self.references.clone();
         let mut outcomes = Vec::with_capacity(pending.len());
         for item in pending {
-            validate_key(&item.key)?;
-            match candidate.get(&item.key) {
-                Some(existing) if existing == &item.source => {
-                    outcomes.push(AddOutcome::Existing(item.key))
+            validate_key(item.key.as_str())?;
+            if let SourceSnapshot::Inspire(snapshot) = &item.source
+                && let Some(existing) = candidate.iter().find_map(|(key, source)| {
+                    source
+                        .inspire()
+                        .is_some_and(|stored| stored.record_id == snapshot.record_id)
+                        .then(|| key.clone())
+                })
+            {
+                match item.key {
+                    KeyRequest::Suggested(_) => outcomes.push(AddOutcome::Existing(existing)),
+                    KeyRequest::Exact(requested) if requested == existing => {
+                        outcomes.push(AddOutcome::Existing(existing));
+                    }
+                    KeyRequest::Exact(requested) => {
+                        return Err(Error::CannotRename {
+                            existing,
+                            requested,
+                        });
+                    }
                 }
-                Some(_) => return Err(Error::KeyConflict { key: item.key }),
+                continue;
+            }
+
+            let key = item.key.into_string();
+            match candidate.get(&key) {
+                Some(existing) if existing == &item.source => {
+                    outcomes.push(AddOutcome::Existing(key))
+                }
+                Some(_) => return Err(Error::KeyConflict { key }),
                 None => {
-                    candidate.insert(item.key.clone(), item.source);
-                    outcomes.push(AddOutcome::Added(item.key));
+                    candidate.insert(key.clone(), item.source);
+                    outcomes.push(AddOutcome::Added(key));
                 }
             }
         }
@@ -335,8 +381,8 @@ impl Manifest {
                     .inspire()
                     .map(|snapshot| (snapshot.record_id, key.clone()))
             })
-            .collect::<HashMap<_, _>>();
-        let mut returned = HashMap::with_capacity(refreshed.len());
+            .collect::<BTreeMap<_, _>>();
+        let mut returned = BTreeMap::new();
         for snapshot in refreshed {
             let record_id = snapshot.record_id;
             if !expected.contains_key(&record_id) {
@@ -538,7 +584,7 @@ mod tests {
 
     fn imported(key: &str, title: &str, extra: &str) -> PendingReference {
         PendingReference {
-            key: key.into(),
+            key: KeyRequest::Exact(key.into()),
             source: SourceSnapshot::Bibtex(
                 BibtexSnapshot::new(format!("@misc{{{key},title={{{title}}},{extra}}}")).unwrap(),
             ),
@@ -547,7 +593,7 @@ mod tests {
 
     fn inspire(local_key: &str, provider_key: &str, record_id: u64) -> PendingReference {
         PendingReference {
-            key: local_key.into(),
+            key: KeyRequest::Suggested(local_key.into()),
             source: SourceSnapshot::Inspire(Box::new(InspireSnapshot {
                 record_id,
                 updated: "2026-01-01".into(),
@@ -567,6 +613,11 @@ mod tests {
                 earliest_date: None,
             })),
         }
+    }
+
+    fn exact(mut pending: PendingReference) -> PendingReference {
+        pending.key = KeyRequest::Exact(pending.key.into_string());
+        pending
     }
 
     fn updated(pending: PendingReference, timestamp: &str) -> InspireSnapshot {
@@ -630,6 +681,139 @@ mod tests {
         assert_eq!(
             fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap(),
             before_bib
+        );
+    }
+
+    #[test]
+    fn suggested_inspire_additions_are_idempotent_by_record_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        manifest
+            .add_batch(vec![inspire("Local", "Provider:Old", 42)])
+            .unwrap();
+        let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
+        let before_bibliography = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
+
+        let mut changed = inspire("Provider:New", "Provider:New", 42);
+        let SourceSnapshot::Inspire(snapshot) = &mut changed.source else {
+            unreachable!()
+        };
+        snapshot.updated = "2026-07-17".into();
+        snapshot.titles[0].title = "Changed provider title".into();
+        snapshot.bibtex = "@misc{Provider:New,title={Changed provider title}}".into();
+
+        assert_eq!(
+            manifest.add_batch(vec![changed]).unwrap(),
+            [AddOutcome::Existing("Local".into())]
+        );
+        assert_eq!(
+            manifest.references()["Local"].inspire().unwrap().texkeys,
+            ["Provider:Old"]
+        );
+        assert_eq!(
+            fs::read(dir.path().join(MANIFEST_FILE)).unwrap(),
+            before_manifest
+        );
+        assert_eq!(
+            fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap(),
+            before_bibliography
+        );
+    }
+
+    #[test]
+    fn exact_inspire_additions_cannot_rename_an_existing_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        manifest
+            .add_batch(vec![exact(inspire("Local", "Provider:Old", 42))])
+            .unwrap();
+        let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
+        let before_bibliography = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
+
+        assert_eq!(
+            manifest
+                .add_batch(vec![exact(inspire("Local", "Provider:New", 42))])
+                .unwrap(),
+            [AddOutcome::Existing("Local".into())]
+        );
+        assert!(matches!(
+            manifest.add_batch(vec![exact(inspire("Renamed", "Provider:New", 42))]),
+            Err(Error::CannotRename { existing, requested })
+                if existing == "Local" && requested == "Renamed"
+        ));
+        assert_eq!(
+            fs::read(dir.path().join(MANIFEST_FILE)).unwrap(),
+            before_manifest
+        );
+        assert_eq!(
+            fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap(),
+            before_bibliography
+        );
+    }
+
+    #[test]
+    fn occupied_keys_from_different_records_remain_conflicts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        manifest
+            .add_batch(vec![inspire("Local", "Provider:One", 1)])
+            .unwrap();
+        let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
+        let before_bibliography = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
+
+        assert!(matches!(
+            manifest.add_batch(vec![inspire("Local", "Provider:Two", 2)]),
+            Err(Error::KeyConflict { key }) if key == "Local"
+        ));
+        assert_eq!(
+            fs::read(dir.path().join(MANIFEST_FILE)).unwrap(),
+            before_manifest
+        );
+        assert_eq!(
+            fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap(),
+            before_bibliography
+        );
+    }
+
+    #[test]
+    fn mixed_existing_and_new_batches_preserve_order_and_are_atomic() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        manifest
+            .add_batch(vec![inspire("Local", "Provider:Old", 1)])
+            .unwrap();
+
+        assert_eq!(
+            manifest
+                .add_batch(vec![
+                    inspire("Provider:New", "Provider:New", 1),
+                    inspire("Second", "Provider:Two", 2),
+                ])
+                .unwrap(),
+            [
+                AddOutcome::Existing("Local".into()),
+                AddOutcome::Added("Second".into())
+            ]
+        );
+
+        let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
+        let before_bibliography = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
+        assert!(
+            manifest
+                .add_batch(vec![
+                    inspire("Third", "Provider:Three", 3),
+                    inspire("Second", "Provider:Four", 4),
+                ])
+                .is_err()
+        );
+        assert!(!manifest.references().contains_key("Third"));
+        assert_eq!(
+            fs::read(dir.path().join(MANIFEST_FILE)).unwrap(),
+            before_manifest
+        );
+        assert_eq!(
+            fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap(),
+            before_bibliography
         );
     }
 
@@ -746,5 +930,23 @@ mod tests {
                 before_bibliography
             );
         }
+    }
+
+    #[test]
+    fn missing_refresh_record_ids_are_sorted() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        manifest
+            .add_batch(vec![
+                inspire("Ten", "Provider:Ten", 10),
+                inspire("Two", "Provider:Two", 2),
+                inspire("Seven", "Provider:Seven", 7),
+            ])
+            .unwrap();
+
+        assert!(matches!(
+            manifest.replace_inspire(Vec::new()),
+            Err(Error::RefreshRecordSet { message }) if message == "did not return records [2, 7, 10]"
+        ));
     }
 }
