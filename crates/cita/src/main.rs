@@ -34,7 +34,7 @@ enum Command {
     Init,
     /// Import standalone BibTeX entries from a path or stdin (`-`)
     Import { path: String },
-    /// Resolve and add one or more papers through INSPIRE
+    /// Resolve and add one or more references through INSPIRE
     Add {
         /// Keep this local citation key (one locator only)
         #[arg(long)]
@@ -44,7 +44,7 @@ enum Command {
     },
     /// Refresh every INSPIRE-managed source snapshot by stable record id
     Sync,
-    /// Remove papers by local key or provider/DOI/arXiv identity
+    /// Remove references by local key or provider/DOI/arXiv identity
     Remove {
         #[arg(required = true)]
         selectors: Vec<String>,
@@ -60,7 +60,7 @@ enum Command {
     },
     /// Regenerate a missing or edited references.bib
     Generate,
-    /// Fetch a paper's arXiv PDF into the local cache
+    /// Fetch a reference's arXiv PDF into the local cache
     Fetch {
         #[arg(long, conflicts_with = "dry_run")]
         force: bool,
@@ -70,7 +70,7 @@ enum Command {
         save: bool,
         selector: String,
     },
-    /// Fetch and open a paper's arXiv PDF
+    /// Fetch and open a reference's arXiv PDF
     Open {
         #[arg(long, conflicts_with_all = ["browser", "no_download"])]
         force: bool,
@@ -156,7 +156,14 @@ async fn run() -> Result<()> {
 }
 
 fn init(cwd: &Path) -> Result<()> {
-    let directory = git::repository_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
+    let directory = match git::repository_root(cwd) {
+        Ok(Some(root)) => root,
+        Ok(None) => cwd.to_path_buf(),
+        Err(error) => {
+            eprintln!("warning: {error:#}; initializing in the current directory");
+            cwd.to_path_buf()
+        }
+    };
     let manifest_path = directory.join(MANIFEST_FILE);
     let bibliography_path = directory.join(BIBLIOGRAPHY_FILE);
     let existed = manifest_path.exists();
@@ -324,7 +331,7 @@ async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
         });
     }
     let locator = selector.parse::<Locator>().map_err(|error| {
-        anyhow::Error::from(error).context(format!("paper `{selector}` was not found"))
+        anyhow::Error::from(error).context(format!("reference `{selector}` was not found"))
     })?;
     let client = inspire_client()?;
     if save {
@@ -374,7 +381,7 @@ async fn fetch(
         .identifiers
         .arxiv
         .first()
-        .ok_or_else(|| anyhow::anyhow!("paper `{}` has no arXiv eprint", selected.key))?;
+        .ok_or_else(|| anyhow::anyhow!("reference `{}` has no arXiv eprint", selected.key))?;
     let url = arxiv_pdf_url(arxiv)?.to_string();
     if dry_run {
         println!("{url}\n[dry run] skipped download");
@@ -399,7 +406,7 @@ async fn open(
         .identifiers
         .arxiv
         .first()
-        .ok_or_else(|| anyhow::anyhow!("paper `{}` has no arXiv eprint", selected.key))?;
+        .ok_or_else(|| anyhow::anyhow!("reference `{}` has no arXiv eprint", selected.key))?;
     let url = arxiv_pdf_url(arxiv)?;
     if browser {
         opener::open(url.as_str()).with_context(|| format!("could not open {url}"))?;

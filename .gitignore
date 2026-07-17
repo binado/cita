@@ -2,3 +2,6 @@
 *.bib
 !references.bib
 .DS_Store
+
+# Cita document cache
+/.cita/files/

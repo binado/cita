@@ -169,7 +169,7 @@ impl DocumentStoreBuilder {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("paper contains an invalid arXiv identifier: `{0}`")]
+    #[error("reference contains an invalid arXiv identifier: `{0}`")]
     InvalidArxivIdentifier(String),
     #[error("invalid arXiv base URL: {0}")]
     InvalidBaseUrl(String),

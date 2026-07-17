@@ -31,18 +31,19 @@ Use Conventional Commits: `<type>: <description>`.
 
 ```text
 cita-core
-   ↑              ↑                    ↑
-cita-bibliography cita-inspire-client  cita-documents
-   └──────────┬───┘                    │
-        cita-manifest ─────────────────┤
-              └──────── cita ──────────┘
+   ↑                ↑                      ↑
+cita-bibliography ← cita-inspire-client   cita-documents
+   └──────────┬────────┘                   │
+        cita-manifest ─────────────────────┤
+              └──────── cita ──────────────┘
 ```
 
 - `cita-core`: `Reference`, provider traits, locators, and normalization.
 - `cita-bibliography`: strict standalone BibTeX snapshots, projections,
   raw-entry re-keying, and generic `biblatex::Entry` rendering.
 - `cita-inspire-client`: typed INSPIRE JSON/BibTeX snapshots, stable-record-ID
-  refresh batches, bounded queries, and 429 retries.
+  refresh batches, bounded queries, and 429 retries; parses and cross-checks
+  its BibTeX through `cita-bibliography`.
 - `cita-manifest`: schema-2 authority, identity indexes, deterministic TOML,
   generated bibliography verification, and coordinated writes.
 - `cita-documents`: accepts a validated arXiv ID and atomically caches PDFs
@@ -75,7 +76,8 @@ second write, and `cita generate` repairs detectable drift.
 Refresh by stable INSPIRE record ID. Batch at 100 records or a 6 KiB encoded `q`
 value. Fetch JSON and BibTeX searches sequentially and match each raw entry to
 exactly one JSON record through returned texkeys. Retry 429 three times using
-`Retry-After`, otherwise five seconds.
+`Retry-After` capped at sixty seconds, otherwise five seconds, and report each
+retry on stderr.
 
 Every managed record and returned result must be explained. Local citation keys
 are independent from provider texkeys and never change during refresh. Imported
@@ -92,8 +94,9 @@ versionless and cache paths retain legacy arXiv archive directories.
 
 `cita commit` validates consistency and stages only `cita.toml` and
 `references.bib`. Commit messages derive added, removed, and modified local keys
-and projected titles. If the HEAD manifest is unreadable, use
-`references: update bibliography`.
+and projected titles. If the HEAD manifest exists but is unreadable, warn on
+stderr and use `references: update bibliography`. A path missing from HEAD is
+expected absence; any other git failure is an error, never a first commit.
 
 ## Error handling
 

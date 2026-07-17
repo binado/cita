@@ -119,8 +119,8 @@ pub enum Error {
         first: String,
         second: String,
     },
-    #[error("paper `{0}` was not found")]
-    PaperNotFound(String),
+    #[error("reference `{0}` was not found")]
+    ReferenceNotFound(String),
     #[error("invalid source for `{key}`: {message}")]
     InvalidSource { key: String, message: String },
     #[error(transparent)]
@@ -324,7 +324,7 @@ impl Manifest {
         for selector in selectors {
             let item = self
                 .find(selector)?
-                .ok_or_else(|| Error::PaperNotFound(selector.clone()))?;
+                .ok_or_else(|| Error::ReferenceNotFound(selector.clone()))?;
             if !keys.contains(&item.key) {
                 keys.push(item.key);
             }
@@ -381,7 +381,18 @@ impl Manifest {
 
     pub fn verify_bibliography(&self) -> Result<(), Error> {
         let expected = self.render_bibliography()?;
-        let actual = fs::read(&self.bibliography_path).ok();
+        // A missing file is drift (repairable by `cita generate`); any other
+        // read failure is an environment problem and must not masquerade as it.
+        let actual = match fs::read(&self.bibliography_path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(source) => {
+                return Err(Error::Read {
+                    path: self.bibliography_path.clone(),
+                    source,
+                });
+            }
+        };
         if actual.as_deref() != Some(expected.as_bytes()) {
             return Err(Error::BibliographyDrift {
                 path: self.bibliography_path.clone(),
@@ -596,6 +607,25 @@ mod tests {
             fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap(),
             before_bib
         );
+    }
+
+    #[test]
+    fn read_failures_are_not_reported_as_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        Manifest::create(dir.path()).unwrap();
+        let bibliography = dir.path().join(BIBLIOGRAPHY_FILE);
+        fs::remove_file(&bibliography).unwrap();
+        assert!(matches!(
+            Manifest::load_verified(dir.path().join(MANIFEST_FILE)),
+            Err(Error::BibliographyDrift { .. })
+        ));
+        // A directory at the bibliography path makes fs::read fail with an
+        // error other than NotFound, which must surface as a read failure.
+        fs::create_dir(&bibliography).unwrap();
+        assert!(matches!(
+            Manifest::load_verified(dir.path().join(MANIFEST_FILE)),
+            Err(Error::Read { .. })
+        ));
     }
 
     #[test]

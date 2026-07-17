@@ -3,7 +3,7 @@ use thiserror::Error as ThisError;
 
 #[derive(Clone, Debug, PartialEq, Eq, ThisError)]
 pub enum Error {
-    #[error("invalid paper locator: {0}")]
+    #[error("invalid reference locator: {0}")]
     InvalidLocator(String),
 }
 

@@ -25,7 +25,7 @@ pub struct Reference {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Identifiers {
-    /// Normalized DOI values. BTree-backed vectors keep serialized order stable.
+    /// Normalized DOI values, in whatever order the producing source stored.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dois: Vec<String>,
     /// Normalized, versionless arXiv identifiers.

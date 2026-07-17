@@ -19,6 +19,9 @@ const DEFAULT_USER_AGENT: &str = concat!("cita-inspire-client/", env!("CARGO_PKG
 const MAX_BATCH_RECORDS: usize = 100;
 const MAX_ENCODED_QUERY: usize = 6 * 1024;
 const MAX_429_RETRIES: usize = 3;
+// The base URL is configurable, so a server-supplied Retry-After is honored
+// only up to this ceiling to keep a misbehaving endpoint from hanging the CLI.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -343,7 +346,7 @@ impl Client {
 
     pub async fn refresh_records(&self, ids: &[u64]) -> Result<Vec<InspireSnapshot>, Error> {
         let mut output = Vec::with_capacity(ids.len());
-        for batch in batch_ids(ids)? {
+        for batch in batch_ids(ids) {
             let (json_url, bib_url) = self.search_urls(&batch)?;
             let json = self
                 .request(json_url, format!("INSPIRE records {batch:?}"))
@@ -466,7 +469,12 @@ impl Client {
                     .get(RETRY_AFTER)
                     .and_then(|value| value.to_str().ok())
                     .and_then(retry_after_delay)
-                    .unwrap_or(self.retry_fallback);
+                    .unwrap_or(self.retry_fallback)
+                    .min(MAX_RETRY_AFTER);
+                eprintln!(
+                    "INSPIRE rate limited the request for {resource}; \
+                     retrying in {delay:?} (attempt {retries} of {MAX_429_RETRIES})"
+                );
                 tokio::time::sleep(delay).await;
                 continue;
             }
@@ -476,7 +484,10 @@ impl Client {
             if !status.is_success() {
                 return Err(Error::HttpStatus {
                     status,
-                    body: response.text().await.unwrap_or_default(),
+                    body: response
+                        .text()
+                        .await
+                        .unwrap_or_else(|error| format!("(unreadable response body: {error})")),
                 });
             }
             return response.text().await.map_err(Error::Transport);
@@ -680,7 +691,7 @@ struct SearchHits {
     hits: Vec<LiteratureRecord>,
 }
 
-fn batch_ids(ids: &[u64]) -> Result<Vec<Vec<u64>>, Error> {
+fn batch_ids(ids: &[u64]) -> Vec<Vec<u64>> {
     let mut batches: Vec<Vec<u64>> = Vec::new();
     for id in ids {
         let needs_new = batches.last().is_some_and(|batch| {
@@ -695,7 +706,7 @@ fn batch_ids(ids: &[u64]) -> Result<Vec<Vec<u64>>, Error> {
         }
         batches.last_mut().expect("batch exists").push(*id);
     }
-    Ok(batches)
+    batches
 }
 fn encoded_query_len(ids: &[u64]) -> usize {
     let query = ids
@@ -792,8 +803,6 @@ pub enum Error {
     HttpStatus { status: StatusCode, body: String },
     #[error("INSPIRE returned malformed data: {0}")]
     Malformed(String),
-    #[error("invalid INSPIRE batch: {0}")]
-    InvalidBatch(String),
 }
 
 #[cfg(test)]
@@ -817,5 +826,33 @@ mod tests {
         assert_eq!(projected.authors, ["Aad, G."]);
         assert_eq!(projected.identifiers.arxiv, ["1207.7214"]);
         snapshot.validate().unwrap();
+    }
+
+    #[test]
+    fn batching_splits_at_the_record_limit_and_respects_the_query_limit() {
+        let ids = (1..=205).collect::<Vec<u64>>();
+        let batches = batch_ids(&ids);
+        assert_eq!(
+            batches.iter().map(Vec::len).collect::<Vec<_>>(),
+            [100, 100, 5]
+        );
+        assert_eq!(batches.concat(), ids);
+        assert!(
+            batches
+                .iter()
+                .all(|batch| encoded_query_len(batch) <= MAX_ENCODED_QUERY)
+        );
+        assert!(batch_ids(&[]).is_empty());
+    }
+
+    #[test]
+    fn retry_after_accepts_seconds_and_http_dates() {
+        assert_eq!(retry_after_delay("7"), Some(Duration::from_secs(7)));
+        let future = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(300));
+        let delay = retry_after_delay(&future).unwrap();
+        assert!(delay > Duration::from_secs(250) && delay <= Duration::from_secs(300));
+        let past = httpdate::fmt_http_date(SystemTime::now() - Duration::from_secs(300));
+        assert_eq!(retry_after_delay(&past), Some(Duration::ZERO));
+        assert_eq!(retry_after_delay("soon"), None);
     }
 }

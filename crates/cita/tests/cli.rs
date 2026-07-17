@@ -115,6 +115,59 @@ fn init_git(directory: &Path) {
     git_success(directory, &["config", "user.name", "Cita Test"]);
 }
 
+fn cita_without_git(cwd: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_cita"))
+        .current_dir(cwd)
+        .args(args)
+        .env("NO_COLOR", "1")
+        .env("PATH", "")
+        .output()
+        .unwrap()
+}
+
+fn sortable_library(directory: &Path) {
+    success(cita(directory, &["init"]));
+    let input = format!(
+        "{}\n{}\n{}",
+        entry(
+            "K.later",
+            "Beta result",
+            "author={Zimmerman, Zed}, year={2020},"
+        ),
+        entry(
+            "K.early",
+            "Delta result",
+            "author={Aaronson, Ann}, year={1990},"
+        ),
+        entry("K.undated", "Alpha result", "author={Median, Mia},")
+    );
+    success(cita_stdin(directory, &["import", "-"], &input));
+}
+
+fn key_positions(output: &str, keys: [&str; 3]) -> [usize; 3] {
+    keys.map(|key| {
+        output
+            .find(key)
+            .unwrap_or_else(|| panic!("{key} missing from:\n{output}"))
+    })
+}
+
+fn arxiv_library(directory: &Path) {
+    success(cita(directory, &["init"]));
+    let input = format!(
+        "{}\n{}",
+        entry("Zed", "Cached reference", "eprint={2001.00001},"),
+        entry("Alpha", "No eprint", "doi={10.1000/alpha},")
+    );
+    success(cita_stdin(directory, &["import", "-"], &input));
+}
+
+fn cached_pdf(directory: &Path, bytes: &[u8]) {
+    let pdf = directory.join(".cita/files/arxiv/2001.00001.pdf");
+    fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+    fs::write(pdf, bytes).unwrap();
+}
+
 #[test]
 fn init_creates_schema_two_and_imports_an_existing_bibliography() {
     let empty = tempfile::tempdir().unwrap();
@@ -307,4 +360,199 @@ fn commit_forces_only_the_two_tracked_artifacts_and_leaves_other_staging_alone()
         git_success(directory.path(), &["diff", "--cached", "--name-only"]),
         "notes.txt\n"
     );
+}
+
+#[test]
+fn remove_is_atomic_and_resolves_identity_selectors() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    let input = format!(
+        "{}\n{}",
+        entry("Alpha", "First", "doi={10.1000/example},"),
+        entry("Zed", "Second", "")
+    );
+    success(cita_stdin(directory.path(), &["import", "-"], &input));
+    let manifest_path = directory.path().join("cita.toml");
+    let before = fs::read(&manifest_path).unwrap();
+    let error = failure(cita(directory.path(), &["remove", "Alpha", "missing"]));
+    assert!(
+        error.contains("reference `missing` was not found"),
+        "{error}"
+    );
+    assert_eq!(fs::read(&manifest_path).unwrap(), before);
+    assert_eq!(
+        success(cita(directory.path(), &["remove", "doi:10.1000/example"])),
+        "Removed Alpha\n"
+    );
+    assert!(
+        !fs::read_to_string(&manifest_path)
+            .unwrap()
+            .contains("Alpha")
+    );
+    assert!(
+        !fs::read_to_string(directory.path().join("references.bib"))
+            .unwrap()
+            .contains("First")
+    );
+}
+
+#[test]
+fn list_order_desc_reverses_the_key_sort() {
+    let directory = tempfile::tempdir().unwrap();
+    sortable_library(directory.path());
+    let ascending = success(cita(directory.path(), &["list"]));
+    let [early, later, undated] = key_positions(&ascending, ["K.early", "K.later", "K.undated"]);
+    assert!(early < later && later < undated, "{ascending}");
+    let descending = success(cita(directory.path(), &["list", "--order", "desc"]));
+    let [early, later, undated] = key_positions(&descending, ["K.early", "K.later", "K.undated"]);
+    assert!(undated < later && later < early, "{descending}");
+}
+
+#[test]
+fn list_sorts_by_title_and_author() {
+    let directory = tempfile::tempdir().unwrap();
+    sortable_library(directory.path());
+    let by_title = success(cita(directory.path(), &["list", "--sort-by", "title"]));
+    let [early, later, undated] = key_positions(&by_title, ["K.early", "K.later", "K.undated"]);
+    assert!(undated < later && later < early, "{by_title}");
+    let by_author = success(cita(directory.path(), &["list", "--sort-by", "author"]));
+    let [early, later, undated] = key_positions(&by_author, ["K.early", "K.later", "K.undated"]);
+    assert!(early < undated && undated < later, "{by_author}");
+}
+
+#[test]
+fn list_sorts_by_year_and_keeps_missing_years_last() {
+    let directory = tempfile::tempdir().unwrap();
+    sortable_library(directory.path());
+    let ascending = success(cita(directory.path(), &["list", "--sort-by", "year"]));
+    let [early, later, undated] = key_positions(&ascending, ["K.early", "K.later", "K.undated"]);
+    assert!(early < later && later < undated, "{ascending}");
+    let descending = success(cita(
+        directory.path(),
+        &["list", "--sort-by", "year", "--order", "desc"],
+    ));
+    let [early, later, undated] = key_positions(&descending, ["K.early", "K.later", "K.undated"]);
+    assert!(later < early && early < undated, "{descending}");
+}
+
+#[test]
+fn fetch_reuses_cached_pdf_and_reports_missing_arxiv_id() {
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    cached_pdf(directory.path(), b"%PDF-cached");
+    let nested = directory.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+    assert_eq!(
+        success(cita(&nested, &["fetch", "Zed"])),
+        "Already fetched Zed: https://arxiv.org/pdf/2001.00001\n"
+    );
+    let error = failure(cita(&nested, &["fetch", "--force", "Alpha"]));
+    assert!(
+        error.contains("reference `Alpha` has no arXiv eprint"),
+        "{error}"
+    );
+}
+
+#[test]
+fn fetch_dry_run_prints_url_without_touching_the_cache() {
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    fs::remove_dir_all(directory.path().join(".cita")).unwrap();
+    assert_eq!(
+        success(cita(directory.path(), &["fetch", "--dry-run", "Zed"])),
+        "https://arxiv.org/pdf/2001.00001\n[dry run] skipped download\n"
+    );
+    assert!(!directory.path().join(".cita").exists());
+}
+
+#[test]
+fn fetch_force_and_dry_run_are_mutually_exclusive() {
+    let directory = tempfile::tempdir().unwrap();
+    let error = failure(cita(
+        directory.path(),
+        &["fetch", "--force", "--dry-run", "Zed"],
+    ));
+    assert!(error.contains("cannot be used with"), "{error}");
+}
+
+#[test]
+fn fetch_suggests_force_for_an_invalid_cached_pdf() {
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    cached_pdf(directory.path(), b"not a PDF");
+    let error = failure(cita(directory.path(), &["fetch", "Zed"]));
+    assert!(error.contains("retry with --force"), "{error}");
+}
+
+#[test]
+fn open_no_download_errors_on_a_cache_miss_without_creating_the_cache() {
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    fs::remove_dir_all(directory.path().join(".cita")).unwrap();
+    let error = failure(cita(directory.path(), &["open", "--no-download", "Zed"]));
+    assert!(error.contains("PDF is not cached"), "{error}");
+    assert!(error.contains("rerun without --no-download"), "{error}");
+    assert!(!directory.path().join(".cita").exists());
+}
+
+#[test]
+fn open_no_download_suggests_dropping_the_flag_for_an_invalid_cached_pdf() {
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    cached_pdf(directory.path(), b"not a PDF");
+    let error = failure(cita(directory.path(), &["open", "--no-download", "Zed"]));
+    assert!(
+        error.contains("drop --no-download and retry with --force"),
+        "{error}"
+    );
+}
+
+#[test]
+fn commit_reports_a_git_launch_failure_instead_of_guessing() {
+    let directory = tempfile::tempdir().unwrap();
+    init_git(directory.path());
+    success(cita(directory.path(), &["init"]));
+    let error = failure(cita_without_git(directory.path(), &["commit"]));
+    assert!(error.contains("could not run git"), "{error}");
+}
+
+#[test]
+fn init_warns_and_uses_the_current_directory_when_git_cannot_run() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = cita_without_git(directory.path(), &["init"]);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    success(output);
+    assert!(stderr.contains("could not run git"), "{stderr}");
+    assert!(directory.path().join("cita.toml").is_file());
+}
+
+#[test]
+fn commit_surfaces_corrupt_history_instead_of_pretending_a_first_commit() {
+    let directory = tempfile::tempdir().unwrap();
+    init_git(directory.path());
+    success(cita(directory.path(), &["init"]));
+    success(cita(directory.path(), &["commit"]));
+    corrupt_loose_objects(directory.path());
+    success(cita_stdin(
+        directory.path(),
+        &["import", "-"],
+        &entry("A", "Alpha", ""),
+    ));
+    let error = failure(cita(directory.path(), &["commit"]));
+    assert!(error.contains("git show HEAD:cita.toml failed"), "{error}");
+}
+
+fn corrupt_loose_objects(directory: &Path) {
+    for shard in fs::read_dir(directory.join(".git/objects")).unwrap() {
+        let shard = shard.unwrap();
+        if !shard.file_type().unwrap().is_dir() || shard.file_name().len() != 2 {
+            continue;
+        }
+        for object in fs::read_dir(shard.path()).unwrap() {
+            // Loose objects are read-only; replace them instead of rewriting.
+            let path = object.unwrap().path();
+            fs::remove_file(&path).unwrap();
+            fs::write(&path, b"garbage").unwrap();
+        }
+    }
 }
