@@ -5,6 +5,4 @@ mod snapshot;
 mod wire;
 
 pub use client::{Client, ClientBuilder, Error, RetryEvent};
-pub use snapshot::{
-    ArxivEprint, Author, Collaboration, Doi, InspireSnapshot, PublicationInfo, Title, UrlValue,
-};
+pub use snapshot::InspireRecord;

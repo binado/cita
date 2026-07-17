@@ -188,7 +188,7 @@ fn init_creates_schema_two_and_imports_an_existing_bibliography() {
     assert!(
         fs::read_to_string(empty.path().join("cita.toml"))
             .unwrap()
-            .starts_with("schema = 2")
+            .starts_with("schema = 3")
     );
     success(cita(empty.path(), &["list"]));
 
@@ -200,7 +200,7 @@ fn init_creates_schema_two_and_imports_an_existing_bibliography() {
     .unwrap();
     success(cita(imported.path(), &["init"]));
     let manifest = fs::read_to_string(imported.path().join("cita.toml")).unwrap();
-    assert!(manifest.contains("kind = \"bibtex\""), "{manifest}");
+    assert!(manifest.contains("source = \"import\""), "{manifest}");
     assert!(success(cita(imported.path(), &["list"])).contains("Alpha"));
 }
 
