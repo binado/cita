@@ -2,9 +2,9 @@
 
 ## What this is
 
-Cita is a Git-friendly bibliography CLI. INSPIRE supplies complete BibTeX
-entries, which Cita validates and stores canonically in `references.bib`. Cita
-does not render bibliographic fields. Rust edition 2024, MSRV 1.88.
+Cita is a Git-friendly bibliography CLI. Provider snapshots are authoritative
+in schema-2 `cita.toml`; `references.bib` is a deterministic, tracked generated
+artifact. Rust edition 2024, MSRV 1.88.
 
 ## Commands
 
@@ -16,6 +16,8 @@ cargo test --test cli
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p cita -- add 1207.7214
+cargo run -p cita -- import local.bib
+cargo run -p cita -- generate
 ```
 
 CI runs format, clippy-as-errors, test, and build on 1.88 and stable. Tests are
@@ -31,28 +33,31 @@ Use Conventional Commits: `<type>: <description>`.
 cita-core
    ↑              ↑                    ↑
 cita-bibliography cita-inspire-client  cita-documents
-   └──────────────┴──────── cita ──────┘
+   └──────────┬───┘                    │
+        cita-manifest ─────────────────┤
+              └──────── cita ──────────┘
 ```
 
-- `cita-core`: `Locator` parsing plus arXiv and DOI normalization.
-- `cita-bibliography`: owns
-  `references.bib`, raw-entry preservation, semantic projections, identity
-  validation, deterministic rendering, and atomic writes.
-- `cita-inspire-client`: direct `format=bibtex` single and batched requests,
-  bounded query chunks, and 429 retry handling.
+- `cita-core`: `Reference`, provider traits, locators, and normalization.
+- `cita-bibliography`: strict standalone BibTeX snapshots, projections,
+  raw-entry re-keying, and generic `biblatex::Entry` rendering.
+- `cita-inspire-client`: typed INSPIRE JSON/BibTeX snapshots, stable-record-ID
+  refresh batches, bounded queries, and 429 retries.
+- `cita-manifest`: schema-2 authority, identity indexes, deterministic TOML,
+  generated bibliography verification, and coordinated writes.
 - `cita-documents`: accepts a validated arXiv ID and atomically caches PDFs
   beneath `.cita/files/arxiv`.
 - `cita`: CLI, parent discovery, sync reconciliation, and scoped Git commits.
 
 ## Key decisions
 
-### Raw INSPIRE entries
+### Source snapshots and raw entries
 
-Storage parses each source twice: `biblatex::RawBibliography` supplies byte spans
-for complete raw entry blocks; semantic `biblatex::Bibliography` supplies title,
-author, year, DOI, and eprint projections. Rendering sorts the `BTreeMap` by
-texkey, joins raw blocks with one blank line, and appends one newline. Do not add
-a handwritten BibTeX writer.
+`cita.toml` snapshots are authoritative; projections are derived. INSPIRE stores
+selected typed JSON fields plus authoritative BibTeX. Imports store one exact
+standalone entry. BibTeX parsing uses raw spans plus semantic `biblatex` parsing.
+Rendering sorts by local key, changes only the raw key token, joins entries with
+one blank line, and appends one newline. Do not add a handwritten writer.
 
 Only entries and whitespace are allowed. Reject directives, comments/non-entry
 content, malformed or duplicate entries, missing titles, texkeys outside
@@ -60,34 +65,35 @@ content, malformed or duplicate entries, missing titles, texkeys outside
 
 ### Atomic mutations
 
-Add, remove, and sync validate a complete candidate map before writing. Writes
-use `NamedTempFile` in the destination directory, `sync_all`, and `persist`.
-Never partially update `references.bib` after a failed network response,
-validation, selector, or reconciliation.
+Add, import, remove, and sync validate a complete candidate before writing.
+Persist and sync `references.bib` first, then persist and sync `cita.toml` as the
+commit point. The old manifest remains authoritative after an interrupted
+second write, and `cita generate` repairs detectable drift.
 
 ### INSPIRE sync
 
-Batch at 100 texkeys or a 6 KiB encoded `q` value. Queries are direct searches:
-`q=texkey:K1 or texkey:K2`, `format=bibtex`, and matching `size`. Batches run
-sequentially. Retry 429 three times using `Retry-After`, otherwise five seconds.
+Refresh by stable INSPIRE record ID. Batch at 100 records or a 6 KiB encoded `q`
+value. Fetch JSON and BibTeX searches sequentially and match each raw entry to
+exactly one JSON record through returned texkeys. Retry 429 three times using
+`Retry-After`, otherwise five seconds.
 
-Every local key must resolve exactly once and every returned entry must be
-explained. If an obsolete key returns a new primary key, confirm it with a
-single-key lookup, change only the returned key token back to the local key, and
-warn. Multiple local keys resolving to one current record are an error.
+Every managed record and returned result must be explained. Local citation keys
+are independent from provider texkeys and never change during refresh. Imported
+BibTeX snapshots cause no network request.
 
 ### Selectors and documents
 
-Exact texkey wins, then normalized DOI/eprint. Unmatched locators resolve through
-INSPIRE. `fetch` and `open` may save transient entries and should direct stale
-metadata warnings to `cita sync`. Documents use the parsed `eprint`; stored IDs
-are versionless and cache paths retain legacy arXiv archive directories.
+Exact local key wins, then provider ID, normalized DOI, and normalized arXiv ID.
+Transient `fetch` and `open` resolve INSPIRE JSON only unless `--save` requires
+the full snapshot. Documents use the projected arXiv ID; stored IDs are
+versionless and cache paths retain legacy arXiv archive directories.
 
 ### Git
 
-`cita commit` stages and commits only `references.bib`. Commit messages derive
-added, removed, and modified texkeys and include parsed titles. If the HEAD blob
-is unreadable, use `references: update bibliography`.
+`cita commit` validates consistency and stages only `cita.toml` and
+`references.bib`. Commit messages derive added, removed, and modified local keys
+and projected titles. If the HEAD manifest is unreadable, use
+`references: update bibliography`.
 
 ## Error handling
 

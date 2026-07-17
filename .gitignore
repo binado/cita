@@ -1,3 +1,4 @@
 /target
 *.bib
+!references.bib
 .DS_Store

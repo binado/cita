@@ -1,6 +1,6 @@
 [package]
-name = "cita-bibliography"
-description = "Canonical BibTeX storage for Cita"
+name = "cita-manifest"
+description = "Authoritative source-snapshot storage for Cita"
 readme = "../../README.md"
 keywords = ["bibliography", "bibtex", "citations"]
 categories = ["command-line-utilities", "science"]
@@ -12,11 +12,13 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-biblatex.workspace = true
+cita-bibliography = { path = "../cita-bibliography" }
 cita-core = { path = "../cita-core" }
+cita-inspire-client = { path = "../cita-inspire-client" }
 serde.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

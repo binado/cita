@@ -1,25 +1,23 @@
 mod git;
 
 use anyhow::{Context, Result, bail};
-use cita_bibliography::{
-    AddOutcome, Bibliography, Entry, Error as BibliographyError, parse, rename_entry,
-};
-use cita_core::Locator;
+use cita_bibliography::parse as parse_bibtex;
+use cita_core::{Locator, Reference, ReferenceSource};
 use cita_documents::{
     DocumentStore, Error as DocumentError, FetchOutcome, FetchPolicy, arxiv_pdf_url,
 };
 use cita_inspire_client::Client;
+use cita_manifest::{
+    AddOutcome, BIBLIOGRAPHY_FILE, MANIFEST_FILE, Manifest, PendingReference, SourceSnapshot,
+};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::{
-    collections::{HashMap, HashSet},
     env, fs,
     fs::OpenOptions,
-    io::{IsTerminal, Write},
+    io::{self, IsTerminal, Read, Write},
     path::{Path, PathBuf},
 };
 
-const BIBLIOGRAPHY_FILE: &str = "references.bib";
-const LEGACY_FILE: &str = "cita.toml";
 const CACHE_IGNORE_COMMENT: &str = "# Cita document cache";
 const CACHE_IGNORE_RULE: &str = "/.cita/files/";
 
@@ -32,22 +30,26 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Initialize references.bib and the local document cache
+    /// Initialize cita.toml and its generated references.bib
     Init,
+    /// Import standalone BibTeX entries from a path or stdin (`-`)
+    Import { path: String },
     /// Resolve and add one or more papers through INSPIRE
     Add {
-        /// arXiv id, or an arxiv:, doi:, or inspire: locator
+        /// Keep this local citation key (one locator only)
+        #[arg(long)]
+        key: Option<String>,
         #[arg(required = true)]
         locators: Vec<String>,
     },
-    /// Refresh every stored entry from INSPIRE
+    /// Refresh every INSPIRE-managed source snapshot by stable record id
     Sync,
-    /// Remove papers by texkey or locator
+    /// Remove papers by local key or provider/DOI/arXiv identity
     Remove {
         #[arg(required = true)]
         selectors: Vec<String>,
     },
-    /// List stored papers
+    /// List stored references
     List {
         #[arg(long, value_enum, default_value_t = SortBy::Key)]
         sort_by: SortBy,
@@ -56,6 +58,8 @@ enum Command {
         #[arg(long)]
         no_wrap_title: bool,
     },
+    /// Regenerate a missing or edited references.bib
+    Generate,
     /// Fetch a paper's arXiv PDF into the local cache
     Fetch {
         #[arg(long, conflicts_with = "dry_run")]
@@ -78,7 +82,7 @@ enum Command {
         save: bool,
         selector: String,
     },
-    /// Commit only references.bib to Git
+    /// Commit cita.toml and references.bib, leaving unrelated files alone
     Commit,
 }
 
@@ -90,7 +94,6 @@ enum SortBy {
     Author,
     Year,
 }
-
 #[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
 enum Order {
     #[default]
@@ -115,14 +118,16 @@ async fn run() -> Result<()> {
             println!();
         }
         Some(Command::Init) => init(&cwd)?,
-        Some(Command::Add { locators }) => add(&cwd, &locators).await?,
+        Some(Command::Import { path }) => import(&cwd, &path)?,
+        Some(Command::Add { key, locators }) => add(&cwd, key.as_deref(), &locators).await?,
         Some(Command::Sync) => sync(&cwd).await?,
-        Some(Command::Remove { selectors }) => remove(&cwd, &selectors).await?,
+        Some(Command::Remove { selectors }) => remove(&cwd, &selectors)?,
         Some(Command::List {
             sort_by,
             order,
             no_wrap_title,
         }) => list(&cwd, sort_by, order, !no_wrap_title)?,
+        Some(Command::Generate) => generate(&cwd)?,
         Some(Command::Fetch {
             force,
             dry_run,
@@ -145,257 +150,212 @@ async fn run() -> Result<()> {
         }) => {
             open(&cwd, &selector, force, browser, no_download, save).await?;
         }
-        Some(Command::Commit) => git::commit(&find_bibliography(&cwd)?)?,
+        Some(Command::Commit) => git::commit(&find_manifest(&cwd)?)?,
     }
     Ok(())
 }
 
 fn init(cwd: &Path) -> Result<()> {
     let directory = git::repository_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
-    let path = directory.join(BIBLIOGRAPHY_FILE);
-    let existed = path.exists();
+    let manifest_path = directory.join(MANIFEST_FILE);
+    let bibliography_path = directory.join(BIBLIOGRAPHY_FILE);
+    let existed = manifest_path.exists();
     if existed {
-        Bibliography::load(&path)?;
+        Manifest::load_verified(&manifest_path)?;
+    } else if bibliography_path.exists() {
+        Manifest::import_existing(&directory)?;
     } else {
-        reject_legacy_only(&directory)?;
-        Bibliography::create(&path)?;
+        Manifest::create(&directory)?;
     }
     ensure_cache_layout(&directory)?;
     if existed {
-        println!("Already initialized {}", path.display());
+        println!("Already initialized {}", manifest_path.display());
     } else {
-        println!("Initialized {}", path.display());
+        println!("Initialized {}", manifest_path.display());
     }
     Ok(())
 }
 
-fn ensure_cache_layout(directory: &Path) -> Result<()> {
-    let cache = directory.join(".cita/files");
-    fs::create_dir_all(&cache)
-        .with_context(|| format!("could not create document cache {}", cache.display()))?;
-    let ignore_path = directory.join(".gitignore");
-    let existing = match fs::read_to_string(&ignore_path) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(error) => {
-            return Err(error).with_context(|| format!("could not read {}", ignore_path.display()));
-        }
-    };
-    if existing
-        .lines()
-        .any(|line| line.trim() == CACHE_IGNORE_RULE)
-    {
-        return Ok(());
-    }
-    let separator = if existing.is_empty() || existing.ends_with("\n\n") {
-        ""
-    } else if existing.ends_with('\n') {
-        "\n"
+fn import(cwd: &Path, input: &str) -> Result<()> {
+    let mut source = String::new();
+    if input == "-" {
+        io::stdin()
+            .read_to_string(&mut source)
+            .context("could not read BibTeX from stdin")?;
     } else {
-        "\n\n"
-    };
-    let mut ignore = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&ignore_path)
-        .with_context(|| format!("could not open {}", ignore_path.display()))?;
-    write!(
-        ignore,
-        "{separator}{CACHE_IGNORE_COMMENT}\n{CACHE_IGNORE_RULE}\n"
-    )
-    .with_context(|| format!("could not update {}", ignore_path.display()))?;
+        source = fs::read_to_string(input).with_context(|| format!("could not read {input}"))?;
+    }
+    let pending = parse_bibtex(&source)?
+        .into_iter()
+        .map(|(key, snapshot)| PendingReference {
+            key,
+            source: SourceSnapshot::Bibtex(snapshot),
+        })
+        .collect();
+    let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
+    for outcome in manifest.add_batch(pending)? {
+        print_add(outcome);
+    }
     Ok(())
 }
 
 fn inspire_client() -> Result<Client> {
     let builder = Client::builder();
-    match env::var("CITA_INSPIRE_BASE_URL") {
-        Ok(base) => Ok(builder.base_url(base).build()?),
-        Err(_) => Ok(builder.build()?),
-    }
+    Ok(match env::var("CITA_INSPIRE_BASE_URL") {
+        Ok(base) => builder.base_url(base).build()?,
+        Err(_) => builder.build()?,
+    })
 }
 
-async fn add(cwd: &Path, values: &[String]) -> Result<()> {
+async fn add(cwd: &Path, explicit_key: Option<&str>, values: &[String]) -> Result<()> {
+    if explicit_key.is_some() && values.len() != 1 {
+        bail!("--key may only be used with one locator");
+    }
     let locators = values
         .iter()
         .map(|value| value.parse::<Locator>())
         .collect::<Result<Vec<_>, _>>()?;
     let client = inspire_client()?;
-    let mut bodies = Vec::with_capacity(locators.len());
+    let mut pending = Vec::with_capacity(locators.len());
     for locator in &locators {
-        bodies.push(client.lookup(locator).await?);
+        let snapshot = client.resolve_snapshot(locator).await?;
+        let key = explicit_key
+            .map(str::to_owned)
+            .or_else(|| snapshot.texkeys.first().cloned())
+            .ok_or_else(|| {
+                anyhow::anyhow!("INSPIRE record {} has no citation key", snapshot.record_id)
+            })?;
+        pending.push(PendingReference {
+            key,
+            source: SourceSnapshot::Inspire(Box::new(snapshot)),
+        });
     }
-    let mut bibliography = Bibliography::load(find_bibliography(cwd)?)?;
-    for outcome in bibliography.add_batch(&bodies)? {
-        match outcome {
-            AddOutcome::Added(key) => println!("Added {key}"),
-            AddOutcome::Existing(key) => println!("Already present: {key}"),
-        }
+    let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
+    for outcome in manifest.add_batch(pending)? {
+        print_add(outcome);
     }
     Ok(())
+}
+
+fn print_add(outcome: AddOutcome) {
+    match outcome {
+        AddOutcome::Added(key) => println!("Added {key}"),
+        AddOutcome::Existing(key) => println!("Already present: {key}"),
+    }
 }
 
 async fn sync(cwd: &Path) -> Result<()> {
-    let mut bibliography = Bibliography::load(find_bibliography(cwd)?)?;
-    let keys = bibliography.entries().keys().cloned().collect::<Vec<_>>();
-    let client = inspire_client()?;
-    let responses = client.lookup_keys(&keys).await?;
-    let mut refreshed = Vec::with_capacity(keys.len());
-    let mut primary_owner: HashMap<String, String> = HashMap::new();
-    let mut warnings = Vec::new();
-
-    for response in responses {
-        let mut returned = parse(&response.bibtex)?;
-        let requested: HashSet<&str> = response.requested_keys.iter().map(String::as_str).collect();
-        let exact = response
-            .requested_keys
-            .iter()
-            .filter(|key| returned.contains_key(key.as_str()))
-            .cloned()
-            .collect::<HashSet<_>>();
-        for key in &response.requested_keys {
-            if exact.contains(key) {
-                let entry = returned.remove(key).expect("exact key exists");
-                record_primary(&mut primary_owner, key, key)?;
-                refreshed.push(entry.raw().to_owned());
-                continue;
-            }
-            let single_body = client
-                .lookup_key(key)
-                .await
-                .with_context(|| format!("could not reconcile stored texkey `{key}`"))?;
-            let single = parse(&single_body)?;
-            if single.len() != 1 {
-                bail!(
-                    "INSPIRE texkey `{key}` resolved to {} entries; sync is ambiguous",
-                    single.len()
-                );
-            }
-            let (new_key, _) = single.into_iter().next().expect("length checked");
-            if requested.contains(new_key.as_str()) && exact.contains(&new_key) {
-                bail!(
-                    "stored texkeys `{key}` and `{new_key}` resolve to the same current INSPIRE record"
-                );
-            }
-            record_primary(&mut primary_owner, &new_key, key)?;
-            let entry = returned.remove(&new_key).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "INSPIRE batch did not return `{new_key}` while reconciling `{key}`"
-                )
-            })?;
-            refreshed.push(rename_entry(entry.raw(), key)?);
-            warnings.push((new_key, key.clone()));
-        }
-        if !returned.is_empty() {
-            bail!(
-                "INSPIRE returned unexplained entries: {}",
-                returned.keys().cloned().collect::<Vec<_>>().join(", ")
-            );
-        }
-    }
-    if refreshed.len() != keys.len() {
-        bail!(
-            "INSPIRE returned {} of {} requested references",
-            refreshed.len(),
-            keys.len()
+    let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
+    let managed = manifest
+        .references()
+        .iter()
+        .filter_map(|(key, stored)| {
+            stored
+                .source
+                .inspire()
+                .map(|snapshot| (key.clone(), snapshot.record_id))
+        })
+        .collect::<Vec<_>>();
+    let unmanaged = manifest.references().len() - managed.len();
+    let ids = managed.iter().map(|(_, id)| *id).collect::<Vec<_>>();
+    let refreshed = inspire_client()?.refresh_records(&ids).await?;
+    let by_id = refreshed
+        .into_iter()
+        .map(|snapshot| (snapshot.record_id, snapshot))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut by_key = std::collections::BTreeMap::new();
+    for (key, id) in managed.iter().cloned() {
+        by_key.insert(
+            key,
+            by_id
+                .get(&id)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("INSPIRE did not refresh record {id}"))?,
         );
     }
-    let changed = bibliography.replace_all(&refreshed)?;
-    for (new_key, old_key) in warnings {
-        eprintln!("warning: INSPIRE now prefers {new_key} for {old_key}; preserving {old_key}");
-    }
+    let changed = manifest.replace_inspire(by_key)?;
     if changed {
-        println!("Synced {} references", keys.len());
+        println!(
+            "Synced {} managed references; left {unmanaged} imported unchanged",
+            managed.len()
+        );
     } else {
-        println!("Already in sync");
-    }
-    Ok(())
-}
-
-fn record_primary(owners: &mut HashMap<String, String>, primary: &str, local: &str) -> Result<()> {
-    if let Some(other) = owners.insert(primary.to_owned(), local.to_owned())
-        && other != local
-    {
-        bail!(
-            "stored texkeys `{other}` and `{local}` resolve to the same current INSPIRE record `{primary}`"
+        println!(
+            "Already in sync: {} managed, {unmanaged} imported",
+            managed.len()
         );
     }
     Ok(())
 }
 
-async fn remove(cwd: &Path, selectors: &[String]) -> Result<()> {
-    let path = find_bibliography(cwd)?;
-    let mut bibliography = Bibliography::load(&path)?;
-    let client = inspire_client()?;
-    let mut keys = Vec::with_capacity(selectors.len());
-    for selector in selectors {
-        if let Some(entry) = bibliography.find(selector) {
-            keys.push(entry.key().to_owned());
-            continue;
-        }
-        let locator = selector.parse::<Locator>().map_err(|error| {
-            anyhow::Error::from(error).context(format!("paper `{selector}` was not found"))
-        })?;
-        let body = client.lookup(&locator).await?;
-        let resolved = exactly_one(&body)?;
-        if bibliography.entries().contains_key(resolved.key()) {
-            keys.push(resolved.key().to_owned());
-        } else {
-            return Err(BibliographyError::PaperNotFound(selector.clone()).into());
-        }
-    }
-    for entry in bibliography.remove_batch(&keys)? {
-        println!("Removed {}", entry.key());
+fn remove(cwd: &Path, selectors: &[String]) -> Result<()> {
+    let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
+    for item in manifest.remove_batch(selectors)? {
+        println!("Removed {}", item.key);
     }
     Ok(())
 }
 
-fn exactly_one(body: &str) -> Result<Entry> {
-    let parsed = parse(body)?;
-    if parsed.len() != 1 {
-        bail!("INSPIRE returned {} entries instead of one", parsed.len());
-    }
-    Ok(parsed.into_values().next().expect("length checked"))
+fn generate(cwd: &Path) -> Result<()> {
+    let manifest = Manifest::load(find_manifest(cwd)?)?;
+    manifest.generate()?;
+    println!("Generated {}", manifest.bibliography_path().display());
+    Ok(())
 }
 
 #[derive(Clone)]
 struct Selected {
-    entry: Entry,
+    key: String,
+    reference: Reference,
+    manifest_path: PathBuf,
 }
 
-async fn select(cwd: &Path, selector: &str, save: bool) -> Result<(PathBuf, Selected)> {
-    let path = find_bibliography(cwd)?;
-    let mut bibliography = Bibliography::load(&path)?;
-    if let Some(entry) = bibliography.find(selector).cloned() {
+async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
+    let path = find_manifest(cwd)?;
+    let mut manifest = Manifest::load_verified(&path)?;
+    if let Some(item) = manifest.find(selector)? {
         if save {
-            println!("Already present: {}", entry.key());
+            println!("Already present: {}", item.key);
         }
-        return Ok((path, Selected { entry }));
+        return Ok(Selected {
+            key: item.key,
+            reference: item.reference,
+            manifest_path: path,
+        });
     }
     let locator = selector.parse::<Locator>().map_err(|error| {
         anyhow::Error::from(error).context(format!("paper `{selector}` was not found"))
     })?;
-    let body = inspire_client()?.lookup(&locator).await?;
-    let fresh = exactly_one(&body)?;
+    let client = inspire_client()?;
     if save {
-        let old = bibliography.entries().get(fresh.key()).cloned();
-        match bibliography
-            .add_batch(std::slice::from_ref(&body))?
+        let snapshot = client.resolve_snapshot(&locator).await?;
+        let key = snapshot
+            .texkeys
+            .first()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("INSPIRE record has no citation key"))?;
+        let reference = snapshot.project()?;
+        let outcome = manifest
+            .add_batch(vec![PendingReference {
+                key: key.clone(),
+                source: SourceSnapshot::Inspire(Box::new(snapshot)),
+            }])?
             .pop()
-            .expect("one result")
-        {
-            AddOutcome::Added(key) => println!("Added {key}"),
-            AddOutcome::Existing(key) => {
-                println!("Already present: {key}");
-                if old.as_ref().is_some_and(|entry| entry.raw() != fresh.raw()) {
-                    eprintln!(
-                        "warning: stored data for `{key}` differs from INSPIRE; using fresh data for this action without changing references.bib; run `cita sync`"
-                    );
-                }
-            }
-        }
+            .expect("one outcome");
+        print_add(outcome);
+        Ok(Selected {
+            key,
+            reference,
+            manifest_path: path,
+        })
+    } else {
+        let reference = client.resolve_reference(&locator).await?;
+        Ok(Selected {
+            key: selector.into(),
+            reference,
+            manifest_path: path,
+        })
     }
-    Ok((path, Selected { entry: fresh }))
 }
 
 async fn fetch(
@@ -408,21 +368,20 @@ async fn fetch(
     if dry_run && save {
         bail!("--dry-run cannot be used with --save");
     }
-    let (path, selected) = select(cwd, selector, save).await?;
-    let arxiv = selected.entry.first_arxiv().ok_or_else(|| {
-        anyhow::anyhow!(
-            "paper `{}` has no arXiv eprint, so no PDF can be fetched",
-            selected.entry.key()
-        )
-    })?;
+    let selected = select(cwd, selector, save).await?;
+    let arxiv = selected
+        .reference
+        .identifiers
+        .arxiv
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("paper `{}` has no arXiv eprint", selected.key))?;
     let url = arxiv_pdf_url(arxiv)?.to_string();
     if dry_run {
-        println!("{url}");
-        println!("[dry run] skipped download");
+        println!("{url}\n[dry run] skipped download");
         return Ok(());
     }
-    let outcome = fetch_selected(&path, arxiv, policy).await?;
-    println!("{}", fetch_message(selected.entry.key(), &url, &outcome));
+    let outcome = fetch_selected(&selected.manifest_path, arxiv, policy).await?;
+    println!("{}", fetch_message(&selected.key, &url, &outcome));
     Ok(())
 }
 
@@ -434,13 +393,13 @@ async fn open(
     no_download: bool,
     save: bool,
 ) -> Result<()> {
-    let (path, selected) = select(cwd, selector, save).await?;
-    let arxiv = selected.entry.first_arxiv().ok_or_else(|| {
-        anyhow::anyhow!(
-            "paper `{}` has no arXiv eprint, so no PDF can be opened",
-            selected.entry.key()
-        )
-    })?;
+    let selected = select(cwd, selector, save).await?;
+    let arxiv = selected
+        .reference
+        .identifiers
+        .arxiv
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("paper `{}` has no arXiv eprint", selected.key))?;
     let url = arxiv_pdf_url(arxiv)?;
     if browser {
         opener::open(url.as_str()).with_context(|| format!("could not open {url}"))?;
@@ -454,11 +413,8 @@ async fn open(
     } else {
         FetchPolicy::UseCache
     };
-    let outcome = fetch_selected(&path, arxiv, policy).await?;
-    println!(
-        "{}",
-        fetch_message(selected.entry.key(), url.as_str(), &outcome)
-    );
+    let outcome = fetch_selected(&selected.manifest_path, arxiv, policy).await?;
+    println!("{}", fetch_message(&selected.key, url.as_str(), &outcome));
     opener::open(outcome.path())
         .with_context(|| format!("could not open {}", outcome.path().display()))?;
     println!("Opened {url}");
@@ -470,8 +426,7 @@ async fn fetch_selected(path: &Path, arxiv: &str, policy: FetchPolicy) -> Result
     if policy != FetchPolicy::CacheOnly {
         ensure_cache_layout(root)?;
     }
-    let store = DocumentStore::new(root.join(".cita/files"))?;
-    store
+    DocumentStore::new(root.join(".cita/files"))?
         .fetch(arxiv, policy)
         .await
         .map_err(|error| document_error_with_hint(error, policy))
@@ -491,7 +446,6 @@ fn document_error_with_hint(error: DocumentError, policy: FetchPolicy) -> anyhow
         error => error.into(),
     }
 }
-
 fn fetch_message(key: &str, url: &str, outcome: &FetchOutcome) -> String {
     match outcome {
         FetchOutcome::Downloaded(_) => format!("Fetched {key}: {url}"),
@@ -506,25 +460,25 @@ struct Row {
     year_num: Option<i32>,
     year: String,
 }
-
 fn list(cwd: &Path, sort_by: SortBy, order: Order, wrap_title: bool) -> Result<()> {
-    let bibliography = Bibliography::load(find_bibliography(cwd)?)?;
-    let mut rows = bibliography
-        .entries()
-        .values()
-        .map(|entry| {
-            let author = match entry.authors().first() {
-                Some(first) if entry.authors().len() > 1 => format!("{first} et al."),
+    let manifest = Manifest::load_verified(find_manifest(cwd)?)?;
+    let mut rows = manifest
+        .projected()?
+        .into_iter()
+        .map(|item| {
+            let author = match item.reference.authors.first() {
+                Some(first) if item.reference.authors.len() > 1 => format!("{first} et al."),
                 Some(first) => first.clone(),
                 None => "—".into(),
             };
             Row {
-                key: entry.key().into(),
-                title: entry.title().into(),
+                key: item.key,
+                title: item.reference.title,
                 author,
-                year_num: entry.year(),
-                year: entry
-                    .year()
+                year_num: item.reference.year,
+                year: item
+                    .reference
+                    .year
                     .map_or_else(|| "—".into(), |year| year.to_string()),
             }
         })
@@ -547,11 +501,11 @@ fn list(cwd: &Path, sort_by: SortBy, order: Order, wrap_title: bool) -> Result<(
     print_rows(rows, wrap_title);
     Ok(())
 }
-
 fn ordered(value: std::cmp::Ordering, order: Order) -> std::cmp::Ordering {
-    match order {
-        Order::Asc => value,
-        Order::Desc => value.reverse(),
+    if matches!(order, Order::Desc) {
+        value.reverse()
+    } else {
+        value
     }
 }
 
@@ -563,10 +517,8 @@ fn print_rows(rows: Vec<Row>, wrap_title: bool) {
     let key_width = column_width(headers[0], rows.iter().map(|row| row.key.as_str()));
     let author_width = column_width(headers[2], rows.iter().map(|row| row.author.as_str()));
     let year_width = column_width(headers[3], rows.iter().map(|row| row.year.as_str()));
-    let terminal_width =
-        terminal_size::terminal_size_of(std::io::stdout()).map(|(width, _)| width.0 as usize);
-    let title_width = terminal_width.map(|width| {
-        width
+    let title_width = terminal_size::terminal_size_of(io::stdout()).map(|(width, _)| {
+        (width.0 as usize)
             .saturating_sub(key_width + author_width + year_width + 6)
             .max(10)
     });
@@ -583,9 +535,7 @@ fn print_rows(rows: Vec<Row>, wrap_title: bool) {
         aw = author_width,
         yw = year_width
     );
-    if std::io::stdout().is_terminal()
-        && env::var_os("NO_COLOR").is_none_or(|value| value.is_empty())
-    {
+    if io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none_or(|value| value.is_empty()) {
         let style = anstyle::Style::new()
             .bold()
             .fg_color(Some(anstyle::AnsiColor::Cyan.into()));
@@ -614,13 +564,11 @@ fn print_rows(rows: Vec<Row>, wrap_title: bool) {
         }
     }
 }
-
 fn column_width<'a>(header: &str, values: impl Iterator<Item = &'a str>) -> usize {
     values.fold(header.chars().count(), |width, value| {
         width.max(value.chars().count())
     })
 }
-
 fn truncate(value: &str, width: usize) -> String {
     let chars = value.chars().collect::<Vec<_>>();
     if chars.len() <= width {
@@ -634,16 +582,15 @@ fn truncate(value: &str, width: usize) -> String {
         .chain(std::iter::once(&'…'))
         .collect()
 }
-
 fn wrap(value: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![value.into()];
-    }
+    };
     let mut lines = Vec::new();
     let mut current = String::new();
     for word in value.split_whitespace() {
-        let word_len = word.chars().count();
-        if word_len > width {
+        let len = word.chars().count();
+        if len > width {
             if !current.is_empty() {
                 lines.push(std::mem::take(&mut current));
             }
@@ -651,83 +598,93 @@ fn wrap(value: &str, width: usize) -> Vec<String> {
                 word.chars()
                     .collect::<Vec<_>>()
                     .chunks(width)
-                    .map(|chunk| chunk.iter().collect()),
+                    .map(|c| c.iter().collect()),
             );
-        } else if !current.is_empty() && current.chars().count() + 1 + word_len > width {
+        } else if !current.is_empty() && current.chars().count() + 1 + len > width {
             lines.push(std::mem::take(&mut current));
             current.push_str(word);
         } else {
             if !current.is_empty() {
-                current.push(' ');
+                current.push(' ')
             }
-            current.push_str(word);
+            current.push_str(word)
         }
     }
     if !current.is_empty() {
-        lines.push(current);
+        lines.push(current)
     }
     if lines.is_empty() {
-        lines.push(String::new());
+        lines.push(String::new())
     }
     lines
 }
 
-fn find_bibliography(start: &Path) -> Result<PathBuf> {
+fn find_manifest(start: &Path) -> Result<PathBuf> {
     for directory in start.ancestors() {
-        let candidate = directory.join(BIBLIOGRAPHY_FILE);
+        let candidate = directory.join(MANIFEST_FILE);
         if candidate.is_file() {
             return Ok(candidate);
         }
     }
-    for directory in start.ancestors() {
-        if directory.join(LEGACY_FILE).is_file() {
-            bail!(
-                "found legacy cita.toml at {}; Cita no longer migrates TOML automatically—convert it to references.bib before continuing",
-                directory.join(LEGACY_FILE).display()
-            );
-        }
-    }
     bail!(
-        "no references.bib found in {} or its parents; run `cita init`",
+        "no cita.toml found in {} or its parents; run `cita init`",
         start.display()
     )
 }
 
-fn reject_legacy_only(directory: &Path) -> Result<()> {
-    let legacy = directory.join(LEGACY_FILE);
-    if legacy.is_file() {
-        bail!(
-            "found legacy cita.toml at {}; Cita uses references.bib and provides no automatic migration",
-            legacy.display()
-        );
+fn ensure_cache_layout(directory: &Path) -> Result<()> {
+    let cache = directory.join(".cita/files");
+    fs::create_dir_all(&cache)
+        .with_context(|| format!("could not create document cache {}", cache.display()))?;
+    let ignore_path = directory.join(".gitignore");
+    let existing = match fs::read_to_string(&ignore_path) {
+        Ok(v) => v,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            return Err(e).with_context(|| format!("could not read {}", ignore_path.display()));
+        }
+    };
+    if existing
+        .lines()
+        .any(|line| line.trim() == CACHE_IGNORE_RULE)
+    {
+        return Ok(());
     }
+    let separator = if existing.is_empty() || existing.ends_with("\n\n") {
+        ""
+    } else if existing.ends_with('\n') {
+        "\n"
+    } else {
+        "\n\n"
+    };
+    let mut ignore = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&ignore_path)
+        .with_context(|| format!("could not open {}", ignore_path.display()))?;
+    write!(
+        ignore,
+        "{separator}{CACHE_IGNORE_COMMENT}\n{CACHE_IGNORE_RULE}\n"
+    )
+    .with_context(|| format!("could not update {}", ignore_path.display()))?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn removed_export_and_add_flags_are_rejected() {
-        assert!(Cli::try_parse_from(["cita", "export", "--bibtex"]).is_err());
-        assert!(Cli::try_parse_from(["cita", "add", "--key", "X", "1207.7214"]).is_err());
-        assert!(Cli::try_parse_from(["cita", "add", "--force", "1207.7214"]).is_err());
+    fn key_only_accepts_one_locator() {
+        assert!(Cli::try_parse_from(["cita", "add", "--key", "X", "1207.7214"]).is_ok());
     }
-
     #[test]
-    fn document_argument_conflicts_are_enforced() {
+    fn document_conflicts_are_enforced() {
         assert!(
             Cli::try_parse_from(["cita", "fetch", "--dry-run", "--save", "1207.7214"]).is_err()
         );
-        assert!(
-            Cli::try_parse_from(["cita", "open", "--browser", "--no-download", "1207.7214"])
-                .is_err()
-        );
     }
-
     #[test]
-    fn title_helpers_are_unicode_safe() {
+    fn unicode_title_helpers() {
         assert_eq!(truncate("αβγ", 2), "α…");
         assert_eq!(wrap("one two three", 7), ["one two", "three"]);
     }

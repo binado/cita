@@ -1,262 +1,65 @@
-//! Canonical, INSPIRE-managed BibTeX storage.
+//! Strict standalone BibTeX parsing and rendering support.
 
 use biblatex::{
-    Bibliography as ParsedBibliography, ChunksExt, DateValue, PermissiveType, RawBibliography,
+    Bibliography, Chunk, ChunksExt, DateValue, Entry as BibEntry, EntryType, PermissiveType,
+    RawBibliography,
 };
-use cita_core::{Locator, normalize_arxiv, normalize_doi};
-use std::{
-    collections::{BTreeMap, HashMap},
-    fs,
-    io::Write,
-    path::{Path, PathBuf},
+use cita_core::{
+    Identifiers, ProjectionError, Publication, Reference, ReferenceSource, normalize_arxiv,
+    normalize_doi,
 };
-use tempfile::NamedTempFile;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use thiserror::Error;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Entry {
-    key: String,
-    raw: String,
-    title: String,
-    authors: Vec<String>,
-    year: Option<i32>,
-    dois: Vec<String>,
-    eprints: Vec<String>,
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BibtexSnapshot {
+    pub bibtex: String,
 }
 
-impl Entry {
-    pub fn key(&self) -> &str {
-        &self.key
+impl BibtexSnapshot {
+    pub fn new(bibtex: String) -> Result<Self, Error> {
+        let entries = parse(&bibtex)?;
+        if entries.len() != 1 {
+            return Err(Error::InvalidBibtex(format!(
+                "expected one standalone entry, found {}",
+                entries.len()
+            )));
+        }
+        Ok(Self { bibtex })
     }
-    pub fn raw(&self) -> &str {
-        &self.raw
-    }
-    pub fn title(&self) -> &str {
-        &self.title
-    }
-    pub fn authors(&self) -> &[String] {
-        &self.authors
-    }
-    pub fn year(&self) -> Option<i32> {
-        self.year
-    }
-    pub fn dois(&self) -> &[String] {
-        &self.dois
-    }
-    pub fn eprints(&self) -> &[String] {
-        &self.eprints
-    }
-    pub fn first_arxiv(&self) -> Option<&str> {
-        self.eprints.first().map(String::as_str)
+
+    pub fn key(&self) -> Result<String, Error> {
+        Ok(parse_without_semantics(&self.bibtex)?
+            .into_keys()
+            .next()
+            .expect("snapshot validation requires one entry"))
     }
 }
 
-#[derive(Debug)]
-pub struct Bibliography {
-    path: PathBuf,
-    source: String,
-    entries: BTreeMap<String, Entry>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AddOutcome {
-    Added(String),
-    Existing(String),
+impl ReferenceSource for BibtexSnapshot {
+    fn project(&self) -> Result<Reference, ProjectionError> {
+        project_bibtex(&self.bibtex).map_err(|error| ProjectionError::Invalid(error.to_string()))
+    }
 }
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("bibliography already exists at {0}")]
-    AlreadyExists(PathBuf),
-    #[error("could not read bibliography {path}: {source}")]
-    Read {
-        path: PathBuf,
-        source: std::io::Error,
-    },
-    #[error("invalid bibliography {path}: {message}")]
-    Invalid { path: PathBuf, message: String },
     #[error("invalid BibTeX: {0}")]
     InvalidBibtex(String),
     #[error("unsupported bibliography content: {0}")]
     UnsupportedContent(String),
-    #[error("unsafe INSPIRE texkey `{0}`; allowed characters are A-Z, a-z, 0-9, ., _, :, +, and -")]
+    #[error("unsafe citation key `{0}`; allowed characters are A-Z, a-z, 0-9, ., _, :, +, and -")]
     UnsafeKey(String),
-    #[error("citation key conflict: `{0}` is already present")]
+    #[error("citation key conflict: `{0}` appears more than once")]
     KeyConflict(String),
-    #[error("identifier conflict: {0}")]
-    IdentifierConflict(String),
-    #[error("paper `{0}` was not found")]
-    PaperNotFound(String),
-    #[error("could not write bibliography {path}: {source}")]
-    Write {
-        path: PathBuf,
-        source: std::io::Error,
-    },
+    #[error("could not render BibTeX: {0}")]
+    Render(String),
 }
 
-impl Bibliography {
-    pub fn create(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let path = path.as_ref().to_path_buf();
-        if path.exists() {
-            return Err(Error::AlreadyExists(path));
-        }
-        let bibliography = Self {
-            path,
-            source: String::new(),
-            entries: BTreeMap::new(),
-        };
-        bibliography.save_entries(&bibliography.entries)?;
-        Ok(bibliography)
-    }
-
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let path = path.as_ref().to_path_buf();
-        let source = fs::read_to_string(&path).map_err(|source| Error::Read {
-            path: path.clone(),
-            source,
-        })?;
-        let entries = parse(&source).map_err(|error| Error::Invalid {
-            path: path.clone(),
-            message: error.to_string(),
-        })?;
-        Ok(Self {
-            path,
-            source,
-            entries,
-        })
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-    pub fn entries(&self) -> &BTreeMap<String, Entry> {
-        &self.entries
-    }
-
-    pub fn find(&self, selector: &str) -> Option<&Entry> {
-        if let Some(entry) = self.entries.get(selector) {
-            return Some(entry);
-        }
-        let locator = selector.parse::<Locator>().ok()?;
-        self.entries.values().find(|entry| match &locator {
-            Locator::Arxiv(id) => entry
-                .eprints
-                .iter()
-                .any(|value| normalize_arxiv(value) == normalize_arxiv(id)),
-            Locator::Doi(doi) => entry
-                .dois
-                .iter()
-                .any(|value| normalize_doi(value) == normalize_doi(doi)),
-            Locator::Inspire(_) => false,
-        })
-    }
-
-    pub fn entry(&self, selector: &str) -> Result<&Entry, Error> {
-        self.find(selector)
-            .ok_or_else(|| Error::PaperNotFound(selector.to_owned()))
-    }
-
-    /// Validate all returned bodies, then add them as one atomic mutation.
-    pub fn add_batch(&mut self, bodies: &[String]) -> Result<Vec<AddOutcome>, Error> {
-        let mut candidate = self.entries.clone();
-        let mut outcomes = Vec::new();
-        for body in bodies {
-            let parsed = parse(body)?;
-            if parsed.len() != 1 {
-                return Err(Error::InvalidBibtex(format!(
-                    "an INSPIRE lookup returned {} entries instead of one",
-                    parsed.len()
-                )));
-            }
-            let (key, entry) = parsed.into_iter().next().expect("length checked");
-            if candidate.contains_key(&key) {
-                outcomes.push(AddOutcome::Existing(key));
-            } else {
-                candidate.insert(key.clone(), entry);
-                outcomes.push(AddOutcome::Added(key));
-            }
-        }
-        validate_identities(&candidate)?;
-        if candidate != self.entries {
-            self.save_entries(&candidate)?;
-            self.source = render(&candidate);
-            self.entries = candidate;
-        }
-        Ok(outcomes)
-    }
-
-    pub fn remove_batch(&mut self, selectors: &[String]) -> Result<Vec<Entry>, Error> {
-        let keys = selectors
-            .iter()
-            .map(|selector| {
-                self.find(selector)
-                    .map(|entry| entry.key.clone())
-                    .ok_or_else(|| Error::PaperNotFound(selector.clone()))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut candidate = self.entries.clone();
-        let mut removed = Vec::new();
-        for key in keys {
-            if let Some(entry) = candidate.remove(&key)
-                && !removed.iter().any(|old: &Entry| old.key == entry.key)
-            {
-                removed.push(entry);
-            }
-        }
-        self.save_entries(&candidate)?;
-        self.source = render(&candidate);
-        self.entries = candidate;
-        Ok(removed)
-    }
-
-    /// Replace the complete bibliography. Returns whether canonical bytes changed.
-    pub fn replace_all(&mut self, bodies: &[String]) -> Result<bool, Error> {
-        let source = bodies.join("\n\n");
-        let candidate = parse(&source)?;
-        let canonical = render(&candidate);
-        let changed = canonical != self.source;
-        if changed {
-            self.save_entries(&candidate)?;
-            self.source = canonical;
-            self.entries = candidate;
-        }
-        Ok(changed)
-    }
-
-    pub fn canonical(&self) -> String {
-        render(&self.entries)
-    }
-
-    fn save_entries(&self, entries: &BTreeMap<String, Entry>) -> Result<(), Error> {
-        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
-        let mut temporary = NamedTempFile::new_in(parent).map_err(|source| Error::Write {
-            path: self.path.clone(),
-            source,
-        })?;
-        temporary
-            .write_all(render(entries).as_bytes())
-            .map_err(|source| Error::Write {
-                path: self.path.clone(),
-                source,
-            })?;
-        temporary
-            .as_file()
-            .sync_all()
-            .map_err(|source| Error::Write {
-                path: self.path.clone(),
-                source,
-            })?;
-        temporary
-            .persist(&self.path)
-            .map_err(|error| Error::Write {
-                path: self.path.clone(),
-                source: error.error,
-            })?;
-        Ok(())
-    }
-}
-
-pub fn parse(source: &str) -> Result<BTreeMap<String, Entry>, Error> {
+/// Parse every standalone entry while retaining its exact raw entry block.
+pub fn parse(source: &str) -> Result<BTreeMap<String, BibtexSnapshot>, Error> {
     let raw =
         RawBibliography::parse(source).map_err(|error| Error::InvalidBibtex(error.to_string()))?;
     if !raw.preamble.is_empty() || !raw.abbreviations.is_empty() {
@@ -264,8 +67,8 @@ pub fn parse(source: &str) -> Result<BTreeMap<String, Entry>, Error> {
             "@preamble and @string directives are not supported".into(),
         ));
     }
-    let semantic = ParsedBibliography::parse(source)
-        .map_err(|error| Error::InvalidBibtex(error.to_string()))?;
+    let semantic =
+        Bibliography::parse(source).map_err(|error| Error::InvalidBibtex(error.to_string()))?;
     let mut entries = BTreeMap::new();
     let mut cursor = 0;
     for raw_entry in &raw.entries {
@@ -281,52 +84,15 @@ pub fn parse(source: &str) -> Result<BTreeMap<String, Entry>, Error> {
             .filter(|end| *end <= source.len() && source.as_bytes()[*end - 1] == b'}')
             .ok_or_else(|| Error::InvalidBibtex("entry has no closing brace".into()))?;
         let key = raw_entry.v.key.v.to_owned();
-        validate_query_key(&key)?;
+        validate_key(&key)?;
         let parsed = semantic
             .get(&key)
-            .ok_or_else(|| Error::InvalidBibtex(format!("could not semantically parse `{key}`")))?;
-        let title = parsed
-            .title()
-            .map(ChunksExt::format_verbatim)
-            .map_err(|error| Error::InvalidBibtex(error.to_string()))?;
-        if title.trim().is_empty() {
-            return Err(Error::InvalidBibtex(format!("entry `{key}` has no title")));
-        }
-        let authors = parsed
-            .author()
-            .unwrap_or_default()
-            .iter()
-            .map(format_person)
-            .collect();
-        let dois = parsed
-            .doi()
-            .ok()
-            .into_iter()
-            .map(|value| normalize_doi(&value))
-            .collect();
-        let eprints = parsed
-            .eprint()
-            .ok()
-            .into_iter()
-            .map(|value| normalize_arxiv(&value))
-            .collect();
-        let entry = Entry {
-            key: key.clone(),
-            raw: source[raw_entry.span.start..end].to_owned(),
-            title,
-            authors,
-            year: parsed.date().ok().and_then(|date| match date {
-                PermissiveType::Typed(date) => Some(match date.value {
-                    DateValue::At(value) | DateValue::After(value) => value.year,
-                    DateValue::Before(value) => value.year,
-                    DateValue::Between(value, _) => value.year,
-                }),
-                PermissiveType::Chunks(_) => None,
-            }),
-            dois,
-            eprints,
+            .ok_or_else(|| Error::InvalidBibtex(format!("could not parse entry `{key}`")))?;
+        validate_semantic(parsed)?;
+        let snapshot = BibtexSnapshot {
+            bibtex: source[raw_entry.span.start..end].to_owned(),
         };
-        if entries.insert(key.clone(), entry).is_some() {
+        if entries.insert(key.clone(), snapshot).is_some() {
             return Err(Error::KeyConflict(key));
         }
         cursor = end;
@@ -338,27 +104,144 @@ pub fn parse(source: &str) -> Result<BTreeMap<String, Entry>, Error> {
     }
     if semantic.len() != entries.len() {
         return Err(Error::UnsupportedContent(
-            "unsupported BibTeX content".into(),
+            "macros requiring global context are not supported".into(),
         ));
     }
-    validate_identities(&entries)?;
     Ok(entries)
 }
 
-pub fn render(entries: &BTreeMap<String, Entry>) -> String {
-    if entries.is_empty() {
-        return String::new();
+pub fn project_bibtex(source: &str) -> Result<Reference, Error> {
+    let raw = parse_without_semantics(source)?;
+    if raw.len() != 1 {
+        return Err(Error::InvalidBibtex(format!(
+            "expected one standalone entry, found {}",
+            raw.len()
+        )));
     }
-    let mut output = entries
-        .values()
-        .map(|entry| entry.raw.trim().to_owned())
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    output.push('\n');
-    output
+    let key = raw.keys().next().expect("length checked");
+    let semantic =
+        Bibliography::parse(source).map_err(|error| Error::InvalidBibtex(error.to_string()))?;
+    let entry = semantic
+        .get(key)
+        .ok_or_else(|| Error::InvalidBibtex(format!("could not parse entry `{key}`")))?;
+    validate_semantic(entry)?;
+    let title = entry
+        .title()
+        .map(ChunksExt::format_verbatim)
+        .map_err(|error| Error::InvalidBibtex(error.to_string()))?;
+    let authors = entry
+        .author()
+        .unwrap_or_default()
+        .iter()
+        .map(format_person)
+        .collect();
+    let year = entry.date().ok().and_then(|date| match date {
+        PermissiveType::Typed(date) => Some(match date.value {
+            DateValue::At(value) | DateValue::After(value) | DateValue::Before(value) => value.year,
+            DateValue::Between(value, _) => value.year,
+        }),
+        PermissiveType::Chunks(_) => None,
+    });
+    let publication = {
+        let journal = chunks(entry, "journal").or_else(|| chunks(entry, "journaltitle"));
+        let volume = chunks(entry, "volume");
+        let issue = chunks(entry, "number").or_else(|| chunks(entry, "issue"));
+        let pages = chunks(entry, "pages");
+        (journal.is_some() || volume.is_some() || issue.is_some() || pages.is_some()).then_some(
+            Publication {
+                journal,
+                volume,
+                issue,
+                pages,
+                year,
+            },
+        )
+    };
+    let dois = entry
+        .doi()
+        .ok()
+        .into_iter()
+        .map(|value| normalize_doi(&value))
+        .collect();
+    let arxiv = entry
+        .eprint()
+        .ok()
+        .into_iter()
+        .map(|value| normalize_arxiv(&value))
+        .collect();
+    Ok(Reference {
+        title,
+        authors,
+        collaborations: chunks(entry, "collaboration").into_iter().collect(),
+        year,
+        publication,
+        url: chunks(entry, "url"),
+        primary_category: chunks(entry, "primaryclass").or_else(|| chunks(entry, "eprintclass")),
+        identifiers: Identifiers {
+            dois,
+            arxiv,
+            providers: BTreeMap::new(),
+        },
+    })
 }
 
-pub fn validate_query_key(key: &str) -> Result<(), Error> {
+fn parse_without_semantics(source: &str) -> Result<BTreeMap<String, String>, Error> {
+    let raw =
+        RawBibliography::parse(source).map_err(|error| Error::InvalidBibtex(error.to_string()))?;
+    if !raw.preamble.is_empty() || !raw.abbreviations.is_empty() {
+        return Err(Error::UnsupportedContent(
+            "directives are not supported".into(),
+        ));
+    }
+    let mut entries = BTreeMap::new();
+    let mut cursor = 0;
+    for item in raw.entries {
+        if !source[cursor..item.span.start].trim().is_empty() {
+            return Err(Error::UnsupportedContent(
+                "non-entry content is not supported".into(),
+            ));
+        }
+        let end = item.span.end + 1;
+        let key = item.v.key.v.to_owned();
+        validate_key(&key)?;
+        if entries
+            .insert(key.clone(), source[item.span.start..end].into())
+            .is_some()
+        {
+            return Err(Error::KeyConflict(key));
+        }
+        cursor = end;
+    }
+    if !source[cursor..].trim().is_empty() {
+        return Err(Error::UnsupportedContent(
+            "non-entry content is not supported".into(),
+        ));
+    }
+    Ok(entries)
+}
+
+fn validate_semantic(entry: &BibEntry) -> Result<(), Error> {
+    let title = entry
+        .title()
+        .map(ChunksExt::format_verbatim)
+        .map_err(|error| Error::InvalidBibtex(error.to_string()))?;
+    if title.trim().is_empty() {
+        return Err(Error::InvalidBibtex(format!(
+            "entry `{}` has no title",
+            entry.key
+        )));
+    }
+    Ok(())
+}
+
+fn chunks(entry: &BibEntry, field: &str) -> Option<String> {
+    entry
+        .get(field)
+        .map(ChunksExt::format_verbatim)
+        .filter(|value| !value.trim().is_empty())
+}
+
+pub fn validate_key(key: &str) -> Result<(), Error> {
     if !key.is_empty()
         && key.bytes().all(|byte| {
             byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'+' | b'-')
@@ -372,7 +255,7 @@ pub fn validate_query_key(key: &str) -> Result<(), Error> {
 
 /// Change only the citation-key token of one complete raw entry.
 pub fn rename_entry(source: &str, new_key: &str) -> Result<String, Error> {
-    validate_query_key(new_key)?;
+    validate_key(new_key)?;
     let raw =
         RawBibliography::parse(source).map_err(|error| Error::InvalidBibtex(error.to_string()))?;
     if raw.entries.len() != 1 || !raw.preamble.is_empty() || !raw.abbreviations.is_empty() {
@@ -383,34 +266,80 @@ pub fn rename_entry(source: &str, new_key: &str) -> Result<String, Error> {
     let span = raw.entries[0].v.key.span.clone();
     let mut renamed = source.to_owned();
     renamed.replace_range(span, new_key);
-    parse(&renamed)?;
+    BibtexSnapshot::new(renamed.clone())?;
     Ok(renamed)
 }
 
-fn validate_identities(entries: &BTreeMap<String, Entry>) -> Result<(), Error> {
-    let mut dois: HashMap<&str, &str> = HashMap::new();
-    let mut eprints: HashMap<&str, &str> = HashMap::new();
-    for (key, entry) in entries {
-        for doi in &entry.dois {
-            if let Some(other) = dois.insert(doi, key)
-                && other != key
-            {
-                return Err(Error::IdentifierConflict(format!(
-                    "DOI {doi} is shared by `{other}` and `{key}`"
-                )));
-            }
-        }
-        for eprint in &entry.eprints {
-            if let Some(other) = eprints.insert(eprint, key)
-                && other != key
-            {
-                return Err(Error::IdentifierConflict(format!(
-                    "arXiv id {eprint} is shared by `{other}` and `{key}`"
-                )));
-            }
-        }
+/// Render a source that has no authoritative BibTeX through `biblatex::Entry`.
+pub fn render_reference(key: &str, reference: &Reference) -> Result<String, Error> {
+    validate_key(key)?;
+    let kind = if reference
+        .publication
+        .as_ref()
+        .and_then(|publication| publication.journal.as_ref())
+        .is_some()
+    {
+        EntryType::Article
+    } else {
+        EntryType::Misc
+    };
+    let mut entry = BibEntry::new(key.to_owned(), kind);
+    set_chunks(&mut entry, "title", &reference.title);
+    if !reference.authors.is_empty() {
+        set_chunks(&mut entry, "author", &reference.authors.join(" and "));
     }
-    Ok(())
+    if !reference.collaborations.is_empty() {
+        set_chunks(
+            &mut entry,
+            "collaboration",
+            &reference.collaborations.join(" and "),
+        );
+    }
+    let publication_year = reference
+        .publication
+        .as_ref()
+        .and_then(|publication| publication.year)
+        .or(reference.year);
+    if let Some(year) = publication_year {
+        set_chunks(&mut entry, "year", &year.to_string());
+    }
+    if let Some(publication) = &reference.publication {
+        set_optional(&mut entry, "journal", publication.journal.as_deref());
+        set_optional(&mut entry, "volume", publication.volume.as_deref());
+        set_optional(&mut entry, "number", publication.issue.as_deref());
+        set_optional(&mut entry, "pages", publication.pages.as_deref());
+    }
+    set_optional(
+        &mut entry,
+        "doi",
+        reference.identifiers.dois.first().map(String::as_str),
+    );
+    if let Some(arxiv) = reference.identifiers.arxiv.first() {
+        set_chunks(&mut entry, "eprint", arxiv);
+        set_chunks(&mut entry, "archiveprefix", "arXiv");
+    }
+    set_optional(
+        &mut entry,
+        "primaryclass",
+        reference.primary_category.as_deref(),
+    );
+    set_optional(&mut entry, "url", reference.url.as_deref());
+    entry
+        .to_bibtex_string()
+        .map_err(|error| Error::Render(error.to_string()))
+}
+
+fn set_optional(entry: &mut BibEntry, key: &str, value: Option<&str>) {
+    if let Some(value) = value {
+        set_chunks(entry, key, value);
+    }
+}
+
+fn set_chunks(entry: &mut BibEntry, key: &str, value: &str) {
+    entry.set(
+        key,
+        vec![biblatex::Spanned::zero(Chunk::Normal(value.to_owned()))],
+    );
 }
 
 fn format_person(person: &biblatex::Person) -> String {
@@ -429,79 +358,43 @@ fn format_person(person: &biblatex::Person) -> String {
 mod tests {
     use super::*;
 
-    fn entry(key: &str, title: &str, extra: &str) -> String {
-        format!(
-            "@article{{{key},\n  title = {{{title}}},\n  author = {{Doe, Jane and Roe, Richard}},\n  year = {{2024}},\n  {extra}\n}}"
-        )
+    #[test]
+    fn imported_entry_retains_bytes_and_projects() {
+        let raw = "@article{A,\n title = {A {NASA} result},\n author = {Doe, Jane},\n doi = {10.1/ABC}\n}";
+        let parsed = parse(raw).unwrap();
+        assert_eq!(parsed["A"].bibtex, raw);
+        let projected = parsed["A"].project().unwrap();
+        assert_eq!(projected.title, "A NASA result");
+        assert_eq!(projected.identifiers.dois, ["10.1/abc"]);
     }
 
     #[test]
-    fn preserves_raw_entries_and_sorts_with_canonical_separators() {
-        let zed = entry("Zed", "Last", "eprint = {2401.00002},");
-        let alpha = entry("Alpha", "First", "eprint = {2401.00001},");
-        let parsed = parse(&format!("{zed}\n\n{alpha}\n")).unwrap();
-        assert_eq!(parsed["Zed"].raw(), zed);
-        assert_eq!(render(&parsed), format!("{alpha}\n\n{zed}\n"));
+    fn rejects_non_standalone_content() {
+        assert!(parse("% comment\n@article{A,title={A}}").is_err());
+        assert!(parse("@string{x={x}}").is_err());
     }
 
     #[test]
-    fn projects_semantic_fields() {
-        let parsed = parse(&entry(
-            "A",
-            "A {NASA} result",
-            "doi = {10.1000/ABC},\n  eprint = {1207.7214v2},",
-        ))
-        .unwrap();
-        let item = &parsed["A"];
-        assert_eq!(item.title(), "A NASA result");
-        assert_eq!(item.authors()[0], "Jane Doe");
-        assert_eq!(item.year(), Some(2024));
-        assert_eq!(item.dois(), ["10.1000/abc"]);
-        assert_eq!(item.eprints(), ["1207.7214"]);
+    fn renaming_changes_only_key_token() {
+        let raw = "@misc{Old,title={Old}}";
+        assert_eq!(rename_entry(raw, "New").unwrap(), "@misc{New,title={Old}}");
     }
 
     #[test]
-    fn rejects_unsupported_content_and_identifier_conflicts() {
-        assert!(matches!(
-            parse("% comment\n@article{A,title={A}}"),
-            Err(Error::UnsupportedContent(_))
-        ));
-        assert!(matches!(
-            parse("@string{x={x}}"),
-            Err(Error::UnsupportedContent(_))
-        ));
-        let a = entry("A", "A", "doi={10.1/X},");
-        let b = entry("B", "B", "doi={10.1/x},");
-        assert!(matches!(
-            parse(&format!("{a}\n{b}")),
-            Err(Error::IdentifierConflict(_))
-        ));
-    }
-
-    #[test]
-    fn batch_mutations_are_atomic() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("references.bib");
-        let mut bibliography = Bibliography::create(&path).unwrap();
-        bibliography
-            .add_batch(&[entry("A", "A", "doi={10.1/a},")])
-            .unwrap();
-        let before = fs::read_to_string(&path).unwrap();
-        assert!(
-            bibliography
-                .add_batch(&[
-                    entry("B", "B", "doi={10.1/b},"),
-                    entry("C", "C", "doi={10.1/a},"),
-                ])
-                .is_err()
-        );
-        assert_eq!(fs::read_to_string(path).unwrap(), before);
-    }
-
-    #[test]
-    fn renames_only_the_key_token() {
-        let original = entry("New", "New in title", "note={New},");
-        let renamed = rename_entry(&original, "Old").unwrap();
-        assert_eq!(renamed, original.replacen("{New,", "{Old,", 1));
+    fn generic_reference_uses_biblatex_serialization() {
+        let reference = Reference {
+            title: "Future adapter".into(),
+            authors: vec!["Doe, Jane".into()],
+            year: Some(2026),
+            identifiers: Identifiers {
+                arxiv: vec!["2601.00001".into()],
+                ..Identifiers::default()
+            },
+            ..Reference::default()
+        };
+        let rendered = render_reference("Future:2026", &reference).unwrap();
+        assert!(rendered.starts_with("@misc{Future:2026,"), "{rendered}");
+        assert!(rendered.contains("title = {Future adapter}"), "{rendered}");
+        BibtexSnapshot::new(rendered).unwrap();
     }
 }

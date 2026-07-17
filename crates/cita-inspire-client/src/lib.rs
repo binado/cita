@@ -1,22 +1,312 @@
-//! Direct BibTeX access to the INSPIRE literature API.
+//! INSPIRE JSON metadata provider with authoritative BibTeX snapshots.
 
-use biblatex::RawBibliography;
-use cita_core::Locator;
+use cita_bibliography::parse as parse_bibtex;
+use cita_core::{
+    Identifiers, Locator, MetadataProvider, ProjectionError, ProviderError, Publication, Reference,
+    ReferenceSource, normalize_arxiv, normalize_doi,
+};
 use reqwest::{StatusCode, header::RETRY_AFTER};
-use std::time::{Duration, SystemTime};
+use serde::{Deserialize, Deserializer, Serialize};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, SystemTime},
+};
 use thiserror::Error;
 use url::Url;
 
 const DEFAULT_BASE_URL: &str = "https://inspirehep.net/";
 const DEFAULT_USER_AGENT: &str = concat!("cita-inspire-client/", env!("CARGO_PKG_VERSION"));
-const MAX_BATCH_KEYS: usize = 100;
+const MAX_BATCH_RECORDS: usize = 100;
 const MAX_ENCODED_QUERY: usize = 6 * 1024;
 const MAX_429_RETRIES: usize = 3;
 
-#[derive(Clone, Debug)]
-pub struct BatchResponse {
-    pub requested_keys: Vec<String>,
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InspireSnapshot {
+    pub record_id: u64,
+    pub updated: String,
+    pub texkeys: Vec<String>,
     pub bibtex: String,
+    pub titles: Vec<Title>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authors: Vec<Author>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub collaborations: Vec<Collaboration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub publication_info: Vec<PublicationInfo>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arxiv_eprints: Vec<ArxivEprint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dois: Vec<Doi>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub urls: Vec<UrlValue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub document_types: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preprint_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub earliest_date: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Title {
+    pub title: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Author {
+    pub full_name: String,
+    #[serde(
+        default,
+        deserialize_with = "one_or_many",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub role: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Collaboration {
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicationInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journal_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journal_volume: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journal_issue: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_start: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_end: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub year: Option<i32>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hidden: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub curated_relation: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArxivEprint {
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub categories: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Doi {
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UrlValue {
+    pub value: String,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn one_or_many<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        One(String),
+        Many(Vec<String>),
+    }
+    Option::<Value>::deserialize(deserializer).map(|value| match value {
+        None => Vec::new(),
+        Some(Value::One(value)) => vec![value],
+        Some(Value::Many(values)) => values,
+    })
+}
+
+impl InspireSnapshot {
+    pub fn validate(&self) -> Result<(), ProjectionError> {
+        if self.record_id == 0 {
+            return Err(ProjectionError::Invalid("INSPIRE record id is zero".into()));
+        }
+        let reference = self.project()?;
+        if self.texkeys.is_empty() {
+            return Err(ProjectionError::Invalid(
+                "INSPIRE snapshot has no texkeys".into(),
+            ));
+        }
+        let entries = parse_bibtex(&self.bibtex)
+            .map_err(|error| ProjectionError::Invalid(error.to_string()))?;
+        if entries.len() != 1 {
+            return Err(ProjectionError::Invalid(format!(
+                "INSPIRE snapshot has {} BibTeX entries",
+                entries.len()
+            )));
+        }
+        let key = entries.keys().next().expect("length checked");
+        if !self.texkeys.contains(key) {
+            return Err(ProjectionError::Invalid(format!(
+                "BibTeX key `{key}` is not one of the INSPIRE texkeys"
+            )));
+        }
+        let bib_reference = entries.values().next().expect("length checked").project()?;
+        if !same_record(&reference, &bib_reference) {
+            return Err(ProjectionError::Invalid(
+                "INSPIRE JSON and BibTeX do not identify the same record".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn same_record(json: &Reference, bib: &Reference) -> bool {
+    let shared_doi = json
+        .identifiers
+        .dois
+        .iter()
+        .any(|id| bib.identifiers.dois.contains(id));
+    let shared_arxiv = json
+        .identifiers
+        .arxiv
+        .iter()
+        .any(|id| bib.identifiers.arxiv.contains(id));
+    shared_doi
+        || shared_arxiv
+        || (json.identifiers.dois.is_empty() && json.identifiers.arxiv.is_empty())
+}
+
+impl ReferenceSource for InspireSnapshot {
+    fn project(&self) -> Result<Reference, ProjectionError> {
+        let title = self
+            .titles
+            .first()
+            .map(|item| item.title.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .ok_or(ProjectionError::MissingTitle)?;
+        let publication_info = select_publication(self);
+        let publication = publication_info.map(to_publication);
+        let arxiv = unique(
+            self.arxiv_eprints
+                .iter()
+                .map(|item| normalize_arxiv(&item.value)),
+        );
+        let dois = unique(self.dois.iter().map(|item| normalize_doi(&item.value)));
+        let year = publication
+            .as_ref()
+            .and_then(|item| item.year)
+            .or_else(|| date_year(self.preprint_date.as_deref()))
+            .or_else(|| date_year(self.earliest_date.as_deref()))
+            .or_else(|| arxiv.first().and_then(|id| arxiv_year(id)));
+        let primary_category = self
+            .arxiv_eprints
+            .first()
+            .and_then(|item| item.categories.first())
+            .cloned();
+        let mut providers = BTreeMap::new();
+        providers.insert("inspire".into(), vec![self.record_id.to_string()]);
+        Ok(Reference {
+            title,
+            authors: self
+                .authors
+                .iter()
+                .filter(|author| {
+                    author.role.is_empty()
+                        || author
+                            .role
+                            .iter()
+                            .any(|role| role.eq_ignore_ascii_case("author"))
+                })
+                .map(|author| author.full_name.clone())
+                .collect(),
+            collaborations: self
+                .collaborations
+                .iter()
+                .map(|item| item.value.clone())
+                .collect(),
+            year,
+            publication,
+            url: self.urls.first().map(|url| url.value.clone()).or_else(|| {
+                Some(format!(
+                    "https://inspirehep.net/literature/{}",
+                    self.record_id
+                ))
+            }),
+            primary_category,
+            identifiers: Identifiers {
+                dois,
+                arxiv,
+                providers,
+            },
+        })
+    }
+}
+
+fn unique(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    values
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn select_publication(snapshot: &InspireSnapshot) -> Option<&PublicationInfo> {
+    let visible = |item: &&PublicationInfo| !item.hidden && item.journal_title.is_some();
+    snapshot
+        .publication_info
+        .iter()
+        .filter(visible)
+        .find(|item| item.curated_relation && (item.page_start.is_some() || item.artid.is_some()))
+        .or_else(|| {
+            snapshot
+                .publication_info
+                .iter()
+                .filter(visible)
+                .find(|item| {
+                    item.year.is_some()
+                        && (item.journal_volume.is_some()
+                            || item.page_start.is_some()
+                            || item.artid.is_some())
+                })
+        })
+}
+
+fn to_publication(item: &PublicationInfo) -> Publication {
+    let pages = match (&item.page_start, &item.page_end, &item.artid) {
+        (Some(start), Some(end), _) if start != end => Some(format!("{start}-{end}")),
+        (Some(start), _, _) => Some(start.clone()),
+        (_, _, Some(article)) => Some(article.clone()),
+        _ => None,
+    };
+    Publication {
+        journal: item.journal_title.clone(),
+        volume: item.journal_volume.clone(),
+        issue: item.journal_issue.clone(),
+        pages,
+        year: item.year,
+    }
+}
+
+fn date_year(date: Option<&str>) -> Option<i32> {
+    date?.get(..4)?.parse().ok()
+}
+fn arxiv_year(id: &str) -> Option<i32> {
+    if id.as_bytes().get(4) == Some(&b'.') {
+        return Some(2000 + id.get(..2)?.parse::<i32>().ok()?);
+    }
+    let year = id.split_once('/')?.1.get(..2)?.parse::<i32>().ok()?;
+    Some(if year >= 91 { 1900 + year } else { 2000 + year })
 }
 
 #[derive(Clone, Debug)]
@@ -34,72 +324,131 @@ impl Client {
         ClientBuilder::new()
     }
 
-    pub async fn lookup(&self, locator: &Locator) -> Result<String, Error> {
-        let mut url = self.base_url.clone();
-        {
-            let mut segments = url
-                .path_segments_mut()
-                .map_err(|_| Error::InvalidBaseUrl(self.base_url.to_string()))?;
-            segments.pop_if_empty();
-            segments.push("api");
-            match locator {
-                Locator::Inspire(id) => {
-                    segments.push("literature");
-                    segments.push(&id.to_string());
+    pub async fn resolve_reference(&self, locator: &Locator) -> Result<Reference, Error> {
+        let record = self.lookup_json(locator).await?;
+        snapshot_from_record(record, String::new())?
+            .project()
+            .map_err(|error| Error::Malformed(error.to_string()))
+    }
+
+    pub async fn resolve_snapshot(&self, locator: &Locator) -> Result<InspireSnapshot, Error> {
+        let record = self.lookup_json(locator).await?;
+        let bibtex = self.lookup_bibtex(locator).await?;
+        let snapshot = snapshot_from_record(record, bibtex)?;
+        snapshot
+            .validate()
+            .map_err(|error| Error::Malformed(error.to_string()))?;
+        Ok(snapshot)
+    }
+
+    pub async fn refresh_records(&self, ids: &[u64]) -> Result<Vec<InspireSnapshot>, Error> {
+        let mut output = Vec::with_capacity(ids.len());
+        for batch in batch_ids(ids)? {
+            let (json_url, bib_url) = self.search_urls(&batch)?;
+            let json = self
+                .request(json_url, format!("INSPIRE records {batch:?}"))
+                .await?;
+            let response: SearchResponse =
+                serde_json::from_str(&json).map_err(|error| Error::Malformed(error.to_string()))?;
+            let mut records = response.hits.hits;
+            let bibtex = self
+                .request(bib_url, format!("INSPIRE records {batch:?}"))
+                .await?;
+            let mut bib_entries =
+                parse_bibtex(&bibtex).map_err(|error| Error::Malformed(error.to_string()))?;
+            for id in batch {
+                let position = records
+                    .iter()
+                    .position(|record| record.record_id() == Some(id))
+                    .ok_or(Error::NotFound(format!("inspire:{id}")))?;
+                let record = records.remove(position);
+                let metadata = &record.metadata;
+                let matching = bib_entries
+                    .keys()
+                    .filter(|key| metadata.texkeys.contains(key))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if matching.len() != 1 {
+                    return Err(Error::Malformed(format!(
+                        "record {id} matched {} BibTeX entries",
+                        matching.len()
+                    )));
                 }
-                Locator::Arxiv(id) => {
-                    segments.push("arxiv");
-                    segments.push(id);
-                }
-                Locator::Doi(doi) => {
-                    segments.push("doi");
-                    segments.push(doi);
-                }
+                let bib = bib_entries
+                    .remove(&matching[0])
+                    .expect("matching key exists")
+                    .bibtex;
+                let snapshot = snapshot_from_record(record, bib)?;
+                snapshot
+                    .validate()
+                    .map_err(|error| Error::Malformed(error.to_string()))?;
+                output.push(snapshot);
+            }
+            if !records.is_empty() || !bib_entries.is_empty() {
+                return Err(Error::Malformed(
+                    "INSPIRE returned unexplained refresh results".into(),
+                ));
             }
         }
-        url.query_pairs_mut().append_pair("format", "bibtex");
+        Ok(output)
+    }
+
+    async fn lookup_json(&self, locator: &Locator) -> Result<LiteratureRecord, Error> {
+        let url = self.record_url(locator, "json")?;
+        let body = self.request(url, locator.to_string()).await?;
+        serde_json::from_str(&body).map_err(|error| Error::Malformed(error.to_string()))
+    }
+    async fn lookup_bibtex(&self, locator: &Locator) -> Result<String, Error> {
+        let url = self.record_url(locator, "bibtex")?;
         self.request(url, locator.to_string()).await
     }
-
-    pub async fn lookup_key(&self, key: &str) -> Result<String, Error> {
-        validate_key(key)?;
-        let url = self.search_url(&[key.to_owned()])?;
-        self.request(url, format!("texkey:{key}")).await
-    }
-
-    /// Fetch sequential direct-search batches in deterministic input order.
-    pub async fn lookup_keys(&self, keys: &[String]) -> Result<Vec<BatchResponse>, Error> {
-        let chunks = batch_keys(keys)?;
-        let mut responses = Vec::with_capacity(chunks.len());
-        for requested_keys in chunks {
-            let url = self.search_url(&requested_keys)?;
-            let label = requested_keys.join(", ");
-            let bibtex = self.request(url, format!("texkeys {label}")).await?;
-            responses.push(BatchResponse {
-                requested_keys,
-                bibtex,
-            });
+    fn record_url(&self, locator: &Locator, format: &str) -> Result<Url, Error> {
+        let mut url = self.base_url.clone();
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| Error::InvalidBaseUrl(self.base_url.to_string()))?;
+        segments.pop_if_empty();
+        segments.push("api");
+        match locator {
+            Locator::Inspire(id) => {
+                segments.push("literature");
+                segments.push(&id.to_string());
+            }
+            Locator::Arxiv(id) => {
+                segments.push("arxiv");
+                segments.push(id);
+            }
+            Locator::Doi(doi) => {
+                segments.push("doi");
+                segments.push(doi);
+            }
         }
-        Ok(responses)
+        drop(segments);
+        url.query_pairs_mut().append_pair("format", format);
+        Ok(url)
     }
-
-    fn search_url(&self, keys: &[String]) -> Result<Url, Error> {
-        let mut url = self
+    fn search_urls(&self, ids: &[u64]) -> Result<(Url, Url), Error> {
+        let query = ids
+            .iter()
+            .map(|id| format!("control_number:{id}"))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        let base = self
             .base_url
             .join("api/literature")
             .map_err(|_| Error::InvalidBaseUrl(self.base_url.to_string()))?;
-        let query = keys
-            .iter()
-            .map(|key| format!("texkey:{key}"))
-            .collect::<Vec<_>>()
-            .join(" or ");
-        url.query_pairs_mut()
+        let mut json = base.clone();
+        json.query_pairs_mut()
+            .append_pair("q", &query)
+            .append_pair("format", "json")
+            .append_pair("size", &ids.len().to_string());
+        let mut bib = base;
+        bib.query_pairs_mut()
             .append_pair("q", &query)
             .append_pair("format", "bibtex")
-            .append_pair("size", &keys.len().to_string());
-        Ok(url)
+            .append_pair("size", &ids.len().to_string());
+        Ok((json, bib))
     }
-
     async fn request(&self, url: Url, resource: String) -> Result<String, Error> {
         let mut retries = 0;
         loop {
@@ -125,20 +474,249 @@ impl Client {
                 return Err(Error::NotFound(resource));
             }
             if !status.is_success() {
-                let body = response.text().await.unwrap_or_default();
-                return Err(Error::HttpStatus { status, body });
+                return Err(Error::HttpStatus {
+                    status,
+                    body: response.text().await.unwrap_or_default(),
+                });
             }
-            let body = response.text().await.map_err(Error::Transport)?;
-            validate_bibtex_body(&body)?;
-            return Ok(body);
+            return response.text().await.map_err(Error::Transport);
         }
     }
 }
 
-impl Default for Client {
-    fn default() -> Self {
-        Self::new().expect("default INSPIRE configuration is valid")
+impl MetadataProvider for Client {
+    type Snapshot = InspireSnapshot;
+    async fn resolve(&self, locator: &Locator) -> Result<Self::Snapshot, ProviderError> {
+        self.resolve_snapshot(locator).await.map_err(provider_error)
     }
+    async fn refresh(&self, provider_ids: &[String]) -> Result<Vec<Self::Snapshot>, ProviderError> {
+        let ids = provider_ids
+            .iter()
+            .map(|id| {
+                id.parse::<u64>()
+                    .map_err(|_| ProviderError::InvalidLocator(format!("inspire:{id}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.refresh_records(&ids).await.map_err(provider_error)
+    }
+}
+
+fn provider_error(error: Error) -> ProviderError {
+    match error {
+        Error::NotFound(value) => ProviderError::NotFound(value),
+        Error::Malformed(value) => ProviderError::Malformed(value),
+        error => ProviderError::Request(error.to_string()),
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct LiteratureRecord {
+    #[serde(default)]
+    id: serde_json::Value,
+    #[serde(default)]
+    updated: Option<String>,
+    metadata: LiteratureMetadata,
+}
+impl LiteratureRecord {
+    fn record_id(&self) -> Option<u64> {
+        self.id
+            .as_u64()
+            .or_else(|| self.id.as_str()?.parse().ok())
+            .or(self.metadata.control_number)
+    }
+}
+#[derive(Clone, Debug, Default, Deserialize)]
+struct LiteratureMetadata {
+    #[serde(default)]
+    control_number: Option<u64>,
+    #[serde(default)]
+    titles: Vec<ApiTitle>,
+    #[serde(default)]
+    authors: Vec<ApiAuthor>,
+    #[serde(default)]
+    collaborations: Vec<ApiCollaboration>,
+    #[serde(default)]
+    texkeys: Vec<String>,
+    #[serde(default)]
+    publication_info: Vec<ApiPublicationInfo>,
+    #[serde(default)]
+    arxiv_eprints: Vec<ApiArxivEprint>,
+    #[serde(default)]
+    dois: Vec<ApiDoi>,
+    #[serde(default)]
+    urls: Vec<ApiUrlValue>,
+    #[serde(default, alias = "document_type")]
+    document_types: Vec<String>,
+    #[serde(default)]
+    preprint_date: Option<String>,
+    #[serde(default)]
+    earliest_date: Option<String>,
+}
+#[derive(Clone, Debug, Deserialize)]
+struct ApiTitle {
+    title: String,
+}
+#[derive(Clone, Debug, Deserialize)]
+struct ApiAuthor {
+    full_name: String,
+    #[serde(default, deserialize_with = "one_or_many")]
+    role: Vec<String>,
+}
+#[derive(Clone, Debug, Deserialize)]
+struct ApiCollaboration {
+    value: String,
+}
+#[derive(Clone, Debug, Deserialize)]
+struct ApiPublicationInfo {
+    #[serde(default)]
+    journal_title: Option<String>,
+    #[serde(default)]
+    journal_volume: Option<String>,
+    #[serde(default)]
+    journal_issue: Option<String>,
+    #[serde(default)]
+    page_start: Option<String>,
+    #[serde(default)]
+    page_end: Option<String>,
+    #[serde(default)]
+    artid: Option<String>,
+    #[serde(default)]
+    year: Option<i32>,
+    #[serde(default)]
+    hidden: bool,
+    #[serde(default)]
+    curated_relation: bool,
+}
+#[derive(Clone, Debug, Deserialize)]
+struct ApiArxivEprint {
+    value: String,
+    #[serde(default)]
+    categories: Vec<String>,
+}
+#[derive(Clone, Debug, Deserialize)]
+struct ApiDoi {
+    value: String,
+}
+#[derive(Clone, Debug, Deserialize)]
+struct ApiUrlValue {
+    value: String,
+}
+
+fn snapshot_from_record(
+    record: LiteratureRecord,
+    bibtex: String,
+) -> Result<InspireSnapshot, Error> {
+    let record_id = record
+        .record_id()
+        .ok_or_else(|| Error::Malformed("record has no numeric id".into()))?;
+    let m = record.metadata;
+    Ok(InspireSnapshot {
+        record_id,
+        updated: record
+            .updated
+            .ok_or_else(|| Error::Malformed("record has no update timestamp".into()))?,
+        texkeys: m.texkeys,
+        bibtex,
+        titles: m
+            .titles
+            .into_iter()
+            .map(|v| Title { title: v.title })
+            .collect(),
+        authors: m
+            .authors
+            .into_iter()
+            .map(|v| Author {
+                full_name: v.full_name,
+                role: v.role,
+            })
+            .collect(),
+        collaborations: m
+            .collaborations
+            .into_iter()
+            .map(|v| Collaboration { value: v.value })
+            .collect(),
+        publication_info: m
+            .publication_info
+            .into_iter()
+            .map(|v| PublicationInfo {
+                journal_title: v.journal_title,
+                journal_volume: v.journal_volume,
+                journal_issue: v.journal_issue,
+                page_start: v.page_start,
+                page_end: v.page_end,
+                artid: v.artid,
+                year: v.year,
+                hidden: v.hidden,
+                curated_relation: v.curated_relation,
+            })
+            .collect(),
+        arxiv_eprints: m
+            .arxiv_eprints
+            .into_iter()
+            .map(|v| ArxivEprint {
+                value: v.value,
+                categories: v.categories,
+            })
+            .collect(),
+        dois: m.dois.into_iter().map(|v| Doi { value: v.value }).collect(),
+        urls: m
+            .urls
+            .into_iter()
+            .map(|v| UrlValue { value: v.value })
+            .collect(),
+        document_types: m.document_types,
+        preprint_date: m.preprint_date,
+        earliest_date: m.earliest_date,
+    })
+}
+
+#[derive(Deserialize)]
+struct SearchResponse {
+    hits: SearchHits,
+}
+#[derive(Deserialize)]
+struct SearchHits {
+    #[serde(default)]
+    hits: Vec<LiteratureRecord>,
+}
+
+fn batch_ids(ids: &[u64]) -> Result<Vec<Vec<u64>>, Error> {
+    let mut batches: Vec<Vec<u64>> = Vec::new();
+    for id in ids {
+        let needs_new = batches.last().is_some_and(|batch| {
+            batch.len() == MAX_BATCH_RECORDS || {
+                let mut candidate = batch.clone();
+                candidate.push(*id);
+                encoded_query_len(&candidate) > MAX_ENCODED_QUERY
+            }
+        });
+        if needs_new || batches.is_empty() {
+            batches.push(Vec::new());
+        }
+        batches.last_mut().expect("batch exists").push(*id);
+    }
+    Ok(batches)
+}
+fn encoded_query_len(ids: &[u64]) -> usize {
+    let query = ids
+        .iter()
+        .map(|id| format!("control_number:{id}"))
+        .collect::<Vec<_>>()
+        .join(" or ");
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    serializer.append_pair("q", &query);
+    serializer.finish().len()
+}
+fn retry_after_delay(value: &str) -> Option<Duration> {
+    value
+        .parse::<u64>()
+        .ok()
+        .map(Duration::from_secs)
+        .or_else(|| {
+            httpdate::parse_http_date(value)
+                .ok()
+                .map(|time| time.duration_since(SystemTime::now()).unwrap_or_default())
+        })
 }
 
 #[derive(Clone, Debug)]
@@ -148,7 +726,6 @@ pub struct ClientBuilder {
     timeout: Duration,
     retry_fallback: Duration,
 }
-
 impl ClientBuilder {
     pub fn new() -> Self {
         Self {
@@ -192,10 +769,14 @@ impl ClientBuilder {
         })
     }
 }
-
 impl Default for ClientBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+impl Default for Client {
+    fn default() -> Self {
+        Self::new().expect("default INSPIRE configuration is valid")
     }
 }
 
@@ -203,189 +784,38 @@ impl Default for ClientBuilder {
 pub enum Error {
     #[error("invalid INSPIRE base URL: {0}")]
     InvalidBaseUrl(String),
-    #[error("unsafe INSPIRE texkey `{0}`")]
-    UnsafeKey(String),
     #[error("INSPIRE request failed: {0}")]
     Transport(#[source] reqwest::Error),
     #[error("INSPIRE did not find {0}")]
     NotFound(String),
     #[error("INSPIRE returned HTTP {status}: {body}")]
     HttpStatus { status: StatusCode, body: String },
-    #[error("INSPIRE returned malformed BibTeX: {0}")]
-    MalformedBibtex(String),
-}
-
-pub fn batch_keys(keys: &[String]) -> Result<Vec<Vec<String>>, Error> {
-    let mut batches: Vec<Vec<String>> = Vec::new();
-    for key in keys {
-        validate_key(key)?;
-        let needs_new = batches.last().is_some_and(|batch| {
-            batch.len() == MAX_BATCH_KEYS || {
-                let mut candidate = batch.clone();
-                candidate.push(key.clone());
-                encoded_query_len(&candidate) > MAX_ENCODED_QUERY
-            }
-        });
-        if needs_new || batches.is_empty() {
-            batches.push(Vec::new());
-        }
-        batches.last_mut().expect("batch exists").push(key.clone());
-    }
-    Ok(batches)
-}
-
-fn encoded_query_len(keys: &[String]) -> usize {
-    let query = keys
-        .iter()
-        .map(|key| format!("texkey:{key}"))
-        .collect::<Vec<_>>()
-        .join(" or ");
-    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-    serializer.append_pair("q", &query);
-    serializer.finish().len()
-}
-
-fn validate_key(key: &str) -> Result<(), Error> {
-    if !key.is_empty()
-        && key.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'+' | b'-')
-        })
-    {
-        Ok(())
-    } else {
-        Err(Error::UnsafeKey(key.to_owned()))
-    }
-}
-
-fn retry_after_delay(value: &str) -> Option<Duration> {
-    value
-        .parse::<u64>()
-        .ok()
-        .map(Duration::from_secs)
-        .or_else(|| {
-            httpdate::parse_http_date(value)
-                .ok()
-                .map(|time| time.duration_since(SystemTime::now()).unwrap_or_default())
-        })
-}
-
-fn validate_bibtex_body(body: &str) -> Result<(), Error> {
-    let raw =
-        RawBibliography::parse(body).map_err(|error| Error::MalformedBibtex(error.to_string()))?;
-    if !raw.preamble.is_empty() || !raw.abbreviations.is_empty() {
-        return Err(Error::MalformedBibtex(
-            "response contains unsupported BibTeX directives".into(),
-        ));
-    }
-    let mut cursor = 0;
-    for entry in raw.entries {
-        if !body[cursor..entry.span.start].trim().is_empty() {
-            return Err(Error::MalformedBibtex(
-                "response contains non-entry content".into(),
-            ));
-        }
-        cursor = entry
-            .span
-            .end
-            .checked_add(1)
-            .filter(|end| *end <= body.len() && body.as_bytes()[*end - 1] == b'}')
-            .ok_or_else(|| Error::MalformedBibtex("entry has no closing brace".into()))?;
-    }
-    if !body[cursor..].trim().is_empty() {
-        return Err(Error::MalformedBibtex(
-            "response contains non-entry content".into(),
-        ));
-    }
-    Ok(())
+    #[error("INSPIRE returned malformed data: {0}")]
+    Malformed(String),
+    #[error("invalid INSPIRE batch: {0}")]
+    InvalidBatch(String),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        io::{Read, Write},
-        net::TcpListener,
-        thread,
-    };
-
-    fn server(
-        responses: Vec<(&'static str, &'static str, &'static str)>,
-    ) -> (String, thread::JoinHandle<Vec<String>>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let handle = thread::spawn(move || {
-            responses.into_iter().map(|(status, headers, body)| {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0; 16384];
-            let length = stream.read(&mut request).unwrap();
-            write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\n{headers}Connection: close\r\n\r\n{body}", body.len()).unwrap();
-            String::from_utf8_lossy(&request[..length]).lines().next().unwrap().to_owned()
-        }).collect()
-        });
-        (format!("http://{address}/"), handle)
-    }
-
-    #[tokio::test]
-    async fn single_lookup_requests_bibtex() {
-        let bib = "@article{A,title={A}}";
-        let (base, handle) = server(vec![("200 OK", "", bib)]);
-        let client = Client::builder().base_url(base).build().unwrap();
-        assert_eq!(
-            client.lookup(&"1207.7214".parse().unwrap()).await.unwrap(),
-            bib
-        );
-        assert!(handle.join().unwrap()[0].contains("GET /api/arxiv/1207.7214?format=bibtex "));
-    }
-
-    #[tokio::test]
-    async fn retries_three_rate_limits() {
-        let bib = "@article{A,title={A}}";
-        let (base, handle) = server(vec![
-            ("429 Too Many Requests", "Retry-After: 0\r\n", ""),
-            ("429 Too Many Requests", "Retry-After: 0\r\n", ""),
-            ("429 Too Many Requests", "Retry-After: 0\r\n", ""),
-            ("200 OK", "", bib),
-        ]);
-        let client = Client::builder().base_url(base).build().unwrap();
-        assert_eq!(client.lookup_key("A").await.unwrap(), bib);
-        assert_eq!(handle.join().unwrap().len(), 4);
-    }
-
-    #[tokio::test]
-    async fn reports_status_and_malformed_body_errors() {
-        let (base, handle) = server(vec![("500 Server Error", "", "broken")]);
-        let client = Client::builder().base_url(base).build().unwrap();
-        assert!(matches!(
-            client.lookup_key("A").await,
-            Err(Error::HttpStatus { status, .. }) if status == StatusCode::INTERNAL_SERVER_ERROR
-        ));
-        handle.join().unwrap();
-
-        let (base, handle) = server(vec![("200 OK", "", "not BibTeX")]);
-        let client = Client::builder().base_url(base).build().unwrap();
-        assert!(matches!(
-            client.lookup_key("A").await,
-            Err(Error::MalformedBibtex(_))
-        ));
-        handle.join().unwrap();
-    }
-
     #[test]
-    fn splits_at_one_hundred_keys_and_encoded_limit() {
-        let keys = (0..101)
-            .map(|index| format!("K{index}"))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            batch_keys(&keys)
-                .unwrap()
-                .iter()
-                .map(Vec::len)
-                .collect::<Vec<_>>(),
-            [100, 1]
-        );
-        let long = (0..3)
-            .map(|index| format!("K{index}{}", "x".repeat(3000)))
-            .collect::<Vec<_>>();
-        assert_eq!(batch_keys(&long).unwrap().len(), 2);
+    fn projection_selects_roles_publication_and_fallbacks() {
+        let record: LiteratureRecord = serde_json::from_value(serde_json::json!({
+            "id":"1124337", "updated":"2025-01-01", "metadata": {
+                "titles":[{"title":"First"}], "authors":[{"full_name":"Aad, G."},{"full_name":"Editor", "role":"editor"}],
+                "texkeys":["Aad:2012tfa"], "arxiv_eprints":[{"value":"1207.7214v2", "categories":["hep-ex"]}],
+                "dois":[{"value":"10.1/ABC"}], "publication_info":[{"journal_title":"JHEP", "year":2012, "artid":"1", "curated_relation":true}]
+            }})).unwrap();
+        let snapshot = snapshot_from_record(
+            record,
+            "@article{Aad:2012tfa,title={First},doi={10.1/ABC},eprint={1207.7214}}".into(),
+        )
+        .unwrap();
+        let projected = snapshot.project().unwrap();
+        assert_eq!(projected.year, Some(2012));
+        assert_eq!(projected.authors, ["Aad, G."]);
+        assert_eq!(projected.identifiers.arxiv, ["1207.7214"]);
+        snapshot.validate().unwrap();
     }
 }

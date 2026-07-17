@@ -3,7 +3,7 @@ use std::{
     io::{Read, Write},
     net::TcpListener,
     path::Path,
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
     thread,
 };
 
@@ -26,6 +26,25 @@ fn cita_with_server(cwd: &Path, args: &[&str], base: &str) -> Output {
         .unwrap()
 }
 
+fn cita_stdin(cwd: &Path, args: &[&str], input: &str) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cita"))
+        .current_dir(cwd)
+        .args(args)
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
 fn success(output: Output) -> String {
     assert!(
         output.status.success(),
@@ -35,27 +54,13 @@ fn success(output: Output) -> String {
     );
     String::from_utf8(output.stdout).unwrap()
 }
-
 fn failure(output: Output) -> String {
     assert!(!output.status.success(), "command unexpectedly succeeded");
     String::from_utf8(output.stderr).unwrap()
 }
 
-fn entry(key: &str, title: &str, author: &str, year: Option<i32>, extra: &str) -> String {
-    let year = year
-        .map(|value| format!("  year = {{{value}}},\n"))
-        .unwrap_or_default();
-    format!(
-        "@article{{{key},\n  title = {{{title}}},\n  author = {{{author}}},\n{year}  {extra}\n}}"
-    )
-}
-
-fn write_bibliography(directory: &Path, entries: &[String]) {
-    fs::write(
-        directory.join("references.bib"),
-        format!("{}\n", entries.join("\n\n")),
-    )
-    .unwrap();
+fn entry(key: &str, title: &str, extra: &str) -> String {
+    format!("@misc{{{key},\n  title = {{{title}}},\n  {extra}\n}}")
 }
 
 fn server(responses: Vec<(&'static str, String)>) -> (String, thread::JoinHandle<Vec<String>>) {
@@ -85,6 +90,12 @@ fn server(responses: Vec<(&'static str, String)>) -> (String, thread::JoinHandle
     (format!("http://{address}/"), handle)
 }
 
+fn json_record(id: u64, key: &str, title: &str, arxiv: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","updated":"2026-01-01T00:00:00Z","metadata":{{"titles":[{{"title":"{title}"}}],"authors":[{{"full_name":"Doe, Jane"}}],"texkeys":["{key}"],"arxiv_eprints":[{{"value":"{arxiv}","categories":["hep-th"]}}],"document_type":["article"]}}}}"#
+    )
+}
+
 fn git(directory: &Path, args: &[&str]) -> Output {
     Command::new("git")
         .arg("-C")
@@ -94,369 +105,206 @@ fn git(directory: &Path, args: &[&str]) -> Output {
         .unwrap()
 }
 
-fn git_ok(directory: &Path, args: &[&str]) -> String {
+fn git_success(directory: &Path, args: &[&str]) -> String {
     success(git(directory, args))
 }
 
 fn init_git(directory: &Path) {
-    git_ok(directory, &["init", "-q"]);
-    git_ok(directory, &["config", "user.email", "cita@example.test"]);
-    git_ok(directory, &["config", "user.name", "Cita Test"]);
+    git_success(directory, &["init", "-q"]);
+    git_success(directory, &["config", "user.email", "cita@example.test"]);
+    git_success(directory, &["config", "user.name", "Cita Test"]);
 }
 
 #[test]
-fn init_uses_git_root_and_discovers_parent_bibliography() {
-    let directory = tempfile::tempdir().unwrap();
-    init_git(directory.path());
-    let child = directory.path().join("nested/work");
-    fs::create_dir_all(&child).unwrap();
-    let output = success(cita(&child, &["init"]));
-    assert!(output.contains("Initialized"));
-    assert!(directory.path().join("references.bib").is_file());
-    assert!(directory.path().join(".cita/files").is_dir());
-    assert!(
-        fs::read_to_string(directory.path().join(".gitignore"))
-            .unwrap()
-            .contains("/.cita/files/")
+fn init_creates_schema_two_and_imports_an_existing_bibliography() {
+    let empty = tempfile::tempdir().unwrap();
+    assert!(success(cita(empty.path(), &["init"])).contains("Initialized"));
+    assert_eq!(
+        fs::read_to_string(empty.path().join("references.bib")).unwrap(),
+        ""
     );
-    assert!(success(cita(&child, &["list"])).is_empty());
-    assert!(success(cita(&child, &["init"])).contains("Already initialized"));
+    assert!(
+        fs::read_to_string(empty.path().join("cita.toml"))
+            .unwrap()
+            .starts_with("schema = 2")
+    );
+    success(cita(empty.path(), &["list"]));
+
+    let imported = tempfile::tempdir().unwrap();
+    fs::write(
+        imported.path().join("references.bib"),
+        format!("{}\n", entry("A", "Alpha", "eprint={2401.00001},")),
+    )
+    .unwrap();
+    success(cita(imported.path(), &["init"]));
+    let manifest = fs::read_to_string(imported.path().join("cita.toml")).unwrap();
+    assert!(manifest.contains("kind = \"bibtex\""), "{manifest}");
+    assert!(success(cita(imported.path(), &["list"])).contains("Alpha"));
 }
 
 #[test]
-fn legacy_toml_is_a_clean_break() {
+fn legacy_manifest_is_rejected_without_rewriting() {
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("cita.toml"), "schema = 1\n").unwrap();
     let error = failure(cita(directory.path(), &["init"]));
-    assert!(error.contains("legacy cita.toml"));
-    assert!(error.contains("no automatic migration"));
+    assert!(error.contains("unsupported cita.toml schema 1"), "{error}");
     assert!(!directory.path().join("references.bib").exists());
-    assert!(!directory.path().join(".cita").exists());
 }
 
 #[test]
-fn list_projects_fields_and_export_command_is_gone() {
+fn file_and_stdin_import_are_atomic_and_source_preserving() {
     let directory = tempfile::tempdir().unwrap();
-    write_bibliography(
-        directory.path(),
-        &[
-            entry("Zed", "Zeta", "Roe, Richard", None, "eprint={2401.00002},"),
-            entry(
-                "Alpha",
-                "Alpha",
-                "Doe, Jane and Roe, Richard",
-                Some(2023),
-                "eprint={2401.00001},",
-            ),
-        ],
-    );
-    let output = success(cita(
-        directory.path(),
-        &["list", "--sort-by", "year", "--order", "desc"],
-    ));
-    assert!(output.contains("Jane Doe et al."));
-    assert!(output.find("Alpha").unwrap() < output.find("Zed").unwrap());
-    assert!(
-        failure(cita(directory.path(), &["export", "--bibtex"]))
-            .contains("unrecognized subcommand")
-    );
-}
-
-#[test]
-fn multi_add_is_atomic_and_existing_keys_are_reported() {
-    let directory = tempfile::tempdir().unwrap();
-    fs::write(directory.path().join("references.bib"), "").unwrap();
-    let valid = entry(
-        "A",
-        "Alpha",
-        "Doe, Jane",
-        Some(2024),
-        "eprint={2401.00001},",
-    );
-    let (base, handle) = server(vec![
-        ("200 OK", valid.clone()),
-        ("200 OK", "not bibtex @".into()),
-    ]);
-    let error = failure(cita_with_server(
-        directory.path(),
-        &["add", "2401.00001", "2401.00002"],
-        &base,
-    ));
-    assert!(error.contains("malformed BibTeX"));
+    success(cita(directory.path(), &["init"]));
+    let input = entry("B", "Beta", "doi={10.1/B},");
     assert_eq!(
-        fs::read_to_string(directory.path().join("references.bib")).unwrap(),
-        ""
+        success(cita_stdin(directory.path(), &["import", "-"], &input)),
+        "Added B\n"
     );
-    assert_eq!(handle.join().unwrap().len(), 2);
-
-    let (base, handle) = server(vec![("200 OK", valid.clone()), ("200 OK", valid)]);
-    let output = success(cita_with_server(
-        directory.path(),
-        &["add", "2401.00001", "doi:10.1/a"],
-        &base,
-    ));
-    assert_eq!(output, "Added A\nAlready present: A\n");
-    assert_eq!(handle.join().unwrap().len(), 2);
-}
-
-#[test]
-fn multi_remove_is_atomic_and_matches_normalized_identifiers() {
-    let directory = tempfile::tempdir().unwrap();
-    let original = entry(
-        "A",
-        "Alpha",
-        "Doe, Jane",
-        Some(2024),
-        "doi={10.1/ABC},\n  eprint={2401.00001v2},",
+    let before_manifest = fs::read(directory.path().join("cita.toml")).unwrap();
+    let before_bib = fs::read(directory.path().join("references.bib")).unwrap();
+    let conflicting = format!(
+        "{}\n{}",
+        entry("C", "Gamma", "doi={10.1/C},"),
+        entry("D", "Delta", "doi={10.1/b},")
     );
-    write_bibliography(directory.path(), std::slice::from_ref(&original));
-    let before = fs::read_to_string(directory.path().join("references.bib")).unwrap();
-    let error = failure(cita(
-        directory.path(),
-        &["remove", "doi:10.1/abc", "not-a-locator"],
-    ));
-    assert!(error.contains("not-a-locator"));
+    let error = failure(cita_stdin(directory.path(), &["import", "-"], &conflicting));
+    assert!(error.contains("identifier conflict"), "{error}");
     assert_eq!(
-        fs::read_to_string(directory.path().join("references.bib")).unwrap(),
-        before
+        fs::read(directory.path().join("cita.toml")).unwrap(),
+        before_manifest
     );
     assert_eq!(
-        success(cita(directory.path(), &["remove", "2401.00001"])),
-        "Removed A\n"
+        fs::read(directory.path().join("references.bib")).unwrap(),
+        before_bib
     );
 }
 
 #[test]
-fn sync_refreshes_whole_file_and_skips_an_identical_second_write() {
+fn add_uses_json_and_bibtex_and_preserves_an_explicit_local_key() {
     let directory = tempfile::tempdir().unwrap();
-    write_bibliography(
-        directory.path(),
-        &[
-            entry(
-                "A",
-                "Old A",
-                "Doe, Jane",
-                Some(2020),
-                "eprint={2401.00001},",
-            ),
-            entry(
-                "B",
-                "Old B",
-                "Roe, Richard",
-                Some(2020),
-                "eprint={2401.00002},",
-            ),
-        ],
-    );
-    let a = entry(
-        "A",
-        "New A",
-        "Doe, Jane",
-        Some(2024),
-        "eprint={2401.00001},",
-    );
-    let b = entry(
-        "B",
-        "New B",
-        "Roe, Richard",
-        Some(2025),
-        "eprint={2401.00002},",
-    );
-    let response = format!("{b}\n\n{a}\n");
-    let (base, handle) = server(vec![("200 OK", response.clone())]);
+    success(cita(directory.path(), &["init"]));
+    let json = json_record(42, "Provider:42", "Provider title", "2401.00042");
+    let bib = entry("Provider:42", "Provider title", "eprint={2401.00042},");
+    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bib)]);
     assert_eq!(
-        success(cita_with_server(directory.path(), &["sync"], &base)),
-        "Synced 2 references\n"
+        success(cita_with_server(
+            directory.path(),
+            &["add", "--key", "Local:42", "2401.00042"],
+            &base
+        )),
+        "Added Local:42\n"
     );
     let requests = handle.join().unwrap();
-    assert!(requests[0].contains("q=texkey%3AA+or+texkey%3AB"));
-    assert!(requests[0].contains("size=2"));
-    assert_eq!(
-        fs::read_to_string(directory.path().join("references.bib")).unwrap(),
-        format!("{a}\n\n{b}\n")
+    assert!(requests[0].contains("format=json"));
+    assert!(requests[1].contains("format=bibtex"));
+    let bibliography = fs::read_to_string(directory.path().join("references.bib")).unwrap();
+    assert!(
+        bibliography.starts_with("@misc{Local:42,"),
+        "{bibliography}"
     );
-
-    let (base, handle) = server(vec![("200 OK", response)]);
-    assert_eq!(
-        success(cita_with_server(directory.path(), &["sync"], &base)),
-        "Already in sync\n"
-    );
-    assert_eq!(handle.join().unwrap().len(), 1);
+    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
+    assert!(manifest.contains("record_id = 42"));
+    assert!(manifest.contains("Provider:42"));
 }
 
 #[test]
-fn sync_confirms_and_preserves_an_obsolete_texkey() {
+fn drift_blocks_reads_and_generate_repairs_output() {
     let directory = tempfile::tempdir().unwrap();
-    let old = entry(
-        "Old",
-        "Old title",
-        "Doe, Jane",
-        Some(2020),
-        "eprint={2401.00001},",
-    );
-    write_bibliography(directory.path(), &[old]);
-    let new = entry(
-        "New",
-        "Fresh title",
-        "Doe, Jane",
-        Some(2025),
-        "eprint={2401.00001},",
-    );
-    let (base, handle) = server(vec![("200 OK", new.clone()), ("200 OK", new.clone())]);
-    let output = cita_with_server(directory.path(), &["sync"], &base);
-    assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        "Synced 1 references\n"
-    );
-    assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
-        "warning: INSPIRE now prefers New for Old; preserving Old\n"
-    );
-    let stored = fs::read_to_string(directory.path().join("references.bib")).unwrap();
-    assert!(stored.starts_with("@article{Old,"));
-    assert!(stored.contains("Fresh title"));
-    assert!(!stored.contains("@article{New,"));
-    assert_eq!(handle.join().unwrap().len(), 2);
+    fs::write(
+        directory.path().join("references.bib"),
+        format!("{}\n", entry("A", "Alpha", "")),
+    )
+    .unwrap();
+    success(cita(directory.path(), &["init"]));
+    fs::write(directory.path().join("references.bib"), "edited\n").unwrap();
+    assert!(failure(cita(directory.path(), &["list"])).contains("run `cita generate`"));
+    success(cita(directory.path(), &["generate"]));
+    assert!(success(cita(directory.path(), &["list"])).contains("Alpha"));
 }
 
 #[test]
-fn sync_rejects_unexplained_extra_entries_atomically() {
+fn sync_refreshes_managed_records_by_id_and_leaves_imports_unchanged() {
     let directory = tempfile::tempdir().unwrap();
-    let a = entry(
-        "A",
-        "Alpha",
-        "Doe, Jane",
-        Some(2024),
-        "eprint={2401.00001},",
-    );
-    write_bibliography(directory.path(), std::slice::from_ref(&a));
-    let before = fs::read_to_string(directory.path().join("references.bib")).unwrap();
-    let extra = entry(
-        "Extra",
-        "Extra",
-        "Roe, Richard",
-        Some(2024),
-        "eprint={2401.00002},",
-    );
-    let (base, handle) = server(vec![("200 OK", format!("{a}\n{extra}"))]);
-    let error = failure(cita_with_server(directory.path(), &["sync"], &base));
-    assert!(error.contains("unexplained entries: Extra"));
-    assert_eq!(
-        fs::read_to_string(directory.path().join("references.bib")).unwrap(),
-        before
-    );
+    success(cita(directory.path(), &["init"]));
+    let initial_json = json_record(42, "Provider:42", "Old", "2401.00042");
+    let initial_bib = entry("Provider:42", "Old", "eprint={2401.00042},");
+    let (base, handle) = server(vec![("200 OK", initial_json), ("200 OK", initial_bib)]);
+    success(cita_with_server(
+        directory.path(),
+        &["add", "--key", "Local", "2401.00042"],
+        &base,
+    ));
     handle.join().unwrap();
-}
-
-#[test]
-fn sync_rejects_missing_keys_and_alias_collisions_atomically() {
-    let directory = tempfile::tempdir().unwrap();
-    let old_one = entry("Old1", "One", "Doe, Jane", Some(2020), "note={one},");
-    let old_two = entry("Old2", "Two", "Roe, Richard", Some(2020), "note={two},");
-    write_bibliography(directory.path(), &[old_one, old_two]);
-    let before = fs::read_to_string(directory.path().join("references.bib")).unwrap();
-    let current = entry(
-        "New",
-        "Current",
-        "Doe, Jane",
-        Some(2025),
-        "eprint={2401.00001},",
-    );
-    let (base, handle) = server(vec![
-        ("200 OK", current.clone()),
-        ("200 OK", current.clone()),
-        ("200 OK", current),
-    ]);
-    let error = failure(cita_with_server(directory.path(), &["sync"], &base));
-    assert!(error.contains("resolve to the same current INSPIRE record `New`"));
-    assert_eq!(
-        fs::read_to_string(directory.path().join("references.bib")).unwrap(),
-        before
-    );
-    assert_eq!(handle.join().unwrap().len(), 3);
-
-    let missing_dir = tempfile::tempdir().unwrap();
-    let missing = entry("Missing", "Gone", "Doe, Jane", Some(2020), "note={gone},");
-    write_bibliography(missing_dir.path(), &[missing]);
-    let before = fs::read_to_string(missing_dir.path().join("references.bib")).unwrap();
-    let (base, handle) = server(vec![("200 OK", String::new()), ("200 OK", String::new())]);
-    let error = failure(cita_with_server(missing_dir.path(), &["sync"], &base));
-    assert!(error.contains("resolved to 0 entries"));
-    assert_eq!(
-        fs::read_to_string(missing_dir.path().join("references.bib")).unwrap(),
-        before
-    );
-    assert_eq!(handle.join().unwrap().len(), 2);
-}
-
-#[test]
-fn fetch_dry_run_uses_stored_eprint_without_a_network_request() {
-    let directory = tempfile::tempdir().unwrap();
-    write_bibliography(
+    success(cita_stdin(
         directory.path(),
-        &[entry(
-            "A",
-            "Alpha",
-            "Doe, Jane",
-            Some(2024),
-            "eprint={1207.7214},",
-        )],
+        &["import", "-"],
+        &entry("Imported", "Untouched", "eprint={2401.00999},"),
+    ));
+
+    let fresh = json_record(42, "Current:42", "Fresh", "2401.00042");
+    let search_json = format!(r#"{{"hits":{{"hits":[{fresh}]}}}}"#);
+    let fresh_bib = entry("Current:42", "Fresh", "eprint={2401.00042},");
+    let (base, handle) = server(vec![("200 OK", search_json), ("200 OK", fresh_bib)]);
+    let output = success(cita_with_server(directory.path(), &["sync"], &base));
+    assert!(
+        output.contains("1 managed references; left 1 imported unchanged"),
+        "{output}"
     );
-    let output = success(cita(directory.path(), &["fetch", "--dry-run", "A"]));
-    assert_eq!(
-        output,
-        "https://arxiv.org/pdf/1207.7214\n[dry run] skipped download\n"
+    let requests = handle.join().unwrap();
+    assert!(
+        requests[0].contains("control_number%3A42"),
+        "{}",
+        requests[0]
     );
-    assert!(!directory.path().join(".cita").exists());
+    let bibliography = fs::read_to_string(directory.path().join("references.bib")).unwrap();
+    assert!(bibliography.contains("@misc{Local,"));
+    assert!(bibliography.contains("Fresh"));
+    assert!(bibliography.contains("@misc{Imported,"));
+    assert!(bibliography.contains("Untouched"));
 }
 
 #[test]
-fn open_no_download_reports_a_cache_miss_without_creating_cache_layout() {
+fn imported_only_sync_performs_no_network_work() {
     let directory = tempfile::tempdir().unwrap();
-    write_bibliography(
-        directory.path(),
-        &[entry(
-            "A",
-            "Alpha",
-            "Doe, Jane",
-            Some(2024),
-            "eprint={1207.7214},",
-        )],
+    fs::write(
+        directory.path().join("references.bib"),
+        format!("{}\n", entry("A", "Alpha", "")),
+    )
+    .unwrap();
+    success(cita(directory.path(), &["init"]));
+    assert_eq!(
+        success(cita_with_server(
+            directory.path(),
+            &["sync"],
+            "http://127.0.0.1:1/"
+        )),
+        "Already in sync: 0 managed, 1 imported\n"
     );
-    let error = failure(cita(directory.path(), &["open", "--no-download", "A"]));
-    assert!(error.contains("rerun without --no-download"));
-    assert!(!directory.path().join(".cita").exists());
-    assert!(!directory.path().join(".gitignore").exists());
 }
 
 #[test]
-fn commit_is_scoped_to_references_bib() {
+fn commit_forces_only_the_two_tracked_artifacts_and_leaves_other_staging_alone() {
     let directory = tempfile::tempdir().unwrap();
     init_git(directory.path());
-    fs::write(directory.path().join("unrelated.txt"), "one\n").unwrap();
-    git_ok(directory.path(), &["add", "unrelated.txt"]);
-    git_ok(directory.path(), &["commit", "-qm", "initial"]);
-    fs::write(directory.path().join("unrelated.txt"), "two\n").unwrap();
-    git_ok(directory.path(), &["add", "unrelated.txt"]);
-    write_bibliography(
+    fs::write(directory.path().join(".gitignore"), "*.bib\n").unwrap();
+    fs::write(directory.path().join("notes.txt"), "keep staged\n").unwrap();
+    git_success(directory.path(), &["add", "notes.txt"]);
+    success(cita(directory.path(), &["init"]));
+    success(cita_stdin(
         directory.path(),
-        &[entry(
-            "A",
-            "Alpha",
-            "Doe, Jane",
-            Some(2024),
-            "eprint={2401.00001},",
-        )],
+        &["import", "-"],
+        &entry("A", "Alpha", ""),
+    ));
+    success(cita(directory.path(), &["commit"]));
+    let committed = git_success(
+        directory.path(),
+        &["show", "--pretty=format:", "--name-only", "HEAD"],
     );
-    let output = success(cita(directory.path(), &["commit"]));
-    assert!(output.contains("references: initialize cita"));
+    assert!(committed.contains("cita.toml"), "{committed}");
+    assert!(committed.contains("references.bib"), "{committed}");
+    assert!(!committed.contains("notes.txt"), "{committed}");
     assert_eq!(
-        git_ok(directory.path(), &["show", "HEAD:references.bib"]),
-        fs::read_to_string(directory.path().join("references.bib")).unwrap()
-    );
-    assert_eq!(
-        git_ok(directory.path(), &["diff", "--cached", "--name-only"]),
-        "unrelated.txt\n"
+        git_success(directory.path(), &["diff", "--cached", "--name-only"]),
+        "notes.txt\n"
     );
 }
