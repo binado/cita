@@ -1,0 +1,19 @@
+schema = 1
+
+[references."Owen:2026hst"]
+source = "inspire"
+record_id = 3170956
+updated = "2026-06-24T04:18:01.622836+00:00"
+bibtex = """
+@article{Owen:2026hst,
+    author = "Owen, Caroline B. and Toubiana, Alexandre and Gerosa, Davide",
+    title = "{Population-level correlations in Bayesian statistics: an illustrative model for gravitational-wave astronomy}",
+    eprint = "2606.21076",
+    archivePrefix = "arXiv",
+    primaryClass = "gr-qc",
+    month = "6",
+    year = "2026"
+}"""
+
+[references."Owen:2026hst".identifiers]
+arxiv = "2606.21076"
