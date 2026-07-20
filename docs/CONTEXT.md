@@ -14,8 +14,9 @@ local citation key in `cita.toml`. Every snapshot holds authoritative standalone
 BibTeX and is tagged by the source that owns its refresh lifecycle.
 
 - An INSPIRE entry (`source = "inspire"`) contains authoritative INSPIRE BibTeX,
-  the stable record ID (its refresh key), an update timestamp, and a curated
-  `identifiers` block of canonical normalized arXiv/DOI.
+  the stable record ID (its refresh key), an update timestamp, and canonical
+  normalized arXiv/DOI values selected from and cross-checked against that
+  BibTeX.
 - An import (`source = "import"`) contains one exact standalone imported entry.
 
 Snapshots project to `Reference` from their BibTeX; INSPIRE entries override the

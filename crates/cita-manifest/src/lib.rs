@@ -27,7 +27,8 @@ pub const BIBLIOGRAPHY_FILE: &str = "references.bib";
 
 /// A stored reference tagged by the source that owns its refresh lifecycle.
 /// Bibliographic content is always projected from the authoritative BibTeX;
-/// INSPIRE records additionally carry the canonical identity BibTeX cannot hold.
+/// INSPIRE records additionally carry canonical values selected from and
+/// cross-checked against the authoritative BibTeX.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "lowercase", deny_unknown_fields)]
 pub enum SourceSnapshot {
@@ -38,7 +39,8 @@ pub enum SourceSnapshot {
 }
 
 /// An INSPIRE-managed reference: authoritative BibTeX plus refresh bookkeeping
-/// and the curated HEP identifiers that BibTeX rendering cannot express.
+/// and curated canonical HEP identifiers selected from and cross-checked
+/// against that BibTeX.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InspireEntry {
@@ -48,12 +50,12 @@ pub struct InspireEntry {
     pub updated: String,
     /// Complete authoritative standalone BibTeX entry.
     pub bibtex: String,
-    /// Curated identifiers that override projected BibTeX identity.
+    /// Canonical identifiers selected from and cross-checked against the BibTeX.
     #[serde(default, skip_serializing_if = "HepIdentifiers::is_empty")]
     pub identifiers: HepIdentifiers,
 }
 
-/// Canonical, normalized identifiers stored alongside INSPIRE BibTeX.
+/// Curated canonical, normalized identifiers cross-checked against INSPIRE BibTeX.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HepIdentifiers {
@@ -146,7 +148,7 @@ pub struct ProjectedReference {
 pub enum KeyRequest {
     /// Require this exact local citation key.
     Exact(String),
-    /// Use this key unless the same identity already exists under another key.
+    /// Use this key unless its INSPIRE record ID already exists under another key.
     Suggested(String),
 }
 

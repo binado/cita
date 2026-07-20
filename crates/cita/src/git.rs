@@ -19,13 +19,33 @@ pub fn repository_root(path: &Path) -> Result<Option<PathBuf>> {
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     if output.status.code() == Some(128)
-        && stderr
-            .trim()
-            .starts_with("fatal: not a git repository (or any of the parent directories):")
+        && is_not_repository_diagnostic(&stderr)
+        && !has_git_marker(path)?
     {
         return Ok(None);
     }
     bail!("git rev-parse --show-toplevel failed: {}", stderr.trim())
+}
+
+fn is_not_repository_diagnostic(stderr: &str) -> bool {
+    stderr
+        .trim_start()
+        .starts_with("fatal: not a git repository")
+}
+
+fn has_git_marker(path: &Path) -> Result<bool> {
+    for ancestor in path.ancestors() {
+        let marker = ancestor.join(".git");
+        match fs::symlink_metadata(&marker) {
+            Ok(_) => return Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("could not inspect {}", marker.display()));
+            }
+        }
+    }
+    Ok(false)
 }
 
 pub fn commit(manifest_path: &Path) -> Result<()> {
@@ -44,6 +64,8 @@ pub fn commit(manifest_path: &Path) -> Result<()> {
         .strip_prefix(&root)
         .context("references.bib is outside the Git root")?
         .to_string_lossy();
+    // Managed paths must start at HEAD so rollback can restore tracked entries
+    // and remove newly staged ones without disturbing unrelated index state.
     ensure_managed_files_unstaged(
         &root,
         &[manifest_relative.as_ref(), bibliography_relative.as_ref()],
@@ -346,4 +368,24 @@ fn run_git(root: &Path, args: &[&str]) -> Result<()> {
         )
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_not_repository_diagnostic;
+
+    #[test]
+    fn classifies_ordinary_not_repository_diagnostic() {
+        assert!(is_not_repository_diagnostic(
+            "fatal: not a git repository (or any of the parent directories): .git\n"
+        ));
+    }
+
+    #[test]
+    fn classifies_mount_point_not_repository_diagnostic() {
+        assert!(is_not_repository_diagnostic(
+            "fatal: not a git repository (or any parent up to mount point /work)\n\
+             Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n"
+        ));
+    }
 }

@@ -1,15 +1,20 @@
 use super::ensure_cache_layout;
-use crate::git;
-use anyhow::Result;
+use anyhow::{Result, bail};
 use cita_manifest::{BIBLIOGRAPHY_FILE, MANIFEST_FILE, Manifest};
 use std::path::Path;
 
-pub(crate) fn init(cwd: &Path, here: bool) -> Result<()> {
-    let directory = if here {
-        cwd.to_path_buf()
-    } else {
-        git::repository_root(cwd)?.unwrap_or_else(|| cwd.to_path_buf())
+pub(crate) fn init(cwd: &Path, path: Option<&Path>) -> Result<()> {
+    let directory = match path {
+        Some(path) if path.is_absolute() => path.to_path_buf(),
+        Some(path) => cwd.join(path),
+        None => cwd.to_path_buf(),
     };
+    if !directory.is_dir() {
+        bail!(
+            "initialization path {} is not an existing directory",
+            directory.display()
+        );
+    }
     let manifest_path = directory.join(MANIFEST_FILE);
     let bibliography_path = directory.join(BIBLIOGRAPHY_FILE);
     let existed = manifest_path.exists();

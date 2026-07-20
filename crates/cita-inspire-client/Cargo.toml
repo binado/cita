@@ -1,6 +1,6 @@
 [package]
 name = "cita-inspire-client"
-description = "Direct BibTeX client for INSPIRE literature"
+description = "INSPIRE literature client for JSON metadata and authoritative BibTeX"
 readme = "README.md"
 keywords = ["inspirehep", "literature", "physics", "api"]
 categories = ["api-bindings", "science"]

@@ -3,7 +3,7 @@ mod git;
 
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
-use std::env;
+use std::{env, path::PathBuf};
 
 #[derive(Debug, Parser)]
 #[command(name = "cita", version, about = "A Git-friendly bibliography database")]
@@ -16,9 +16,9 @@ struct Cli {
 enum Command {
     /// Initialize cita.toml and its generated references.bib
     Init {
-        /// Initialize in the current directory instead of the Git repository root
+        /// Initialize in this existing directory instead of the current directory
         #[arg(long)]
-        here: bool,
+        path: Option<PathBuf>,
     },
     /// Import standalone BibTeX entries from a path or stdin (`-`)
     Import {
@@ -76,7 +76,7 @@ enum Command {
         /// Local key, provider ID, DOI, arXiv ID, or unmatched INSPIRE locator
         selector: String,
     },
-    /// Commit cita.toml and references.bib, leaving unrelated files alone
+    /// Commit the managed files; refuses to run if either managed file is already staged
     Commit,
 }
 
@@ -111,7 +111,7 @@ async fn run() -> Result<()> {
             Cli::command().print_help()?;
             println!();
         }
-        Some(Command::Init { here }) => commands::init(&cwd, here)?,
+        Some(Command::Init { path }) => commands::init(&cwd, path.as_deref())?,
         Some(Command::Import { path }) => commands::import(&cwd, &path)?,
         Some(Command::Add { key, locators }) => {
             commands::add(&cwd, key.as_deref(), &locators).await?
