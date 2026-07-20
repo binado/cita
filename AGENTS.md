@@ -2,9 +2,9 @@
 
 ## What this is
 
-Cita is a Git-friendly bibliography CLI. Provider snapshots are authoritative
-in schema-2 `cita.toml`; `references.bib` is a deterministic, tracked generated
-artifact. Rust edition 2024, MSRV 1.88.
+Cita is a Git-friendly bibliography CLI. Authoritative BibTeX (plus curated
+INSPIRE identifiers) lives in schema-1 `cita.toml`; `references.bib` is a
+deterministic, tracked generated artifact. Rust edition 2024, MSRV 1.88.
 
 ## Commands
 
@@ -41,10 +41,11 @@ cita-bibliography ← cita-inspire-client   cita-documents
 - `cita-core`: `Reference`, provider traits, locators, and normalization.
 - `cita-bibliography`: strict standalone BibTeX snapshots, projections,
   raw-entry re-keying, and generic `biblatex::Entry` rendering.
-- `cita-inspire-client`: typed INSPIRE JSON/BibTeX snapshots, stable-record-ID
-  refresh batches, bounded queries, and 429 retries; parses and cross-checks
-  its BibTeX through `cita-bibliography`.
-- `cita-manifest`: schema-2 authority, identity indexes, deterministic TOML,
+- `cita-inspire-client`: lean `InspireRecord`s (authoritative BibTeX plus
+  record id, timestamp, and canonical arXiv/DOI), stable-record-ID refresh
+  batches, bounded queries, and 429 retries; cross-checks its BibTeX against the
+  selected JSON through `cita-bibliography`.
+- `cita-manifest`: schema-1 authority, identity indexes, deterministic TOML,
   generated bibliography verification, and coordinated writes.
 - `cita-documents`: accepts a validated arXiv ID and atomically caches PDFs
   beneath `.cita/files/arxiv`.
@@ -54,11 +55,16 @@ cita-bibliography ← cita-inspire-client   cita-documents
 
 ### Source snapshots and raw entries
 
-`cita.toml` snapshots are authoritative; projections are derived. INSPIRE stores
-selected typed JSON fields plus authoritative BibTeX. Imports store one exact
-standalone entry. BibTeX parsing uses raw spans plus semantic `biblatex` parsing.
-Rendering sorts by local key, changes only the raw key token, joins entries with
-one blank line, and appends one newline. Do not add a handwritten writer.
+`cita.toml` snapshots are authoritative; projections are derived. Every source
+stores authoritative standalone BibTeX and its `Reference` (title, authors, year,
+publication, arXiv/DOI) is projected from that BibTeX. INSPIRE entries are tagged
+`source = "inspire"` and additionally carry the refresh key (`record_id`), an
+`updated` timestamp, and a curated `identifiers` block (canonical normalized
+arXiv/DOI) that overrides the projected identity; imports are tagged
+`source = "import"` and derive identity from their entry. BibTeX parsing uses raw
+spans plus semantic `biblatex` parsing. Rendering sorts by local key, changes
+only the raw key token, joins entries with one blank line, and appends one
+newline. Do not add a handwritten writer.
 
 Only entries and whitespace are allowed. Reject directives, comments/non-entry
 content, malformed or duplicate entries, missing titles, texkeys outside
@@ -86,9 +92,10 @@ BibTeX snapshots cause no network request.
 ### Selectors and documents
 
 Exact local key wins, then provider ID, normalized DOI, and normalized arXiv ID.
-Transient `fetch` and `open` resolve INSPIRE JSON only unless `--save` requires
-the full snapshot. Documents use the projected arXiv ID; stored IDs are
-versionless and cache paths retain legacy arXiv archive directories.
+Transient `fetch` and `open` resolve INSPIRE JSON only unless `--save` also
+fetches the authoritative BibTeX and stores the record. Documents use the
+projected arXiv ID; stored IDs are versionless and cache paths retain legacy
+arXiv archive directories.
 
 ### Git
 

@@ -1,8 +1,12 @@
-//! Schema-2 source snapshot storage and generated-bibliography coordination.
+//! Schema-1 source snapshot storage and generated-bibliography coordination.
 
-use cita_bibliography::{BibtexSnapshot, parse as parse_bibtex, rename_entry, validate_key};
-use cita_core::{Locator, Reference, ReferenceSource, normalize_arxiv, normalize_doi};
-use cita_inspire_client::InspireSnapshot;
+use cita_bibliography::{
+    BibtexSnapshot, parse as parse_bibtex, project_bibtex, rename_entry, validate_key,
+};
+use cita_core::{
+    Locator, ProjectionError, Reference, ReferenceSource, normalize_arxiv, normalize_doi,
+};
+use cita_inspire_client::InspireRecord;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -13,38 +17,107 @@ use std::{
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
-pub const SCHEMA: u32 = 2;
+pub const SCHEMA: u32 = 1;
 pub const MANIFEST_FILE: &str = "cita.toml";
 pub const BIBLIOGRAPHY_FILE: &str = "references.bib";
 
+/// A stored reference tagged by the source that owns its refresh lifecycle.
+/// Bibliographic content is always projected from the authoritative BibTeX;
+/// INSPIRE records additionally carry the canonical identity BibTeX cannot hold.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+#[serde(tag = "source", rename_all = "lowercase", deny_unknown_fields)]
 pub enum SourceSnapshot {
-    Inspire(Box<InspireSnapshot>),
-    Bibtex(BibtexSnapshot),
+    Inspire(InspireEntry),
+    Import(BibtexSnapshot),
 }
 
-impl SourceSnapshot {
-    pub fn raw_bibtex(&self) -> &str {
-        match self {
-            Self::Inspire(snapshot) => &snapshot.bibtex,
-            Self::Bibtex(snapshot) => &snapshot.bibtex,
+/// An INSPIRE-managed reference: authoritative BibTeX plus refresh bookkeeping
+/// and the curated HEP identifiers that BibTeX rendering cannot express.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InspireEntry {
+    pub record_id: u64,
+    pub updated: String,
+    pub bibtex: String,
+    #[serde(default, skip_serializing_if = "HepIdentifiers::is_empty")]
+    pub identifiers: HepIdentifiers,
+}
+
+/// Canonical, normalized identifiers stored alongside INSPIRE BibTeX.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HepIdentifiers {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arxiv: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doi: Option<String>,
+}
+
+impl HepIdentifiers {
+    pub fn new(arxiv: Option<String>, doi: Option<String>) -> Self {
+        Self {
+            arxiv: arxiv.as_deref().map(normalize_arxiv),
+            doi: doi.as_deref().map(normalize_doi),
         }
     }
 
-    pub fn inspire(&self) -> Option<&InspireSnapshot> {
-        match self {
-            Self::Inspire(snapshot) => Some(snapshot),
-            Self::Bibtex(_) => None,
+    pub fn is_empty(&self) -> bool {
+        self.arxiv.is_none() && self.doi.is_none()
+    }
+}
+
+impl InspireEntry {
+    fn project(&self) -> Result<Reference, ProjectionError> {
+        let mut reference = project_bibtex(&self.bibtex)
+            .map_err(|error| ProjectionError::Invalid(error.to_string()))?;
+        if let Some(arxiv) = &self.identifiers.arxiv {
+            reference.identifiers.arxiv = vec![normalize_arxiv(arxiv)];
         }
+        if let Some(doi) = &self.identifiers.doi {
+            reference.identifiers.dois = vec![normalize_doi(doi)];
+        }
+        reference
+            .identifiers
+            .providers
+            .insert("inspire".to_owned(), vec![self.record_id.to_string()]);
+        Ok(reference)
+    }
+}
+
+impl SourceSnapshot {
+    pub fn inspire(record: InspireRecord) -> Self {
+        Self::Inspire(InspireEntry {
+            record_id: record.record_id,
+            updated: record.updated,
+            bibtex: record.bibtex,
+            identifiers: HepIdentifiers::new(record.arxiv, record.doi),
+        })
+    }
+
+    pub fn raw_bibtex(&self) -> &str {
+        match self {
+            Self::Inspire(entry) => &entry.bibtex,
+            Self::Import(snapshot) => &snapshot.bibtex,
+        }
+    }
+
+    pub fn inspire_entry(&self) -> Option<&InspireEntry> {
+        match self {
+            Self::Inspire(entry) => Some(entry),
+            Self::Import(_) => None,
+        }
+    }
+
+    fn inspire_record_id(&self) -> Option<u64> {
+        self.inspire_entry().map(|entry| entry.record_id)
     }
 }
 
 impl ReferenceSource for SourceSnapshot {
-    fn project(&self) -> Result<Reference, cita_core::ProjectionError> {
+    fn project(&self) -> Result<Reference, ProjectionError> {
         match self {
-            Self::Inspire(snapshot) => snapshot.project(),
-            Self::Bibtex(snapshot) => snapshot.project(),
+            Self::Inspire(entry) => entry.project(),
+            Self::Import(snapshot) => snapshot.project(),
         }
     }
 }
@@ -114,7 +187,7 @@ pub enum Error {
     #[error("invalid manifest {path}: {message}")]
     Invalid { path: PathBuf, message: String },
     #[error(
-        "unsupported cita.toml schema {found}; this version supports schema 2 and provides no legacy migration"
+        "unsupported cita.toml schema {found}; this version supports schema 1 and provides no legacy migration"
     )]
     UnsupportedSchema { found: i64 },
     #[error("could not write {path}: {source}")]
@@ -167,7 +240,7 @@ impl Manifest {
         Ok(manifest)
     }
 
-    /// Create schema 2 from an existing standalone bibliography in one mutation.
+    /// Create schema 1 from an existing standalone bibliography in one mutation.
     pub fn import_existing(directory: impl AsRef<Path>) -> Result<Self, Error> {
         let directory = directory.as_ref();
         let path = directory.join(MANIFEST_FILE);
@@ -181,7 +254,7 @@ impl Manifest {
         })?;
         let references = parse_bibtex(&source)?
             .into_iter()
-            .map(|(key, snapshot)| (key, SourceSnapshot::Bibtex(snapshot)))
+            .map(|(key, snapshot)| (key, SourceSnapshot::Import(snapshot)))
             .collect::<BTreeMap<_, _>>();
         validate_references(&references)?;
         let manifest = Self {
@@ -251,7 +324,7 @@ impl Manifest {
     pub fn inspire_record_ids(&self) -> Vec<u64> {
         self.references
             .values()
-            .filter_map(|source| source.inspire().map(|snapshot| snapshot.record_id))
+            .filter_map(SourceSnapshot::inspire_record_id)
             .collect()
     }
 
@@ -308,12 +381,9 @@ impl Manifest {
         let mut outcomes = Vec::with_capacity(pending.len());
         for item in pending {
             validate_key(item.key.as_str())?;
-            if let SourceSnapshot::Inspire(snapshot) = &item.source
+            if let Some(record_id) = item.source.inspire_record_id()
                 && let Some(existing) = candidate.iter().find_map(|(key, source)| {
-                    source
-                        .inspire()
-                        .is_some_and(|stored| stored.record_id == snapshot.record_id)
-                        .then(|| key.clone())
+                    (source.inspire_record_id() == Some(record_id)).then(|| key.clone())
                 })
             {
                 match item.key {
@@ -372,25 +442,25 @@ impl Manifest {
         Ok(removed)
     }
 
-    pub fn replace_inspire(&mut self, refreshed: Vec<InspireSnapshot>) -> Result<bool, Error> {
+    pub fn replace_inspire(&mut self, refreshed: Vec<InspireRecord>) -> Result<bool, Error> {
         let expected = self
             .references
             .iter()
             .filter_map(|(key, source)| {
                 source
-                    .inspire()
-                    .map(|snapshot| (snapshot.record_id, key.clone()))
+                    .inspire_entry()
+                    .map(|entry| (entry.record_id, key.clone()))
             })
             .collect::<BTreeMap<_, _>>();
         let mut returned = BTreeMap::new();
-        for snapshot in refreshed {
-            let record_id = snapshot.record_id;
+        for record in refreshed {
+            let record_id = record.record_id;
             if !expected.contains_key(&record_id) {
                 return Err(Error::RefreshRecordSet {
                     message: format!("returned unexpected record {record_id}"),
                 });
             }
-            if returned.insert(record_id, snapshot).is_some() {
+            if returned.insert(record_id, record).is_some() {
                 return Err(Error::RefreshRecordSet {
                     message: format!("returned duplicate record {record_id}"),
                 });
@@ -408,10 +478,10 @@ impl Manifest {
         }
         let mut candidate = self.references.clone();
         for (record_id, key) in expected {
-            let snapshot = returned
+            let record = returned
                 .remove(&record_id)
                 .expect("record-set reconciliation checked completeness");
-            candidate.insert(key, SourceSnapshot::Inspire(Box::new(snapshot)));
+            candidate.insert(key, SourceSnapshot::inspire(record));
         }
         validate_references(&candidate)?;
         let changed = candidate != self.references;
@@ -479,11 +549,40 @@ fn validate_references(references: &BTreeMap<String, SourceSnapshot>) -> Result<
     let mut identities: HashMap<String, String> = HashMap::new();
     for (key, source) in references {
         validate_key(key)?;
-        if let SourceSnapshot::Inspire(snapshot) = source {
-            snapshot.validate().map_err(|error| Error::InvalidSource {
-                key: key.clone(),
-                message: error.to_string(),
-            })?;
+        if let Some(entry) = source.inspire_entry() {
+            if entry.record_id == 0 {
+                return Err(Error::InvalidSource {
+                    key: key.clone(),
+                    message: "INSPIRE record id is zero".into(),
+                });
+            }
+            let bibtex_reference =
+                project_bibtex(&entry.bibtex).map_err(|error| Error::InvalidSource {
+                    key: key.clone(),
+                    message: error.to_string(),
+                })?;
+            if let Some(arxiv) = &entry.identifiers.arxiv {
+                let normalized = normalize_arxiv(arxiv);
+                if !bibtex_reference.identifiers.arxiv.contains(&normalized) {
+                    return Err(Error::InvalidSource {
+                        key: key.clone(),
+                        message: format!(
+                            "curated arXiv id {normalized} is not present in stored BibTeX"
+                        ),
+                    });
+                }
+            }
+            if let Some(doi) = &entry.identifiers.doi {
+                let normalized = normalize_doi(doi);
+                if !bibtex_reference.identifiers.dois.contains(&normalized) {
+                    return Err(Error::InvalidSource {
+                        key: key.clone(),
+                        message: format!(
+                            "curated DOI {normalized} is not present in stored BibTeX"
+                        ),
+                    });
+                }
+            }
         }
         let reference = source.project().map_err(|error| Error::InvalidSource {
             key: key.clone(),
@@ -580,38 +679,31 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cita_inspire_client::Title;
 
     fn imported(key: &str, title: &str, extra: &str) -> PendingReference {
         PendingReference {
             key: KeyRequest::Exact(key.into()),
-            source: SourceSnapshot::Bibtex(
+            source: SourceSnapshot::Import(
                 BibtexSnapshot::new(format!("@misc{{{key},title={{{title}}},{extra}}}")).unwrap(),
             ),
+        }
+    }
+
+    fn record(provider_key: &str, record_id: u64) -> InspireRecord {
+        InspireRecord {
+            record_id,
+            updated: "2026-01-01".into(),
+            texkey: provider_key.into(),
+            bibtex: format!("@misc{{{provider_key},title={{Record {record_id}}}}}"),
+            arxiv: None,
+            doi: None,
         }
     }
 
     fn inspire(local_key: &str, provider_key: &str, record_id: u64) -> PendingReference {
         PendingReference {
             key: KeyRequest::Suggested(local_key.into()),
-            source: SourceSnapshot::Inspire(Box::new(InspireSnapshot {
-                record_id,
-                updated: "2026-01-01".into(),
-                texkeys: vec![provider_key.into()],
-                bibtex: format!("@misc{{{provider_key},title={{Record {record_id}}}}}"),
-                titles: vec![Title {
-                    title: format!("Record {record_id}"),
-                }],
-                authors: Vec::new(),
-                collaborations: Vec::new(),
-                publication_info: Vec::new(),
-                arxiv_eprints: Vec::new(),
-                dois: Vec::new(),
-                urls: Vec::new(),
-                document_types: Vec::new(),
-                preprint_date: None,
-                earliest_date: None,
-            })),
+            source: SourceSnapshot::inspire(record(provider_key, record_id)),
         }
     }
 
@@ -620,13 +712,10 @@ mod tests {
         pending
     }
 
-    fn updated(pending: PendingReference, timestamp: &str) -> InspireSnapshot {
-        let SourceSnapshot::Inspire(snapshot) = pending.source else {
-            unreachable!()
-        };
-        InspireSnapshot {
+    fn updated(provider_key: &str, record_id: u64, timestamp: &str) -> InspireRecord {
+        InspireRecord {
             updated: timestamp.into(),
-            ..*snapshot
+            ..record(provider_key, record_id)
         }
     }
 
@@ -641,8 +730,9 @@ mod tests {
             ])
             .unwrap();
         let text = fs::read_to_string(dir.path().join(MANIFEST_FILE)).unwrap();
-        assert!(text.contains("schema = 2"));
+        assert!(text.contains("schema = 1"));
         assert!(text.contains("[references.Alpha]"), "{text}");
+        assert!(text.contains("source = \"import\""), "{text}");
         assert!(!text.contains("[references.Alpha.source]"), "{text}");
         let loaded = Manifest::load_verified(dir.path().join(MANIFEST_FILE)).unwrap();
         assert!(
@@ -695,21 +785,18 @@ mod tests {
         let before_bibliography = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
 
         let mut changed = inspire("Provider:New", "Provider:New", 42);
-        let SourceSnapshot::Inspire(snapshot) = &mut changed.source else {
+        let SourceSnapshot::Inspire(entry) = &mut changed.source else {
             unreachable!()
         };
-        snapshot.updated = "2026-07-17".into();
-        snapshot.titles[0].title = "Changed provider title".into();
-        snapshot.bibtex = "@misc{Provider:New,title={Changed provider title}}".into();
+        entry.updated = "2026-07-17".into();
+        entry.bibtex = "@misc{Provider:New,title={Changed provider title}}".into();
 
         assert_eq!(
             manifest.add_batch(vec![changed]).unwrap(),
             [AddOutcome::Existing("Local".into())]
         );
-        assert_eq!(
-            manifest.references()["Local"].inspire().unwrap().texkeys,
-            ["Provider:Old"]
-        );
+        let stored = manifest.references()["Local"].inspire_entry().unwrap();
+        assert_eq!(stored.bibtex, "@misc{Provider:Old,title={Record 42}}");
         assert_eq!(
             fs::read(dir.path().join(MANIFEST_FILE)).unwrap(),
             before_manifest
@@ -837,17 +924,22 @@ mod tests {
     }
 
     #[test]
-    fn legacy_schema_is_explicitly_unsupported() {
+    fn non_current_schemas_are_explicitly_unsupported() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join(MANIFEST_FILE), "schema = 1\n").unwrap();
+        fs::write(dir.path().join(MANIFEST_FILE), "schema = 0\n").unwrap();
         assert!(matches!(
             Manifest::load(dir.path().join(MANIFEST_FILE)),
-            Err(Error::UnsupportedSchema { found: 1 })
+            Err(Error::UnsupportedSchema { found: 0 })
+        ));
+        fs::write(dir.path().join(MANIFEST_FILE), "schema = 2\n").unwrap();
+        assert!(matches!(
+            Manifest::load(dir.path().join(MANIFEST_FILE)),
+            Err(Error::UnsupportedSchema { found: 2 })
         ));
     }
 
     #[test]
-    fn nested_schema_two_shape_and_unknown_fields_are_rejected() {
+    fn nested_shape_and_unknown_fields_are_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
         manifest
@@ -866,6 +958,115 @@ mod tests {
     }
 
     #[test]
+    fn curated_identifiers_override_bibtex_derived_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let record = InspireRecord {
+            record_id: 99,
+            updated: "2026-01-01".into(),
+            texkey: "Curated:2026".into(),
+            bibtex: "@misc{Curated:2026,title={T},eprint={2401.00001},doi={10.1/BibtexCase}}"
+                .into(),
+            // Both curated values are un-normalized (version suffix / mixed
+            // case) so the assertions only pass if the override branch
+            // actually runs `normalize_arxiv`/`normalize_doi`, not merely
+            // whether the record happens to have the same content as BibTeX.
+            arxiv: Some("2401.00001v9".into()),
+            doi: Some("10.1/BIBTEXCASE".into()),
+        };
+        manifest
+            .add_batch(vec![PendingReference {
+                key: KeyRequest::Suggested("Local".into()),
+                source: SourceSnapshot::inspire(record),
+            }])
+            .unwrap();
+        let projected = manifest.projected().unwrap();
+        let reference = &projected
+            .iter()
+            .find(|item| item.key == "Local")
+            .unwrap()
+            .reference;
+        assert_eq!(reference.identifiers.arxiv, ["2401.00001"]);
+        assert_eq!(reference.identifiers.dois, ["10.1/bibtexcase"]);
+    }
+
+    #[test]
+    fn curated_identifier_partial_override_falls_through_for_the_other_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let record = InspireRecord {
+            record_id: 100,
+            updated: "2026-01-01".into(),
+            texkey: "Partial:2026".into(),
+            bibtex: "@misc{Partial:2026,title={T},eprint={2401.00001},doi={10.1/frombib}}".into(),
+            arxiv: Some("2401.00001v3".into()),
+            doi: None,
+        };
+        manifest
+            .add_batch(vec![PendingReference {
+                key: KeyRequest::Suggested("Local".into()),
+                source: SourceSnapshot::inspire(record),
+            }])
+            .unwrap();
+        let projected = manifest.projected().unwrap();
+        let reference = &projected
+            .iter()
+            .find(|item| item.key == "Local")
+            .unwrap()
+            .reference;
+        assert_eq!(reference.identifiers.arxiv, ["2401.00001"]);
+        assert_eq!(reference.identifiers.dois, ["10.1/frombib"]);
+    }
+
+    #[test]
+    fn zero_record_id_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        assert!(matches!(
+            manifest.add_batch(vec![inspire("Local", "Key", 0)]),
+            Err(Error::InvalidSource { .. })
+        ));
+    }
+
+    #[test]
+    fn source_snapshot_inspire_normalizes_curated_identifiers() {
+        let record = InspireRecord {
+            record_id: 1,
+            updated: "2026-01-01".into(),
+            texkey: "Key:2026".into(),
+            bibtex: "@misc{Key:2026,title={T},eprint={2401.00001}}".into(),
+            arxiv: Some("2401.00001v2".into()),
+            doi: None,
+        };
+        let SourceSnapshot::Inspire(entry) = SourceSnapshot::inspire(record) else {
+            unreachable!()
+        };
+        assert_eq!(entry.identifiers.arxiv.as_deref(), Some("2401.00001"));
+    }
+
+    #[test]
+    fn curated_arxiv_id_absent_from_stored_bibtex_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mismatched = PendingReference {
+            key: KeyRequest::Suggested("Local".into()),
+            source: SourceSnapshot::Inspire(InspireEntry {
+                record_id: 1,
+                updated: "2026-01-01".into(),
+                bibtex: "@misc{Key,title={T},eprint={2401.00001}}".into(),
+                identifiers: HepIdentifiers {
+                    arxiv: Some("2402.00002".into()),
+                    doi: None,
+                },
+            }),
+        };
+        assert!(matches!(
+            manifest.add_batch(vec![mismatched]),
+            Err(Error::InvalidSource { .. })
+        ));
+    }
+
+    #[test]
     fn refresh_reconciles_out_of_order_ids_without_changing_local_keys() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
@@ -879,16 +1080,22 @@ mod tests {
         assert_eq!(manifest.inspire_record_ids(), [1, 2]);
 
         let refreshed = vec![
-            updated(inspire("ignored", "ProviderB", 2), "2026-02-02"),
-            updated(inspire("ignored", "ProviderA", 1), "2026-02-01"),
+            updated("ProviderB", 2, "2026-02-02"),
+            updated("ProviderA", 1, "2026-02-01"),
         ];
         assert!(manifest.replace_inspire(refreshed).unwrap());
         assert_eq!(
-            manifest.references()["LocalA"].inspire().unwrap().record_id,
+            manifest.references()["LocalA"]
+                .inspire_entry()
+                .unwrap()
+                .record_id,
             1
         );
         assert_eq!(
-            manifest.references()["LocalB"].inspire().unwrap().record_id,
+            manifest.references()["LocalB"]
+                .inspire_entry()
+                .unwrap()
+                .record_id,
             2
         );
         assert!(manifest.references().contains_key("Imported"));
@@ -909,9 +1116,9 @@ mod tests {
             .unwrap();
         let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
         let before_bibliography = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
-        let one = updated(inspire("ignored", "ProviderA", 1), "new");
-        let two = updated(inspire("ignored", "ProviderB", 2), "new");
-        let unexpected = updated(inspire("ignored", "ProviderC", 3), "new");
+        let one = updated("ProviderA", 1, "new");
+        let two = updated("ProviderB", 2, "new");
+        let unexpected = updated("ProviderC", 3, "new");
         for returned in [
             vec![one.clone()],
             vec![one.clone(), one.clone(), two.clone()],

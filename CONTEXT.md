@@ -10,15 +10,17 @@ or parse tracked output.
 ## Source snapshot
 
 A source snapshot is the authoritative provider-specific evidence stored under a
-local citation key in `cita.toml`.
+local citation key in `cita.toml`. Every snapshot holds authoritative standalone
+BibTeX and is tagged by the source that owns its refresh lifecycle.
 
-- An `InspireSnapshot` contains the relevant typed INSPIRE JSON fields, stable
-  record ID, update timestamp, provider texkeys, and authoritative INSPIRE
-  BibTeX.
-- A `BibtexSnapshot` contains one exact standalone imported entry.
+- An INSPIRE entry (`source = "inspire"`) contains authoritative INSPIRE BibTeX,
+  the stable record ID (its refresh key), an update timestamp, and a curated
+  `identifiers` block of canonical normalized arXiv/DOI.
+- An import (`source = "import"`) contains one exact standalone imported entry.
 
-Snapshots project to `Reference`. Projections are derived and are never stored
-as a second authority.
+Snapshots project to `Reference` from their BibTeX; INSPIRE entries override the
+projected arXiv/DOI with their stored identifiers and add the `inspire` provider
+id. Projections are derived and are never stored as a second authority.
 
 ## Local citation key
 

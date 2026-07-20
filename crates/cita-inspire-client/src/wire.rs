@@ -1,10 +1,5 @@
-use crate::{
-    Error,
-    snapshot::{
-        ArxivEprint, Author, Collaboration, Doi, PublicationInfo, SelectedRecord, Title, UrlValue,
-    },
-};
-use serde::{Deserialize, Deserializer};
+use crate::{Error, snapshot::SelectedRecord};
+use serde::Deserialize;
 
 /// Permissive INSPIRE API response types. Unknown wire fields are deliberately
 /// ignored; conversion selects the strict subset stored in `SelectedRecord`.
@@ -36,60 +31,13 @@ impl LiteratureRecord {
                 .updated
                 .ok_or_else(|| Error::Malformed("record has no update timestamp".into()))?,
             texkeys: metadata.texkeys,
-            titles: metadata
-                .titles
-                .into_iter()
-                .map(|value| Title { title: value.title })
-                .collect(),
-            authors: metadata
-                .authors
-                .into_iter()
-                .map(|value| Author {
-                    full_name: value.full_name,
-                    role: value.role,
-                })
-                .collect(),
-            collaborations: metadata
-                .collaborations
-                .into_iter()
-                .map(|value| Collaboration { value: value.value })
-                .collect(),
-            publication_info: metadata
-                .publication_info
-                .into_iter()
-                .map(|value| PublicationInfo {
-                    journal_title: value.journal_title,
-                    journal_volume: value.journal_volume,
-                    journal_issue: value.journal_issue,
-                    page_start: value.page_start,
-                    page_end: value.page_end,
-                    artid: value.artid,
-                    year: value.year,
-                    hidden: value.hidden,
-                    curated_relation: value.curated_relation,
-                })
-                .collect(),
-            arxiv_eprints: metadata
+            title: metadata.titles.into_iter().next().map(|value| value.title),
+            arxiv: metadata
                 .arxiv_eprints
                 .into_iter()
-                .map(|value| ArxivEprint {
-                    value: value.value,
-                    categories: value.categories,
-                })
+                .map(|value| value.value)
                 .collect(),
-            dois: metadata
-                .dois
-                .into_iter()
-                .map(|value| Doi { value: value.value })
-                .collect(),
-            urls: metadata
-                .urls
-                .into_iter()
-                .map(|value| UrlValue { value: value.value })
-                .collect(),
-            document_types: metadata.document_types,
-            preprint_date: metadata.preprint_date,
-            earliest_date: metadata.earliest_date,
+            doi: metadata.dois.into_iter().map(|value| value.value).collect(),
         })
     }
 }
@@ -101,25 +49,11 @@ struct LiteratureMetadata {
     #[serde(default)]
     titles: Vec<ApiTitle>,
     #[serde(default)]
-    authors: Vec<ApiAuthor>,
-    #[serde(default)]
-    collaborations: Vec<ApiCollaboration>,
-    #[serde(default)]
     texkeys: Vec<String>,
-    #[serde(default)]
-    publication_info: Vec<ApiPublicationInfo>,
     #[serde(default)]
     arxiv_eprints: Vec<ApiArxivEprint>,
     #[serde(default)]
     dois: Vec<ApiDoi>,
-    #[serde(default)]
-    urls: Vec<ApiUrlValue>,
-    #[serde(default, alias = "document_type")]
-    document_types: Vec<String>,
-    #[serde(default)]
-    preprint_date: Option<String>,
-    #[serde(default)]
-    earliest_date: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -128,53 +62,12 @@ struct ApiTitle {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-struct ApiAuthor {
-    full_name: String,
-    #[serde(default, deserialize_with = "one_or_many")]
-    role: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct ApiCollaboration {
-    value: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct ApiPublicationInfo {
-    #[serde(default)]
-    journal_title: Option<String>,
-    #[serde(default)]
-    journal_volume: Option<String>,
-    #[serde(default)]
-    journal_issue: Option<String>,
-    #[serde(default)]
-    page_start: Option<String>,
-    #[serde(default)]
-    page_end: Option<String>,
-    #[serde(default)]
-    artid: Option<String>,
-    #[serde(default)]
-    year: Option<i32>,
-    #[serde(default)]
-    hidden: bool,
-    #[serde(default)]
-    curated_relation: bool,
-}
-
-#[derive(Clone, Debug, Deserialize)]
 struct ApiArxivEprint {
     value: String,
-    #[serde(default)]
-    categories: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 struct ApiDoi {
-    value: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct ApiUrlValue {
     value: String,
 }
 
@@ -189,62 +82,34 @@ pub(crate) struct SearchHits {
     pub(crate) hits: Vec<LiteratureRecord>,
 }
 
-fn one_or_many<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Value {
-        One(String),
-        Many(Vec<String>),
-    }
-    Option::<Value>::deserialize(deserializer).map(|value| match value {
-        None => Vec::new(),
-        Some(Value::One(value)) => vec![value],
-        Some(Value::Many(values)) => values,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use cita_core::ReferenceSource;
 
     #[test]
-    fn wire_accepts_unknown_fields_at_every_level() {
+    fn wire_accepts_unknown_fields_and_selects_the_strict_subset() {
         let record: LiteratureRecord = serde_json::from_value(serde_json::json!({
             "id": "1124337",
             "updated": "2025-01-01",
             "links": {"self": "ignored"},
             "metadata": {
                 "titles": [{"title": "First", "subtitle": "ignored"}],
-                "authors": [
-                    {"full_name": "Aad, G.", "raw_affiliations": [{"value":"ignored"}]},
-                    {"full_name": "Writer", "role": ["author"]},
-                    {"full_name": "Editor", "role": "editor"}
-                ],
+                "authors": [{"full_name": "Aad, G.", "raw_affiliations": [{"value": "x"}]}],
                 "texkeys": ["Aad:2012tfa"],
-                "arxiv_eprints": [{
-                    "value": "1207.7214v2", "categories": ["hep-ex"], "extra": true
-                }],
+                "arxiv_eprints": [{"value": "1207.7214v2", "categories": ["hep-ex"]}],
                 "dois": [{"value": "10.1/ABC", "material": "publication"}],
-                "publication_info": [{
-                    "journal_title": "JHEP", "year": 2012, "artid": "1",
-                    "curated_relation": true, "unknown_nested": {"x": 1}
-                }],
+                "publication_info": [{"journal_title": "JHEP", "year": 2012}],
                 "new_api_field": [1, 2, 3]
             }
         }))
         .unwrap();
         let selected = record.into_selected().unwrap();
+        assert_eq!(selected.record_id(), 1124337);
+        assert_eq!(selected.texkeys(), ["Aad:2012tfa"]);
         let projected = selected.project().unwrap();
-        assert_eq!(projected.year, Some(2012));
-        assert_eq!(projected.authors, ["Aad, G.", "Writer"]);
-        let snapshot = selected.into_snapshot(
-            "@article{Aad:2012tfa,title={First},doi={10.1/ABC},eprint={1207.7214}}".into(),
-        );
-        assert_eq!(snapshot.project().unwrap(), projected);
-        snapshot.validate().unwrap();
+        assert_eq!(projected.title, "First");
+        assert_eq!(projected.identifiers.arxiv, ["1207.7214"]);
+        assert_eq!(projected.identifiers.dois, ["10.1/abc"]);
     }
 }

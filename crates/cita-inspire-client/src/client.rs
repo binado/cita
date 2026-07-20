@@ -1,5 +1,5 @@
-use crate::{InspireSnapshot, snapshot::SelectedRecord, wire::SearchResponse};
-use cita_bibliography::parse as parse_bibtex;
+use crate::{InspireRecord, snapshot::SelectedRecord, wire::SearchResponse};
+use cita_bibliography::{parse as parse_bibtex, project_bibtex};
 use cita_core::{Locator, MetadataProvider, ProviderError, Reference, ReferenceSource};
 use reqwest::{StatusCode, header::RETRY_AFTER};
 use std::{
@@ -62,17 +62,22 @@ impl Client {
             .map_err(|error| Error::Malformed(error.to_string()))
     }
 
-    pub async fn resolve_snapshot(&self, locator: &Locator) -> Result<InspireSnapshot, Error> {
+    pub async fn resolve_snapshot(&self, locator: &Locator) -> Result<InspireRecord, Error> {
         let record = self.lookup_json(locator).await?;
         let bibtex = self.lookup_bibtex(locator).await?;
-        let snapshot = record.into_snapshot(bibtex);
-        snapshot
-            .validate()
-            .map_err(|error| Error::Malformed(error.to_string()))?;
-        Ok(snapshot)
+        let mut entries =
+            parse_bibtex(&bibtex).map_err(|error| Error::Malformed(error.to_string()))?;
+        if entries.len() != 1 {
+            return Err(Error::Malformed(format!(
+                "INSPIRE returned {} BibTeX entries for one record",
+                entries.len()
+            )));
+        }
+        let (key, snapshot) = entries.pop_first().expect("length checked");
+        cross_check(record, key, snapshot.bibtex)
     }
 
-    pub async fn refresh_records(&self, ids: &[u64]) -> Result<Vec<InspireSnapshot>, Error> {
+    pub async fn refresh_records(&self, ids: &[u64]) -> Result<Vec<InspireRecord>, Error> {
         let mut output = Vec::with_capacity(ids.len());
         for batch in batch_ids(ids) {
             let (json_url, bib_url) = self.search_urls(&batch)?;
@@ -109,15 +114,12 @@ impl Client {
                         matching.len()
                     )));
                 }
+                let key = matching.into_iter().next().expect("length checked");
                 let bibtex = bib_entries
-                    .remove(&matching[0])
+                    .remove(&key)
                     .expect("matching key exists")
                     .bibtex;
-                let snapshot = record.into_snapshot(bibtex);
-                snapshot
-                    .validate()
-                    .map_err(|error| Error::Malformed(error.to_string()))?;
-                output.push(snapshot);
+                output.push(cross_check(record, key, bibtex)?);
             }
             if !records.is_empty() || !bib_entries.is_empty() {
                 return Err(Error::Malformed(
@@ -238,7 +240,7 @@ impl Client {
 }
 
 impl MetadataProvider for Client {
-    type Snapshot = InspireSnapshot;
+    type Snapshot = InspireRecord;
 
     async fn resolve(&self, locator: &Locator) -> Result<Self::Snapshot, ProviderError> {
         self.resolve_snapshot(locator).await.map_err(provider_error)
@@ -262,6 +264,28 @@ fn provider_error(error: Error) -> ProviderError {
         Error::Malformed(value) => ProviderError::Malformed(value),
         error => ProviderError::Request(error.to_string()),
     }
+}
+
+/// Confirm that an authoritative BibTeX entry describes the selected record,
+/// then fuse the two into a durable record keyed by the canonical texkey.
+fn cross_check(
+    record: SelectedRecord,
+    bibtex_key: String,
+    bibtex: String,
+) -> Result<InspireRecord, Error> {
+    if !record.texkeys().contains(&bibtex_key) {
+        return Err(Error::Malformed(format!(
+            "BibTeX key `{bibtex_key}` is not one of the INSPIRE texkeys"
+        )));
+    }
+    let bib_reference =
+        project_bibtex(&bibtex).map_err(|error| Error::Malformed(error.to_string()))?;
+    if !record.identity_matches(&bib_reference) {
+        return Err(Error::Malformed(
+            "INSPIRE JSON and BibTeX do not identify the same record".into(),
+        ));
+    }
+    Ok(record.into_record(bibtex_key, bibtex, &bib_reference))
 }
 
 fn batch_ids(ids: &[u64]) -> Vec<Vec<u64>> {

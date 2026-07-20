@@ -197,7 +197,7 @@ fn import(cwd: &Path, input: &str) -> Result<()> {
         .into_iter()
         .map(|(key, snapshot)| PendingReference {
             key: KeyRequest::Exact(key),
-            source: SourceSnapshot::Bibtex(snapshot),
+            source: SourceSnapshot::Import(snapshot),
         })
         .collect();
     let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
@@ -231,16 +231,14 @@ async fn add(cwd: &Path, explicit_key: Option<&str>, values: &[String]) -> Resul
     let client = inspire_client()?;
     let mut pending = Vec::with_capacity(locators.len());
     for locator in &locators {
-        let snapshot = client.resolve(locator).await?;
+        let record = client.resolve(locator).await?;
         let key = match explicit_key {
             Some(key) => KeyRequest::Exact(key.to_owned()),
-            None => KeyRequest::Suggested(snapshot.texkeys.first().cloned().ok_or_else(|| {
-                anyhow::anyhow!("INSPIRE record {} has no citation key", snapshot.record_id)
-            })?),
+            None => KeyRequest::Suggested(record.texkey.clone()),
         };
         pending.push(PendingReference {
             key,
-            source: SourceSnapshot::Inspire(Box::new(snapshot)),
+            source: SourceSnapshot::inspire(record),
         });
     }
     let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
@@ -313,17 +311,13 @@ async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
     })?;
     let client = inspire_client()?;
     if save {
-        let snapshot = client.resolve(&locator).await?;
-        let key = snapshot
-            .texkeys
-            .first()
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("INSPIRE record has no citation key"))?;
-        let reference = snapshot.project()?;
+        let record = client.resolve(&locator).await?;
+        let key = record.texkey.clone();
+        let reference = record.project()?;
         let outcome = manifest
             .add_batch(vec![PendingReference {
                 key: KeyRequest::Suggested(key.clone()),
-                source: SourceSnapshot::Inspire(Box::new(snapshot)),
+                source: SourceSnapshot::inspire(record),
             }])?
             .pop()
             .expect("one outcome");
