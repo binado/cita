@@ -1,6 +1,6 @@
-# Cita
+# cita
 
-Cita is a Git-friendly bibliography CLI. It keeps authoritative source snapshots
+cita is a Git-friendly bibliography CLI. It keeps authoritative source snapshots
 in `cita.toml` and deterministically generates the tracked `references.bib`.
 INSPIRE records retain typed JSON metadata plus INSPIRE's exact BibTeX; imported
 standalone BibTeX entries retain their exact source bytes.
