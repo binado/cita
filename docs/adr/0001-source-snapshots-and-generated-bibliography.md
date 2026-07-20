@@ -2,7 +2,7 @@
 
 - Status: accepted; partially superseded by ADR 0002 (INSPIRE now stores
   authoritative BibTeX plus curated identifiers instead of a typed JSON subset,
-  and the manifest is schema 3)
+  and the manifest is schema 1)
 - Date: 2026-07-17
 
 ## Context

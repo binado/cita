@@ -25,9 +25,9 @@ provider ID, normalized DOI, or normalized arXiv ID.
 
 ## Commands
 
-- `cita init` creates an empty schema-2 project. If only `references.bib`
-  exists, it imports every standalone entry. Existing schema-2 projects are
-  validated; schema 1 is explicitly unsupported.
+- `cita init` creates an empty schema-1 project. If only `references.bib`
+  exists, it imports every standalone entry. Existing schema-1 projects are
+  validated; any other schema is explicitly unsupported.
 - `cita import <path|->` atomically imports all standalone entries from a file
   or stdin.
 - `cita add [--key K] <locator>...` resolves INSPIRE JSON and authoritative
@@ -69,7 +69,7 @@ persist `references.bib` first, and persist `cita.toml` as the commit point.
   preservation, re-keying, and `biblatex`-based generic rendering.
 - `cita-inspire-client`: typed INSPIRE JSON/BibTeX snapshots and stable-ID
   refreshes.
-- `cita-manifest`: schema-2 validation, identity indexes, deterministic TOML,
+- `cita-manifest`: schema-1 validation, identity indexes, deterministic TOML,
   output verification, and coordinated writes.
 - `cita-documents`: validated arXiv PDF downloads and atomic caching.
 - `cita`: CLI wiring, discovery, selectors, and scoped Git commits.

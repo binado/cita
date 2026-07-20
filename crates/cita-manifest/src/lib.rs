@@ -1,4 +1,4 @@
-//! Schema-3 source snapshot storage and generated-bibliography coordination.
+//! Schema-1 source snapshot storage and generated-bibliography coordination.
 
 use cita_bibliography::{
     BibtexSnapshot, parse as parse_bibtex, project_bibtex, rename_entry, validate_key,
@@ -17,7 +17,7 @@ use std::{
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
-pub const SCHEMA: u32 = 3;
+pub const SCHEMA: u32 = 1;
 pub const MANIFEST_FILE: &str = "cita.toml";
 pub const BIBLIOGRAPHY_FILE: &str = "references.bib";
 
@@ -54,6 +54,13 @@ pub struct HepIdentifiers {
 }
 
 impl HepIdentifiers {
+    pub fn new(arxiv: Option<String>, doi: Option<String>) -> Self {
+        Self {
+            arxiv: arxiv.as_deref().map(normalize_arxiv),
+            doi: doi.as_deref().map(normalize_doi),
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.arxiv.is_none() && self.doi.is_none()
     }
@@ -83,10 +90,7 @@ impl SourceSnapshot {
             record_id: record.record_id,
             updated: record.updated,
             bibtex: record.bibtex,
-            identifiers: HepIdentifiers {
-                arxiv: record.arxiv,
-                doi: record.doi,
-            },
+            identifiers: HepIdentifiers::new(record.arxiv, record.doi),
         })
     }
 
@@ -183,7 +187,7 @@ pub enum Error {
     #[error("invalid manifest {path}: {message}")]
     Invalid { path: PathBuf, message: String },
     #[error(
-        "unsupported cita.toml schema {found}; this version supports schema 3 and provides no legacy migration"
+        "unsupported cita.toml schema {found}; this version supports schema 1 and provides no legacy migration"
     )]
     UnsupportedSchema { found: i64 },
     #[error("could not write {path}: {source}")]
@@ -236,7 +240,7 @@ impl Manifest {
         Ok(manifest)
     }
 
-    /// Create schema 2 from an existing standalone bibliography in one mutation.
+    /// Create schema 1 from an existing standalone bibliography in one mutation.
     pub fn import_existing(directory: impl AsRef<Path>) -> Result<Self, Error> {
         let directory = directory.as_ref();
         let path = directory.join(MANIFEST_FILE);
@@ -545,13 +549,40 @@ fn validate_references(references: &BTreeMap<String, SourceSnapshot>) -> Result<
     let mut identities: HashMap<String, String> = HashMap::new();
     for (key, source) in references {
         validate_key(key)?;
-        if let Some(entry) = source.inspire_entry()
-            && entry.record_id == 0
-        {
-            return Err(Error::InvalidSource {
-                key: key.clone(),
-                message: "INSPIRE record id is zero".into(),
-            });
+        if let Some(entry) = source.inspire_entry() {
+            if entry.record_id == 0 {
+                return Err(Error::InvalidSource {
+                    key: key.clone(),
+                    message: "INSPIRE record id is zero".into(),
+                });
+            }
+            let bibtex_reference =
+                project_bibtex(&entry.bibtex).map_err(|error| Error::InvalidSource {
+                    key: key.clone(),
+                    message: error.to_string(),
+                })?;
+            if let Some(arxiv) = &entry.identifiers.arxiv {
+                let normalized = normalize_arxiv(arxiv);
+                if !bibtex_reference.identifiers.arxiv.contains(&normalized) {
+                    return Err(Error::InvalidSource {
+                        key: key.clone(),
+                        message: format!(
+                            "curated arXiv id {normalized} is not present in stored BibTeX"
+                        ),
+                    });
+                }
+            }
+            if let Some(doi) = &entry.identifiers.doi {
+                let normalized = normalize_doi(doi);
+                if !bibtex_reference.identifiers.dois.contains(&normalized) {
+                    return Err(Error::InvalidSource {
+                        key: key.clone(),
+                        message: format!(
+                            "curated DOI {normalized} is not present in stored BibTeX"
+                        ),
+                    });
+                }
+            }
         }
         let reference = source.project().map_err(|error| Error::InvalidSource {
             key: key.clone(),
@@ -699,7 +730,7 @@ mod tests {
             ])
             .unwrap();
         let text = fs::read_to_string(dir.path().join(MANIFEST_FILE)).unwrap();
-        assert!(text.contains("schema = 3"));
+        assert!(text.contains("schema = 1"));
         assert!(text.contains("[references.Alpha]"), "{text}");
         assert!(text.contains("source = \"import\""), "{text}");
         assert!(!text.contains("[references.Alpha.source]"), "{text}");
@@ -893,17 +924,22 @@ mod tests {
     }
 
     #[test]
-    fn legacy_schema_is_explicitly_unsupported() {
+    fn non_current_schemas_are_explicitly_unsupported() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join(MANIFEST_FILE), "schema = 1\n").unwrap();
+        fs::write(dir.path().join(MANIFEST_FILE), "schema = 0\n").unwrap();
         assert!(matches!(
             Manifest::load(dir.path().join(MANIFEST_FILE)),
-            Err(Error::UnsupportedSchema { found: 1 })
+            Err(Error::UnsupportedSchema { found: 0 })
+        ));
+        fs::write(dir.path().join(MANIFEST_FILE), "schema = 2\n").unwrap();
+        assert!(matches!(
+            Manifest::load(dir.path().join(MANIFEST_FILE)),
+            Err(Error::UnsupportedSchema { found: 2 })
         ));
     }
 
     #[test]
-    fn nested_schema_two_shape_and_unknown_fields_are_rejected() {
+    fn nested_shape_and_unknown_fields_are_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
         manifest
@@ -919,6 +955,115 @@ mod tests {
 
         fs::write(&path, format!("{flat}unknown = true\n")).unwrap();
         assert!(matches!(Manifest::load(&path), Err(Error::Invalid { .. })));
+    }
+
+    #[test]
+    fn curated_identifiers_override_bibtex_derived_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let record = InspireRecord {
+            record_id: 99,
+            updated: "2026-01-01".into(),
+            texkey: "Curated:2026".into(),
+            bibtex: "@misc{Curated:2026,title={T},eprint={2401.00001},doi={10.1/BibtexCase}}"
+                .into(),
+            // Both curated values are un-normalized (version suffix / mixed
+            // case) so the assertions only pass if the override branch
+            // actually runs `normalize_arxiv`/`normalize_doi`, not merely
+            // whether the record happens to have the same content as BibTeX.
+            arxiv: Some("2401.00001v9".into()),
+            doi: Some("10.1/BIBTEXCASE".into()),
+        };
+        manifest
+            .add_batch(vec![PendingReference {
+                key: KeyRequest::Suggested("Local".into()),
+                source: SourceSnapshot::inspire(record),
+            }])
+            .unwrap();
+        let projected = manifest.projected().unwrap();
+        let reference = &projected
+            .iter()
+            .find(|item| item.key == "Local")
+            .unwrap()
+            .reference;
+        assert_eq!(reference.identifiers.arxiv, ["2401.00001"]);
+        assert_eq!(reference.identifiers.dois, ["10.1/bibtexcase"]);
+    }
+
+    #[test]
+    fn curated_identifier_partial_override_falls_through_for_the_other_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let record = InspireRecord {
+            record_id: 100,
+            updated: "2026-01-01".into(),
+            texkey: "Partial:2026".into(),
+            bibtex: "@misc{Partial:2026,title={T},eprint={2401.00001},doi={10.1/frombib}}".into(),
+            arxiv: Some("2401.00001v3".into()),
+            doi: None,
+        };
+        manifest
+            .add_batch(vec![PendingReference {
+                key: KeyRequest::Suggested("Local".into()),
+                source: SourceSnapshot::inspire(record),
+            }])
+            .unwrap();
+        let projected = manifest.projected().unwrap();
+        let reference = &projected
+            .iter()
+            .find(|item| item.key == "Local")
+            .unwrap()
+            .reference;
+        assert_eq!(reference.identifiers.arxiv, ["2401.00001"]);
+        assert_eq!(reference.identifiers.dois, ["10.1/frombib"]);
+    }
+
+    #[test]
+    fn zero_record_id_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        assert!(matches!(
+            manifest.add_batch(vec![inspire("Local", "Key", 0)]),
+            Err(Error::InvalidSource { .. })
+        ));
+    }
+
+    #[test]
+    fn source_snapshot_inspire_normalizes_curated_identifiers() {
+        let record = InspireRecord {
+            record_id: 1,
+            updated: "2026-01-01".into(),
+            texkey: "Key:2026".into(),
+            bibtex: "@misc{Key:2026,title={T},eprint={2401.00001}}".into(),
+            arxiv: Some("2401.00001v2".into()),
+            doi: None,
+        };
+        let SourceSnapshot::Inspire(entry) = SourceSnapshot::inspire(record) else {
+            unreachable!()
+        };
+        assert_eq!(entry.identifiers.arxiv.as_deref(), Some("2401.00001"));
+    }
+
+    #[test]
+    fn curated_arxiv_id_absent_from_stored_bibtex_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mismatched = PendingReference {
+            key: KeyRequest::Suggested("Local".into()),
+            source: SourceSnapshot::Inspire(InspireEntry {
+                record_id: 1,
+                updated: "2026-01-01".into(),
+                bibtex: "@misc{Key,title={T},eprint={2401.00001}}".into(),
+                identifiers: HepIdentifiers {
+                    arxiv: Some("2402.00002".into()),
+                    doi: None,
+                },
+            }),
+        };
+        assert!(matches!(
+            manifest.add_batch(vec![mismatched]),
+            Err(Error::InvalidSource { .. })
+        ));
     }
 
     #[test]

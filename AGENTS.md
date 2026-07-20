@@ -3,7 +3,7 @@
 ## What this is
 
 Cita is a Git-friendly bibliography CLI. Authoritative BibTeX (plus curated
-INSPIRE identifiers) lives in schema-3 `cita.toml`; `references.bib` is a
+INSPIRE identifiers) lives in schema-1 `cita.toml`; `references.bib` is a
 deterministic, tracked generated artifact. Rust edition 2024, MSRV 1.88.
 
 ## Commands
@@ -45,7 +45,7 @@ cita-bibliography ← cita-inspire-client   cita-documents
   record id, timestamp, and canonical arXiv/DOI), stable-record-ID refresh
   batches, bounded queries, and 429 retries; cross-checks its BibTeX against the
   selected JSON through `cita-bibliography`.
-- `cita-manifest`: schema-3 authority, identity indexes, deterministic TOML,
+- `cita-manifest`: schema-1 authority, identity indexes, deterministic TOML,
   generated bibliography verification, and coordinated writes.
 - `cita-documents`: accepts a validated arXiv ID and atomically caches PDFs
   beneath `.cita/files/arxiv`.

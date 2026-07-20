@@ -62,6 +62,12 @@ fn json_record(id: u64) -> String {
     )
 }
 
+fn json_record_with_doi(id: u64, doi: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","updated":"2026-01-01T00:00:00Z","metadata":{{"titles":[{{"title":"Title {id}"}}],"texkeys":["Key{id}"],"dois":[{{"value":"{doi}"}}]}}}}"#
+    )
+}
+
 fn search_json(ids: &[u64]) -> String {
     let hits = ids
         .iter()
@@ -191,6 +197,76 @@ async fn refresh_splits_batches_at_one_hundred_records() {
 }
 
 #[tokio::test]
+async fn resolve_snapshot_rejects_bibtex_response_with_zero_entries() {
+    let (base, handle) = server(vec![
+        response("200 OK", "", &json_record(42)),
+        response("200 OK", "", ""),
+    ]);
+    let error = client(&base)
+        .resolve_snapshot(&Locator::Inspire(42))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("0 BibTeX entries"), "{error}");
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn resolve_snapshot_rejects_bibtex_response_with_two_entries() {
+    let (base, handle) = server(vec![
+        response("200 OK", "", &json_record(42)),
+        response("200 OK", "", "@misc{A,title={A}}\n\n@misc{B,title={B}}"),
+    ]);
+    let error = client(&base)
+        .resolve_snapshot(&Locator::Inspire(42))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("2 BibTeX entries"), "{error}");
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn resolve_snapshot_rejects_bibtex_key_not_among_json_texkeys() {
+    let (base, handle) = server(vec![
+        response("200 OK", "", &json_record(42)),
+        response("200 OK", "", "@misc{Other,title={Title 42}}"),
+    ]);
+    let error = client(&base)
+        .resolve_snapshot(&Locator::Inspire(42))
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("is not one of the INSPIRE texkeys"),
+        "{error}"
+    );
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn resolve_snapshot_rejects_identity_mismatch_between_json_and_bibtex() {
+    let (base, handle) = server(vec![
+        response("200 OK", "", &json_record_with_doi(42, "10.1/mismatch")),
+        response(
+            "200 OK",
+            "",
+            "@misc{Key42,title={Title 42},doi={10.1/actual}}",
+        ),
+    ]);
+    let error = client(&base)
+        .resolve_snapshot(&Locator::Inspire(42))
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("do not identify the same record"),
+        "{error}"
+    );
+    handle.join().unwrap();
+}
+
+#[tokio::test]
 async fn rejects_a_record_whose_texkeys_match_no_bibtex_entry() {
     let (base, handle) = server(vec![
         response("200 OK", "", &search_json(&[7])),
@@ -201,6 +277,22 @@ async fn rejects_a_record_whose_texkeys_match_no_bibtex_entry() {
         error.to_string().contains("matched 0 BibTeX entries"),
         "{error}"
     );
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn stores_the_bibtex_matched_texkey_not_the_first_json_texkey() {
+    let record_json = concat!(
+        r#"{"id":"7","updated":"2026-01-01T00:00:00Z","metadata":{"titles":[{"title":"Title 7"}],"#,
+        r#""texkeys":["Wrong:2026","Right:2026"]}}"#
+    );
+    let search = format!(r#"{{"hits":{{"hits":[{record_json}]}}}}"#);
+    let (base, handle) = server(vec![
+        response("200 OK", "", &search),
+        response("200 OK", "", "@misc{Right:2026,title={Title 7}}"),
+    ]);
+    let records = client(&base).refresh_records(&[7]).await.unwrap();
+    assert_eq!(records[0].texkey, "Right:2026");
     handle.join().unwrap();
 }
 

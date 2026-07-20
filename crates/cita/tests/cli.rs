@@ -178,7 +178,7 @@ fn cached_pdf_for(directory: &Path, arxiv: &str, bytes: &[u8]) {
 }
 
 #[test]
-fn init_creates_schema_two_and_imports_an_existing_bibliography() {
+fn init_creates_schema_one_and_imports_an_existing_bibliography() {
     let empty = tempfile::tempdir().unwrap();
     assert!(success(cita(empty.path(), &["init"])).contains("Initialized"));
     assert_eq!(
@@ -188,7 +188,7 @@ fn init_creates_schema_two_and_imports_an_existing_bibliography() {
     assert!(
         fs::read_to_string(empty.path().join("cita.toml"))
             .unwrap()
-            .starts_with("schema = 3")
+            .starts_with("schema = 1")
     );
     success(cita(empty.path(), &["list"]));
 
@@ -207,9 +207,9 @@ fn init_creates_schema_two_and_imports_an_existing_bibliography() {
 #[test]
 fn legacy_manifest_is_rejected_without_rewriting() {
     let directory = tempfile::tempdir().unwrap();
-    fs::write(directory.path().join("cita.toml"), "schema = 1\n").unwrap();
+    fs::write(directory.path().join("cita.toml"), "schema = 2\n").unwrap();
     let error = failure(cita(directory.path(), &["init"]));
-    assert!(error.contains("unsupported cita.toml schema 1"), "{error}");
+    assert!(error.contains("unsupported cita.toml schema 2"), "{error}");
     assert!(!directory.path().join("references.bib").exists());
 }
 

@@ -285,12 +285,7 @@ fn cross_check(
             "INSPIRE JSON and BibTeX do not identify the same record".into(),
         ));
     }
-    let texkey = record
-        .texkeys()
-        .first()
-        .cloned()
-        .ok_or_else(|| Error::Malformed("INSPIRE record has no citation key".into()))?;
-    Ok(record.into_record(texkey, bibtex, &bib_reference))
+    Ok(record.into_record(bibtex_key, bibtex, &bib_reference))
 }
 
 fn batch_ids(ids: &[u64]) -> Vec<Vec<u64>> {

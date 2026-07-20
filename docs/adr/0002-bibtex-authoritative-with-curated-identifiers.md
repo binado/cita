@@ -18,7 +18,7 @@ if that narrows the general use case.
 
 ## Decision
 
-`cita.toml` is schema 3. Each local key owns one `SourceSnapshot` tagged by the
+`cita.toml` is schema 1. Each local key owns one `SourceSnapshot` tagged by the
 source that owns its refresh lifecycle:
 
 - `source = "inspire"`: authoritative BibTeX, the `record_id` refresh key, an
@@ -39,8 +39,8 @@ JSON identity at fetch and refresh time rather than persisting a JSON structure.
 Transient `fetch`/`open` resolve JSON only; `--save` additionally fetches the
 BibTeX and stores the record.
 
-Schema 3 is a clean break: schema 1 and 2 are rejected with no automatic
-migration, consistent with the 1→2 policy.
+This is the current schema; cita has no released users yet, so no
+compatibility is promised for any prior in-development format.
 
 ## Consequences
 
