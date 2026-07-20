@@ -13,7 +13,7 @@ use cita_manifest::{
 };
 use clap::{CommandFactory, Parser, Subcommand};
 use std::{
-    env, fs,
+    env, fmt, fs,
     fs::OpenOptions,
     io::{self, IsTerminal, Read, Write},
     path::{Path, PathBuf},
@@ -61,24 +61,19 @@ enum Command {
     },
     /// Regenerate a missing or edited references.bib
     Generate,
-    /// Fetch a reference's arXiv PDF into the local cache
+    /// Fetch or resolve a reference's arXiv PDF
     Fetch {
-        #[arg(long, conflicts_with = "dry_run")]
+        #[arg(long, conflicts_with_all = ["cache_only", "url"])]
         force: bool,
-        #[arg(long, conflicts_with = "save")]
-        dry_run: bool,
+        /// Require an existing cached PDF without downloading
+        #[arg(long, conflicts_with = "url")]
+        cache_only: bool,
+        /// Return the arXiv PDF URL without downloading
+        #[arg(short = 'u', long)]
+        url: bool,
+        /// Open the returned path or URL with the system default application
         #[arg(long)]
-        save: bool,
-        selector: String,
-    },
-    /// Fetch and open a reference's arXiv PDF
-    Open {
-        #[arg(long, conflicts_with_all = ["browser", "no_download"])]
-        force: bool,
-        #[arg(long, conflicts_with = "no_download")]
-        browser: bool,
-        #[arg(long)]
-        no_download: bool,
+        open: bool,
         #[arg(long)]
         save: bool,
         selector: String,
@@ -131,25 +126,20 @@ async fn run() -> Result<()> {
         Some(Command::Generate) => generate(&cwd)?,
         Some(Command::Fetch {
             force,
-            dry_run,
+            cache_only,
+            url,
+            open,
             save,
             selector,
         }) => {
             let policy = if force {
                 FetchPolicy::Force
+            } else if cache_only {
+                FetchPolicy::CacheOnly
             } else {
                 FetchPolicy::UseCache
             };
-            fetch(&cwd, &selector, policy, dry_run, save).await?;
-        }
-        Some(Command::Open {
-            force,
-            browser,
-            no_download,
-            save,
-            selector,
-        }) => {
-            open(&cwd, &selector, force, browser, no_download, save).await?;
+            fetch(&cwd, &selector, policy, url, open, save).await?;
         }
         Some(Command::Commit) => git::commit(&find_manifest(&cwd)?)?,
     }
@@ -248,11 +238,15 @@ async fn add(cwd: &Path, explicit_key: Option<&str>, values: &[String]) -> Resul
     Ok(())
 }
 
-fn print_add(outcome: AddOutcome) {
+fn add_message(outcome: &AddOutcome) -> String {
     match outcome {
-        AddOutcome::Added(key) => println!("Added {key}"),
-        AddOutcome::Existing(key) => println!("Already present: {key}"),
+        AddOutcome::Added(key) => format!("Added {key}"),
+        AddOutcome::Existing(key) => format!("Already present: {key}"),
     }
+}
+
+fn print_add(outcome: AddOutcome) {
+    println!("{}", add_message(&outcome));
 }
 
 async fn sync(cwd: &Path) -> Result<()> {
@@ -291,19 +285,19 @@ struct Selected {
     key: String,
     reference: Reference,
     manifest_path: PathBuf,
+    save_outcome: Option<AddOutcome>,
 }
 
 async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
     let path = find_manifest(cwd)?;
     let mut manifest = Manifest::load_verified(&path)?;
     if let Some(item) = manifest.find(selector)? {
-        if save {
-            println!("Already present: {}", item.key);
-        }
+        let save_outcome = save.then(|| AddOutcome::Existing(item.key.clone()));
         return Ok(Selected {
             key: item.key,
             reference: item.reference,
             manifest_path: path,
+            save_outcome,
         });
     }
     let locator = selector.parse::<Locator>().map_err(|error| {
@@ -321,11 +315,11 @@ async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
             }])?
             .pop()
             .expect("one outcome");
-        print_add(outcome);
         Ok(Selected {
             key,
             reference,
             manifest_path: path,
+            save_outcome: Some(outcome),
         })
     } else {
         let reference = client.resolve_reference(&locator).await?;
@@ -333,6 +327,7 @@ async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
             key: selector.into(),
             reference,
             manifest_path: path,
+            save_outcome: None,
         })
     }
 }
@@ -341,13 +336,14 @@ async fn fetch(
     cwd: &Path,
     selector: &str,
     policy: FetchPolicy,
-    dry_run: bool,
+    return_url: bool,
+    open: bool,
     save: bool,
 ) -> Result<()> {
-    if dry_run && save {
-        bail!("--dry-run cannot be used with --save");
-    }
     let selected = select(cwd, selector, save).await?;
+    if let Some(outcome) = &selected.save_outcome {
+        eprintln!("{}", add_message(outcome));
+    }
     let arxiv = selected
         .reference
         .identifiers
@@ -355,49 +351,43 @@ async fn fetch(
         .first()
         .ok_or_else(|| anyhow::anyhow!("reference `{}` has no arXiv eprint", selected.key))?;
     let url = arxiv_pdf_url(arxiv)?.to_string();
-    if dry_run {
-        println!("{url}\n[dry run] skipped download");
-        return Ok(());
+    let target = if return_url {
+        FetchTarget::Url(url)
+    } else {
+        let outcome = fetch_selected(&selected.manifest_path, arxiv, policy).await?;
+        eprintln!("{}", fetch_message(&selected.key, &url, &outcome));
+        FetchTarget::Path(outcome.path().to_owned())
+    };
+    if open {
+        open_target(&target)?;
+        eprintln!("Opened {target}");
     }
-    let outcome = fetch_selected(&selected.manifest_path, arxiv, policy).await?;
-    println!("{}", fetch_message(&selected.key, &url, &outcome));
+    println!("{target}");
     Ok(())
 }
 
-async fn open(
-    cwd: &Path,
-    selector: &str,
-    force: bool,
-    browser: bool,
-    no_download: bool,
-    save: bool,
-) -> Result<()> {
-    let selected = select(cwd, selector, save).await?;
-    let arxiv = selected
-        .reference
-        .identifiers
-        .arxiv
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("reference `{}` has no arXiv eprint", selected.key))?;
-    let url = arxiv_pdf_url(arxiv)?;
-    if browser {
-        opener::open(url.as_str()).with_context(|| format!("could not open {url}"))?;
-        println!("Opened {url}");
-        return Ok(());
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum FetchTarget {
+    Url(String),
+    Path(PathBuf),
+}
+
+impl fmt::Display for FetchTarget {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Url(url) => formatter.write_str(url),
+            Self::Path(path) => write!(formatter, "{}", path.display()),
+        }
     }
-    let policy = if force {
-        FetchPolicy::Force
-    } else if no_download {
-        FetchPolicy::CacheOnly
-    } else {
-        FetchPolicy::UseCache
-    };
-    let outcome = fetch_selected(&selected.manifest_path, arxiv, policy).await?;
-    println!("{}", fetch_message(&selected.key, url.as_str(), &outcome));
-    opener::open(outcome.path())
-        .with_context(|| format!("could not open {}", outcome.path().display()))?;
-    println!("Opened {url}");
-    Ok(())
+}
+
+fn open_target(target: &FetchTarget) -> Result<()> {
+    match target {
+        FetchTarget::Url(url) => opener::open(url).with_context(|| format!("could not open {url}")),
+        FetchTarget::Path(path) => {
+            opener::open(path).with_context(|| format!("could not open {}", path.display()))
+        }
+    }
 }
 
 async fn fetch_selected(path: &Path, arxiv: &str, policy: FetchPolicy) -> Result<FetchOutcome> {
@@ -408,19 +398,16 @@ async fn fetch_selected(path: &Path, arxiv: &str, policy: FetchPolicy) -> Result
     DocumentStore::new(root.join(".cita/files"))?
         .fetch(arxiv, policy)
         .await
-        .map_err(|error| document_error_with_hint(error, policy))
+        .map_err(document_error_with_hint)
 }
 
-fn document_error_with_hint(error: DocumentError, policy: FetchPolicy) -> anyhow::Error {
+fn document_error_with_hint(error: DocumentError) -> anyhow::Error {
     match error {
-        error @ DocumentError::InvalidCachedPdf(_) if policy == FetchPolicy::CacheOnly => {
-            anyhow::Error::from(error).context("drop --no-download and retry with --force")
-        }
         error @ DocumentError::InvalidCachedPdf(_) => {
             anyhow::Error::from(error).context("retry with --force")
         }
         error @ DocumentError::NotCached(_) => {
-            anyhow::Error::from(error).context("rerun without --no-download")
+            anyhow::Error::from(error).context("rerun without --cache-only")
         }
         error => error.into(),
     }
@@ -664,7 +651,29 @@ mod tests {
     #[test]
     fn document_conflicts_are_enforced() {
         assert!(
-            Cli::try_parse_from(["cita", "fetch", "--dry-run", "--save", "1207.7214"]).is_err()
+            Cli::try_parse_from(["cita", "fetch", "--force", "--cache-only", "1207.7214"]).is_err()
+        );
+        assert!(Cli::try_parse_from(["cita", "fetch", "--url", "--force", "1207.7214"]).is_err());
+        assert!(
+            Cli::try_parse_from(["cita", "fetch", "--url", "--cache-only", "1207.7214"]).is_err()
+        );
+        assert!(Cli::try_parse_from(["cita", "fetch", "--url", "--open", "1207.7214"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["cita", "fetch", "--cache-only", "--open", "1207.7214"]).is_ok()
+        );
+        assert!(Cli::try_parse_from(["cita", "fetch", "--url", "--save", "1207.7214"]).is_ok());
+        assert!(Cli::try_parse_from(["cita", "open", "1207.7214"]).is_err());
+        assert!(Cli::try_parse_from(["cita", "fetch", "--dry-run", "1207.7214"]).is_err());
+    }
+    #[test]
+    fn fetch_targets_render_the_value_passed_to_the_opener() {
+        assert_eq!(
+            FetchTarget::Url("https://arxiv.org/pdf/1207.7214".into()).to_string(),
+            "https://arxiv.org/pdf/1207.7214"
+        );
+        assert_eq!(
+            FetchTarget::Path(PathBuf::from("/tmp/1207.7214.pdf")).to_string(),
+            "/tmp/1207.7214.pdf"
         );
     }
     #[test]

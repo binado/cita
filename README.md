@@ -39,12 +39,16 @@ provider ID, normalized DOI, or normalized arXiv ID.
   source-neutral projections.
 - `cita generate` repairs a missing or edited `references.bib` from the
   authoritative manifest.
-- `cita fetch [--force] [--dry-run | --save] <selector>` manages the arXiv PDF
-  cache. Without `--save`, an unmatched locator uses INSPIRE JSON only.
-- `cita open [--force | --no-download | --browser] [--save] <selector>` opens a
-  cached/downloaded PDF or its arXiv URL.
+- `cita fetch [--force | --cache-only | --url] [--open] [--save] <selector>`
+  returns an absolute cached PDF path, or the arXiv PDF URL with `-u/--url`.
+  `--open` launches the returned target with the system default application.
+  Without `--save`, an unmatched locator uses INSPIRE JSON only.
 - `cita commit` validates consistency and commits only `cita.toml` and
   `references.bib`, leaving unrelated staged changes intact.
+
+Successful `fetch` output is suitable for command substitution; status messages
+are written to stderr. For example, choose a specific PDF viewer on macOS with
+`open -a Skim "$(cita fetch <selector>)"`.
 
 ## Storage rules
 

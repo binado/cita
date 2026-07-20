@@ -92,10 +92,11 @@ BibTeX snapshots cause no network request.
 ### Selectors and documents
 
 Exact local key wins, then provider ID, normalized DOI, and normalized arXiv ID.
-Transient `fetch` and `open` resolve INSPIRE JSON only unless `--save` also
-fetches the authoritative BibTeX and stores the record. Documents use the
-projected arXiv ID; stored IDs are versionless and cache paths retain legacy
-arXiv archive directories.
+Transient `fetch` resolves INSPIRE JSON only unless `--save` also fetches the
+authoritative BibTeX and stores the record. It returns either an absolute cached
+PDF path or, with `--url`, the arXiv PDF URL; `--open` launches that target.
+Documents use the projected arXiv ID; stored IDs are versionless and cache paths
+retain legacy arXiv archive directories.
 
 ### Git
 
