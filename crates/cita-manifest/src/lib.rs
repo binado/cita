@@ -68,19 +68,12 @@ impl HepIdentifiers {
 
 impl InspireEntry {
     fn project(&self) -> Result<Reference, ProjectionError> {
-        let mut reference = project_bibtex(&self.bibtex)
-            .map_err(|error| ProjectionError::Invalid(error.to_string()))?;
-        if let Some(arxiv) = &self.identifiers.arxiv {
-            reference.identifiers.arxiv = vec![normalize_arxiv(arxiv)];
-        }
-        if let Some(doi) = &self.identifiers.doi {
-            reference.identifiers.dois = vec![normalize_doi(doi)];
-        }
-        reference
-            .identifiers
-            .providers
-            .insert("inspire".to_owned(), vec![self.record_id.to_string()]);
-        Ok(reference)
+        cita_inspire_client::project_inspire(
+            &self.bibtex,
+            self.identifiers.arxiv.as_deref(),
+            self.identifiers.doi.as_deref(),
+            self.record_id,
+        )
     }
 }
 

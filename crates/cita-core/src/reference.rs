@@ -1,53 +1,25 @@
 use crate::Locator;
-use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, future::Future};
 use thiserror::Error;
 
 /// The provider-neutral semantic view used by commands and identity checks.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Reference {
     pub title: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub authors: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub collaborations: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub year: Option<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub publication: Option<Publication>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub primary_category: Option<String>,
-    #[serde(default)]
     pub identifiers: Identifiers,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Identifiers {
     /// Normalized DOI values, in whatever order the producing source stored.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dois: Vec<String>,
     /// Normalized, versionless arXiv identifiers.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub arxiv: Vec<String>,
     /// Namespaced provider identities, e.g. `inspire = ["1124337"]`.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub providers: BTreeMap<String, Vec<String>>,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Publication {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub journal: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub volume: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub issue: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pages: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub year: Option<i32>,
 }
 
 pub trait ReferenceSource {
