@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
 
 jobs:
   test:
@@ -21,3 +24,14 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo build --workspace
+
+  # Opt-in: exercises the real INSPIRE API (crates/cita/tests/e2e.rs) instead
+  # of the hermetic local-TcpListener suites above. Not part of the default
+  # push/PR matrix so upstream flakiness or rate limiting can't block merges.
+  e2e:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --test e2e -- --ignored

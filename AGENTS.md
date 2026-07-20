@@ -18,10 +18,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p cita -- add 1207.7214
 cargo run -p cita -- import local.bib
 cargo run -p cita -- generate
+cargo test --test e2e -- --ignored  # live INSPIRE, network required
 ```
 
 CI runs format, clippy-as-errors, test, and build on 1.88 and stable. Tests are
-hermetic; INSPIRE and arXiv suites use local `TcpListener`s.
+hermetic; INSPIRE and arXiv suites use local `TcpListener`s. The exception is
+`crates/cita/tests/e2e.rs`, a single `#[ignore]`d end-to-end test that hits the
+real INSPIRE API; it never runs in the default push/PR matrix, only via manual
+dispatch or the weekly schedule.
 
 ## Commit messages
 
