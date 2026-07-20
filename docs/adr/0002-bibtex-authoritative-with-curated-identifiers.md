@@ -36,8 +36,8 @@ The INSPIRE client returns a lean `InspireRecord` (record id, timestamp, texkey,
 BibTeX, arXiv, DOI). It still fetches JSON to obtain identity, refresh
 bookkeeping, and texkeys, and cross-checks the authoritative BibTeX against the
 JSON identity at fetch and refresh time rather than persisting a JSON structure.
-Transient `fetch`/`open` resolve JSON only; `--save` additionally fetches the
-BibTeX and stores the record.
+Transient `fetch` resolves JSON only; `--save` additionally fetches the BibTeX
+and stores the record.
 
 This is the current schema; cita has no released users yet, so no
 compatibility is promised for any prior in-development format.

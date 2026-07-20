@@ -46,13 +46,20 @@ fn cita_stdin(cwd: &Path, args: &[&str], input: &str) -> Output {
 }
 
 fn success(output: Output) -> String {
+    success_streams(output).0
+}
+
+fn success_streams(output: Output) -> (String, String) {
     assert!(
         output.status.success(),
         "stdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8(output.stdout).unwrap()
+    (
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
 }
 fn failure(output: Output) -> String {
     assert!(!output.status.success(), "command unexpectedly succeeded");
@@ -379,12 +386,25 @@ fn stale_provider_texkeys_remain_selectable_for_save_and_remove() {
     handle.join().unwrap();
 
     cached_pdf_for(directory.path(), "2401.00042", b"%PDF-cached");
+    let (stdout, stderr) = success_streams(cita_with_server(
+        directory.path(),
+        &["fetch", "--save", "inspire:42"],
+        "http://127.0.0.1:1/",
+    ));
     assert_eq!(
-        success(cita_with_server(
-            directory.path(),
-            &["fetch", "--save", "inspire:42"],
-            "http://127.0.0.1:1/",
-        )),
+        stdout,
+        format!(
+            "{}\n",
+            directory
+                .path()
+                .canonicalize()
+                .unwrap()
+                .join(".cita/files/arxiv/2401.00042.pdf")
+                .display()
+        )
+    );
+    assert_eq!(
+        stderr,
         concat!(
             "Already present: Provider:Old\n",
             "Already fetched Provider:Old: https://arxiv.org/pdf/2401.00042\n"
@@ -558,8 +578,38 @@ fn fetch_reuses_cached_pdf_and_reports_missing_arxiv_id() {
     cached_pdf(directory.path(), b"%PDF-cached");
     let nested = directory.path().join("nested");
     fs::create_dir(&nested).unwrap();
+    let (stdout, stderr) = success_streams(cita(&nested, &["fetch", "Zed"]));
     assert_eq!(
-        success(cita(&nested, &["fetch", "Zed"])),
+        stdout,
+        format!(
+            "{}\n",
+            directory
+                .path()
+                .canonicalize()
+                .unwrap()
+                .join(".cita/files/arxiv/2001.00001.pdf")
+                .display()
+        )
+    );
+    assert_eq!(
+        stderr,
+        "Already fetched Zed: https://arxiv.org/pdf/2001.00001\n"
+    );
+    let (stdout, stderr) = success_streams(cita(&nested, &["fetch", "--cache-only", "Zed"]));
+    assert_eq!(
+        stdout,
+        format!(
+            "{}\n",
+            directory
+                .path()
+                .canonicalize()
+                .unwrap()
+                .join(".cita/files/arxiv/2001.00001.pdf")
+                .display()
+        )
+    );
+    assert_eq!(
+        stderr,
         "Already fetched Zed: https://arxiv.org/pdf/2001.00001\n"
     );
     let error = failure(cita(&nested, &["fetch", "--force", "Alpha"]));
@@ -570,23 +620,47 @@ fn fetch_reuses_cached_pdf_and_reports_missing_arxiv_id() {
 }
 
 #[test]
-fn fetch_dry_run_prints_url_without_touching_the_cache() {
+fn fetch_url_prints_only_the_url_without_touching_the_cache() {
     let directory = tempfile::tempdir().unwrap();
     arxiv_library(directory.path());
     fs::remove_dir_all(directory.path().join(".cita")).unwrap();
     assert_eq!(
-        success(cita(directory.path(), &["fetch", "--dry-run", "Zed"])),
-        "https://arxiv.org/pdf/2001.00001\n[dry run] skipped download\n"
+        success(cita(directory.path(), &["fetch", "-u", "Zed"])),
+        "https://arxiv.org/pdf/2001.00001\n"
     );
     assert!(!directory.path().join(".cita").exists());
 }
 
 #[test]
-fn fetch_force_and_dry_run_are_mutually_exclusive() {
+fn fetch_url_can_save_metadata_without_creating_the_pdf_cache() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    fs::remove_dir_all(directory.path().join(".cita")).unwrap();
+    let record = json_record(42, "Provider:42", "Saved", "2401.00042");
+    let bibtex = entry("Provider:42", "Saved", "eprint={2401.00042},");
+    let (base, handle) = server(vec![("200 OK", record), ("200 OK", bibtex)]);
+    let (stdout, stderr) = success_streams(cita_with_server(
+        directory.path(),
+        &["fetch", "--url", "--save", "2401.00042"],
+        &base,
+    ));
+    handle.join().unwrap();
+    assert_eq!(stdout, "https://arxiv.org/pdf/2401.00042\n");
+    assert_eq!(stderr, "Added Provider:42\n");
+    assert!(!directory.path().join(".cita").exists());
+    assert!(
+        fs::read_to_string(directory.path().join("cita.toml"))
+            .unwrap()
+            .contains("record_id = 42")
+    );
+}
+
+#[test]
+fn fetch_force_and_url_are_mutually_exclusive() {
     let directory = tempfile::tempdir().unwrap();
     let error = failure(cita(
         directory.path(),
-        &["fetch", "--force", "--dry-run", "Zed"],
+        &["fetch", "--force", "--url", "Zed"],
     ));
     assert!(error.contains("cannot be used with"), "{error}");
 }
@@ -601,26 +675,23 @@ fn fetch_suggests_force_for_an_invalid_cached_pdf() {
 }
 
 #[test]
-fn open_no_download_errors_on_a_cache_miss_without_creating_the_cache() {
+fn fetch_cache_only_errors_on_a_cache_miss_without_creating_the_cache() {
     let directory = tempfile::tempdir().unwrap();
     arxiv_library(directory.path());
     fs::remove_dir_all(directory.path().join(".cita")).unwrap();
-    let error = failure(cita(directory.path(), &["open", "--no-download", "Zed"]));
+    let error = failure(cita(directory.path(), &["fetch", "--cache-only", "Zed"]));
     assert!(error.contains("PDF is not cached"), "{error}");
-    assert!(error.contains("rerun without --no-download"), "{error}");
+    assert!(error.contains("rerun without --cache-only"), "{error}");
     assert!(!directory.path().join(".cita").exists());
 }
 
 #[test]
-fn open_no_download_suggests_dropping_the_flag_for_an_invalid_cached_pdf() {
+fn fetch_cache_only_suggests_force_for_an_invalid_cached_pdf() {
     let directory = tempfile::tempdir().unwrap();
     arxiv_library(directory.path());
     cached_pdf(directory.path(), b"not a PDF");
-    let error = failure(cita(directory.path(), &["open", "--no-download", "Zed"]));
-    assert!(
-        error.contains("drop --no-download and retry with --force"),
-        "{error}"
-    );
+    let error = failure(cita(directory.path(), &["fetch", "--cache-only", "Zed"]));
+    assert!(error.contains("retry with --force"), "{error}");
 }
 
 #[test]
