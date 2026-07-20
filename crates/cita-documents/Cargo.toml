@@ -1,7 +1,7 @@
 [package]
 name = "cita-documents"
 description = "Document download and cache management for Cita"
-readme = "../../README.md"
+readme = "README.md"
 keywords = ["arxiv", "bibliography", "pdf", "science"]
 categories = ["command-line-utilities", "science"]
 version.workspace = true
@@ -10,9 +10,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+publish = ["crates-io"]
 
 [dependencies]
-cita-core = { path = "../cita-core" }
+cita-core.workspace = true
 reqwest.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true

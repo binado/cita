@@ -18,16 +18,22 @@ const MAX_429_RETRIES: usize = 3;
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Notification emitted immediately before retrying a rate-limited request.
 pub struct RetryEvent {
+    /// Human-readable resource being requested.
     pub resource: String,
+    /// Delay before the next attempt.
     pub delay: Duration,
+    /// One-based retry attempt number.
     pub attempt: usize,
+    /// Maximum number of retries after the initial request.
     pub max_retries: usize,
 }
 
 type RetryObserver = Arc<dyn Fn(&RetryEvent) + Send + Sync>;
 
 #[derive(Clone)]
+/// HTTP client for resolving and refreshing INSPIRE literature records.
 pub struct Client {
     http: reqwest::Client,
     base_url: Url,
@@ -47,14 +53,17 @@ impl fmt::Debug for Client {
 }
 
 impl Client {
+    /// Create a client with the default INSPIRE endpoint and retry settings.
     pub fn new() -> Result<Self, Error> {
         ClientBuilder::new().build()
     }
 
+    /// Begin configuring an INSPIRE client.
     pub fn builder() -> ClientBuilder {
         ClientBuilder::new()
     }
 
+    /// Resolve only source-neutral JSON metadata without fetching BibTeX.
     pub async fn resolve_reference(&self, locator: &Locator) -> Result<Reference, Error> {
         self.lookup_json(locator)
             .await?
@@ -62,6 +71,7 @@ impl Client {
             .map_err(|error| Error::Malformed(error.to_string()))
     }
 
+    /// Resolve JSON and authoritative BibTeX into a durable record.
     pub async fn resolve_snapshot(&self, locator: &Locator) -> Result<InspireRecord, Error> {
         let record = self.lookup_json(locator).await?;
         let bibtex = self.lookup_bibtex(locator).await?;
@@ -77,6 +87,7 @@ impl Client {
         cross_check(record, key, snapshot.bibtex)
     }
 
+    /// Refresh records by stable INSPIRE ID in bounded search batches.
     pub async fn refresh_records(&self, ids: &[u64]) -> Result<Vec<InspireRecord>, Error> {
         let mut output = Vec::with_capacity(ids.len());
         for batch in batch_ids(ids) {
@@ -330,6 +341,7 @@ fn retry_after_delay(value: &str) -> Option<Duration> {
 }
 
 #[derive(Clone)]
+/// Configures an INSPIRE [`Client`].
 pub struct ClientBuilder {
     base_url: String,
     user_agent: String,
@@ -351,6 +363,7 @@ impl fmt::Debug for ClientBuilder {
 }
 
 impl ClientBuilder {
+    /// Create a builder with production defaults.
     pub fn new() -> Self {
         Self {
             base_url: DEFAULT_BASE_URL.into(),
@@ -361,31 +374,37 @@ impl ClientBuilder {
         }
     }
 
+    /// Override the INSPIRE-compatible base URL.
     pub fn base_url(mut self, value: impl Into<String>) -> Self {
         self.base_url = value.into();
         self
     }
 
+    /// Override the HTTP user-agent header.
     pub fn user_agent(mut self, value: impl Into<String>) -> Self {
         self.user_agent = value.into();
         self
     }
 
+    /// Override the request timeout.
     pub fn timeout(mut self, value: Duration) -> Self {
         self.timeout = value;
         self
     }
 
+    /// Set the delay used when `Retry-After` is absent or invalid.
     pub fn retry_fallback(mut self, value: Duration) -> Self {
         self.retry_fallback = value;
         self
     }
 
+    /// Register an observer called before each rate-limit retry.
     pub fn on_retry(mut self, observer: impl Fn(&RetryEvent) + Send + Sync + 'static) -> Self {
         self.on_retry = Arc::new(observer);
         self
     }
 
+    /// Validate the configuration and construct the client.
     pub fn build(self) -> Result<Client, Error> {
         let mut base_url =
             Url::parse(&self.base_url).map_err(|_| Error::InvalidBaseUrl(self.base_url.clone()))?;
@@ -419,15 +438,26 @@ impl Default for Client {
 }
 
 #[derive(Debug, Error)]
+/// Error produced by INSPIRE configuration, requests, or response validation.
 pub enum Error {
+    /// The configured base URL is invalid.
     #[error("invalid INSPIRE base URL: {0}")]
     InvalidBaseUrl(String),
+    /// An HTTP request failed before a response was received.
     #[error("INSPIRE request failed: {0}")]
     Transport(#[source] reqwest::Error),
+    /// No record matched the requested locator or stable ID.
     #[error("INSPIRE did not find {0}")]
     NotFound(String),
+    /// INSPIRE returned an unsuccessful response.
     #[error("INSPIRE returned HTTP {status}: {body}")]
-    HttpStatus { status: StatusCode, body: String },
+    HttpStatus {
+        /// HTTP response status.
+        status: StatusCode,
+        /// Response body retained for diagnostics.
+        body: String,
+    },
+    /// INSPIRE returned inconsistent or malformed data.
     #[error("INSPIRE returned malformed data: {0}")]
     Malformed(String),
 }

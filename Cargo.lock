@@ -170,7 +170,6 @@ dependencies = [
  "biblatex",
  "cita-core",
  "serde",
- "tempfile",
  "thiserror",
 ]
 

@@ -1,4 +1,5 @@
 //! Provider-neutral bibliography vocabulary shared by Cita crates.
+#![warn(missing_docs)]
 
 mod locator;
 mod reference;

@@ -2,19 +2,26 @@ use std::{fmt, str::FromStr};
 use thiserror::Error as ThisError;
 
 #[derive(Clone, Debug, PartialEq, Eq, ThisError)]
+/// Error returned when a reference locator cannot be parsed.
 pub enum Error {
+    /// The supplied string is not a supported locator.
     #[error("invalid reference locator: {0}")]
     InvalidLocator(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// A normalized identifier accepted by a metadata provider.
 pub enum Locator {
+    /// A numeric INSPIRE literature record identifier.
     Inspire(u64),
+    /// A versionless arXiv identifier.
     Arxiv(String),
+    /// A normalized DOI.
     Doi(String),
 }
 
 impl Locator {
+    /// Return the canonical, explicitly prefixed locator string.
     pub fn normalized(&self) -> String {
         match self {
             Self::Inspire(id) => format!("inspire:{id}"),

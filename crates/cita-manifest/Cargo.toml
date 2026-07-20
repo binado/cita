@@ -1,7 +1,7 @@
 [package]
 name = "cita-manifest"
 description = "Authoritative source-snapshot storage for Cita"
-readme = "../../README.md"
+readme = "README.md"
 keywords = ["bibliography", "bibtex", "citations"]
 categories = ["command-line-utilities", "science"]
 version.workspace = true
@@ -10,15 +10,13 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+publish = ["crates-io"]
 
 [dependencies]
-cita-bibliography = { path = "../cita-bibliography" }
-cita-core = { path = "../cita-core" }
-cita-inspire-client = { path = "../cita-inspire-client" }
+cita-bibliography.workspace = true
+cita-core.workspace = true
+cita-inspire-client.workspace = true
 serde.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 toml.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true

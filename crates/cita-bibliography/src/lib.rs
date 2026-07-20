@@ -1,4 +1,5 @@
 //! Strict standalone BibTeX parsing and rendering support.
+#![warn(missing_docs)]
 
 use biblatex::{
     Bibliography, ChunksExt, DateValue, Entry as BibEntry, PermissiveType, RawBibliography,
@@ -12,11 +13,14 @@ use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// One validated, standalone BibTeX entry with its source bytes preserved.
 pub struct BibtexSnapshot {
+    /// The complete raw BibTeX entry.
     pub bibtex: String,
 }
 
 impl BibtexSnapshot {
+    /// Validate and construct a snapshot containing exactly one entry.
     pub fn new(bibtex: String) -> Result<Self, Error> {
         let entries = parse(&bibtex)?;
         if entries.len() != 1 {
@@ -28,6 +32,7 @@ impl BibtexSnapshot {
         Ok(Self { bibtex })
     }
 
+    /// Return the entry's citation key.
     pub fn key(&self) -> Result<String, Error> {
         Ok(scan_raw_entries(&self.bibtex)?
             .into_iter()
@@ -44,13 +49,18 @@ impl ReferenceSource for BibtexSnapshot {
 }
 
 #[derive(Debug, Error)]
+/// Error produced while validating, parsing, projecting, or rewriting BibTeX.
 pub enum Error {
+    /// BibTeX syntax or required semantic content is invalid.
     #[error("invalid BibTeX: {0}")]
     InvalidBibtex(String),
+    /// The input contains content other than standalone entries and whitespace.
     #[error("unsupported bibliography content: {0}")]
     UnsupportedContent(String),
+    /// A citation key contains unsupported characters.
     #[error("unsafe citation key `{0}`; allowed characters are A-Z, a-z, 0-9, ., _, :, +, and -")]
     UnsafeKey(String),
+    /// More than one entry uses the same citation key.
     #[error("citation key conflict: `{0}` appears more than once")]
     KeyConflict(String),
 }
@@ -81,6 +91,7 @@ pub fn parse(source: &str) -> Result<BTreeMap<String, BibtexSnapshot>, Error> {
     Ok(entries)
 }
 
+/// Project one standalone entry into Cita's source-neutral reference fields.
 pub fn project_bibtex(source: &str) -> Result<Reference, Error> {
     let raw = scan_raw_entries(source)?;
     if raw.len() != 1 {
@@ -233,6 +244,7 @@ fn chunks(entry: &BibEntry, field: &str) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
+/// Validate a citation key against Cita's safe key character set.
 pub fn validate_key(key: &str) -> Result<(), Error> {
     if !key.is_empty()
         && key.bytes().all(|byte| {

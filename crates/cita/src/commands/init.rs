@@ -4,14 +4,11 @@ use anyhow::Result;
 use cita_manifest::{BIBLIOGRAPHY_FILE, MANIFEST_FILE, Manifest};
 use std::path::Path;
 
-pub(crate) fn init(cwd: &Path) -> Result<()> {
-    let directory = match git::repository_root(cwd) {
-        Ok(Some(root)) => root,
-        Ok(None) => cwd.to_path_buf(),
-        Err(error) => {
-            eprintln!("warning: {error:#}; initializing in the current directory");
-            cwd.to_path_buf()
-        }
+pub(crate) fn init(cwd: &Path, here: bool) -> Result<()> {
+    let directory = if here {
+        cwd.to_path_buf()
+    } else {
+        git::repository_root(cwd)?.unwrap_or_else(|| cwd.to_path_buf())
     };
     let manifest_path = directory.join(MANIFEST_FILE);
     let bibliography_path = directory.join(BIBLIOGRAPHY_FILE);

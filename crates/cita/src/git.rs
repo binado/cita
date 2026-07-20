@@ -12,10 +12,20 @@ use std::{
 /// failing to run git at all is an error for the caller to interpret.
 pub fn repository_root(path: &Path) -> Result<Option<PathBuf>> {
     let output = git_output(path, &["rev-parse", "--show-toplevel"])?;
-    Ok(output
-        .status
-        .success()
-        .then(|| PathBuf::from(String::from_utf8_lossy(&output.stdout).trim())))
+    if output.status.success() {
+        return Ok(Some(PathBuf::from(
+            String::from_utf8_lossy(&output.stdout).trim(),
+        )));
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if output.status.code() == Some(128)
+        && stderr
+            .trim()
+            .starts_with("fatal: not a git repository (or any of the parent directories):")
+    {
+        return Ok(None);
+    }
+    bail!("git rev-parse --show-toplevel failed: {}", stderr.trim())
 }
 
 pub fn commit(manifest_path: &Path) -> Result<()> {
@@ -34,10 +44,15 @@ pub fn commit(manifest_path: &Path) -> Result<()> {
         .strip_prefix(&root)
         .context("references.bib is outside the Git root")?
         .to_string_lossy();
+    ensure_managed_files_unstaged(
+        &root,
+        &[manifest_relative.as_ref(), bibliography_relative.as_ref()],
+    )?;
     let manifest_bytes = fs::read(manifest_path)?;
     let bib_bytes = fs::read(&bibliography_path)?;
-    let old_manifest_bytes = committed_bytes(&root, &manifest_relative)?;
-    let old_bib_bytes = committed_bytes(&root, &bibliography_relative)?;
+    let head_exists = head_exists(&root)?;
+    let old_manifest_bytes = committed_bytes(&root, &manifest_relative, head_exists)?;
+    let old_bib_bytes = committed_bytes(&root, &bibliography_relative, head_exists)?;
     if old_manifest_bytes.as_deref() == Some(manifest_bytes.as_slice())
         && old_bib_bytes.as_deref() == Some(bib_bytes.as_slice())
     {
@@ -56,7 +71,9 @@ pub fn commit(manifest_path: &Path) -> Result<()> {
             }
         },
     };
-    run_git(
+    let manifest_in_head = old_manifest_bytes.is_some();
+    let bibliography_in_head = old_bib_bytes.is_some();
+    if let Err(error) = run_git(
         &root,
         &[
             "add",
@@ -65,37 +82,180 @@ pub fn commit(manifest_path: &Path) -> Result<()> {
             &manifest_relative,
             &bibliography_relative,
         ],
-    )?;
+    ) {
+        return Err(rollback_error(
+            &root,
+            &manifest_relative,
+            manifest_in_head,
+            &bibliography_relative,
+            bibliography_in_head,
+            error,
+        ));
+    }
     let mut args = vec!["commit", "--only", "-m", &subject];
     if !body.is_empty() {
         args.extend(["-m", &body]);
     }
     args.extend(["--", &manifest_relative, &bibliography_relative]);
-    run_git(&root, &args)?;
+    if let Err(error) = run_git(&root, &args) {
+        return Err(rollback_error(
+            &root,
+            &manifest_relative,
+            manifest_in_head,
+            &bibliography_relative,
+            bibliography_in_head,
+            error,
+        ));
+    }
     println!("Committed Cita references: {subject}");
     Ok(())
 }
 
-/// Bytes of `HEAD:relative`, or `None` when git reports that the path or
-/// HEAD itself does not exist yet. Any other failure is an error so a broken
-/// repository is never mistaken for a first commit.
-fn committed_bytes(root: &Path, relative: &str) -> Result<Option<Vec<u8>>> {
-    const ABSENT_MARKERS: [&str; 4] = [
-        "does not exist in",
-        "exists on disk, but not in",
-        "invalid object name",
-        "unknown revision or path not in the working tree",
-    ];
+/// Bytes of `HEAD:relative`, after HEAD and exact path existence have been
+/// established separately. This keeps a damaged object database distinct from
+/// an unborn branch or a path that was not present in the commit.
+fn committed_bytes(root: &Path, relative: &str, head_exists: bool) -> Result<Option<Vec<u8>>> {
+    if !head_exists || !path_exists_in_head(root, relative)? {
+        return Ok(None);
+    }
     let reference = format!("HEAD:{relative}");
     let output = git_output(root, &["show", &reference])?;
     if output.status.success() {
         return Ok(Some(output.stdout));
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
-    if ABSENT_MARKERS.iter().any(|marker| stderr.contains(marker)) {
-        return Ok(None);
-    }
     bail!("git show {reference} failed: {}", stderr.trim())
+}
+
+fn head_exists(root: &Path) -> Result<bool> {
+    let output = git_output(root, &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) if output.stderr.is_empty() => Ok(false),
+        _ => bail!(
+            "git rev-parse --verify HEAD failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    }
+}
+
+fn path_exists_in_head(root: &Path, relative: &str) -> Result<bool> {
+    let output = git_output(
+        root,
+        &[
+            "ls-tree",
+            "--full-name",
+            "--name-only",
+            "-z",
+            "HEAD",
+            "--",
+            relative,
+        ],
+    )?;
+    if !output.status.success() {
+        bail!(
+            "git ls-tree HEAD -- {relative} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    if output.stdout.is_empty() {
+        return Ok(false);
+    }
+    let mut expected = relative.as_bytes().to_vec();
+    expected.push(0);
+    if output.stdout == expected {
+        Ok(true)
+    } else {
+        bail!("git ls-tree returned an unexpected path for `{relative}`")
+    }
+}
+
+fn ensure_managed_files_unstaged(root: &Path, paths: &[&str]) -> Result<()> {
+    let mut args = vec!["diff", "--cached", "--quiet", "--"];
+    args.extend_from_slice(paths);
+    let output = git_output(root, &args)?;
+    match output.status.code() {
+        Some(0) => Ok(()),
+        Some(1) => bail!(
+            "cita.toml or references.bib already has staged changes; commit or unstage the managed files before running `cita commit`"
+        ),
+        _ => bail!(
+            "git diff --cached failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    }
+}
+
+fn rollback_error(
+    root: &Path,
+    manifest: &str,
+    manifest_in_head: bool,
+    bibliography: &str,
+    bibliography_in_head: bool,
+    original: anyhow::Error,
+) -> anyhow::Error {
+    match rollback_index(
+        root,
+        manifest,
+        manifest_in_head,
+        bibliography,
+        bibliography_in_head,
+    ) {
+        Ok(()) => original,
+        Err(cleanup) => anyhow::anyhow!(
+            "{original:#}; additionally failed to restore Cita's index entries: {cleanup:#}"
+        ),
+    }
+}
+
+fn rollback_index(
+    root: &Path,
+    manifest: &str,
+    manifest_in_head: bool,
+    bibliography: &str,
+    bibliography_in_head: bool,
+) -> Result<()> {
+    let existing = [
+        (manifest, manifest_in_head),
+        (bibliography, bibliography_in_head),
+    ]
+    .into_iter()
+    .filter_map(|(path, exists)| exists.then_some(path))
+    .collect::<Vec<_>>();
+    let added = [
+        (manifest, manifest_in_head),
+        (bibliography, bibliography_in_head),
+    ]
+    .into_iter()
+    .filter_map(|(path, exists)| (!exists).then_some(path))
+    .collect::<Vec<_>>();
+    let mut failures = Vec::new();
+    if !existing.is_empty() {
+        let mut args = vec!["reset", "--quiet", "HEAD", "--"];
+        args.extend(existing);
+        if let Err(error) = run_git(root, &args) {
+            failures.push(error);
+        }
+    }
+    if !added.is_empty() {
+        let mut args = vec!["rm", "--cached", "-f", "--ignore-unmatch", "--"];
+        args.extend(added);
+        if let Err(error) = run_git(root, &args) {
+            failures.push(error);
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        bail!(
+            "{}",
+            failures
+                .into_iter()
+                .map(|error| format!("{error:#}"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
+    }
 }
 
 fn parse_committed_manifest(bytes: &[u8]) -> Result<Manifest> {

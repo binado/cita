@@ -26,7 +26,13 @@ pub(crate) async fn add(cwd: &Path, explicit_key: Option<&str>, values: &[String
         });
     }
     let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
-    for outcome in manifest.add_batch(pending)? {
+    let outcomes = manifest.add_batch(pending).map_err(|error| match error {
+        error @ cita_manifest::Error::KeyConflict { .. } => anyhow::Error::from(error).context(
+            "choose a different local key by rerunning one locator with `cita add --key <key> <locator>`",
+        ),
+        error => error.into(),
+    })?;
+    for outcome in outcomes {
         print_add(outcome);
     }
     Ok(())
