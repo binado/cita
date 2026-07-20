@@ -44,7 +44,7 @@ cita-bibliography ← cita-inspire-client   cita-documents
 
 - `cita-core`: `Reference`, provider traits, locators, and normalization.
 - `cita-bibliography`: strict standalone BibTeX snapshots, projections,
-  raw-entry re-keying, and generic `biblatex::Entry` rendering.
+  and raw-entry re-keying.
 - `cita-inspire-client`: lean `InspireRecord`s (authoritative BibTeX plus
   record id, timestamp, and canonical arXiv/DOI), stable-record-ID refresh
   batches, bounded queries, and 429 retries; cross-checks its BibTeX against the

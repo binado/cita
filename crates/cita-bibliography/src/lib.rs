@@ -1,12 +1,10 @@
 //! Strict standalone BibTeX parsing and rendering support.
 
 use biblatex::{
-    Bibliography, Chunk, ChunksExt, DateValue, Entry as BibEntry, EntryType, PermissiveType,
-    RawBibliography,
+    Bibliography, ChunksExt, DateValue, Entry as BibEntry, PermissiveType, RawBibliography,
 };
 use cita_core::{
-    Identifiers, ProjectionError, Publication, Reference, ReferenceSource, normalize_arxiv,
-    normalize_doi,
+    Identifiers, ProjectionError, Reference, ReferenceSource, normalize_arxiv, normalize_doi,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, ops::Range};
@@ -55,8 +53,6 @@ pub enum Error {
     UnsafeKey(String),
     #[error("citation key conflict: `{0}` appears more than once")]
     KeyConflict(String),
-    #[error("could not render BibTeX: {0}")]
-    Render(String),
 }
 
 /// Parse every standalone entry while retaining its exact raw entry block.
@@ -117,21 +113,6 @@ pub fn project_bibtex(source: &str) -> Result<Reference, Error> {
         }),
         PermissiveType::Chunks(_) => None,
     });
-    let publication = {
-        let journal = chunks(entry, "journal").or_else(|| chunks(entry, "journaltitle"));
-        let volume = chunks(entry, "volume");
-        let issue = chunks(entry, "number").or_else(|| chunks(entry, "issue"));
-        let pages = chunks(entry, "pages");
-        (journal.is_some() || volume.is_some() || issue.is_some() || pages.is_some()).then_some(
-            Publication {
-                journal,
-                volume,
-                issue,
-                pages,
-                year,
-            },
-        )
-    };
     let dois = entry
         .doi()
         .ok()
@@ -149,9 +130,6 @@ pub fn project_bibtex(source: &str) -> Result<Reference, Error> {
         authors,
         collaborations: chunks(entry, "collaboration").into_iter().collect(),
         year,
-        publication,
-        url: chunks(entry, "url"),
-        primary_category: chunks(entry, "primaryclass").or_else(|| chunks(entry, "eprintclass")),
         identifiers: Identifiers {
             dois,
             arxiv,
@@ -282,78 +260,6 @@ pub fn rename_entry(source: &str, new_key: &str) -> Result<String, Error> {
     Ok(renamed)
 }
 
-/// Render a source that has no authoritative BibTeX through `biblatex::Entry`.
-pub fn render_reference(key: &str, reference: &Reference) -> Result<String, Error> {
-    validate_key(key)?;
-    let kind = if reference
-        .publication
-        .as_ref()
-        .and_then(|publication| publication.journal.as_ref())
-        .is_some()
-    {
-        EntryType::Article
-    } else {
-        EntryType::Misc
-    };
-    let mut entry = BibEntry::new(key.to_owned(), kind);
-    set_chunks(&mut entry, "title", &reference.title);
-    if !reference.authors.is_empty() {
-        set_chunks(&mut entry, "author", &reference.authors.join(" and "));
-    }
-    if !reference.collaborations.is_empty() {
-        set_chunks(
-            &mut entry,
-            "collaboration",
-            &reference.collaborations.join(" and "),
-        );
-    }
-    let publication_year = reference
-        .publication
-        .as_ref()
-        .and_then(|publication| publication.year)
-        .or(reference.year);
-    if let Some(year) = publication_year {
-        set_chunks(&mut entry, "year", &year.to_string());
-    }
-    if let Some(publication) = &reference.publication {
-        set_optional(&mut entry, "journal", publication.journal.as_deref());
-        set_optional(&mut entry, "volume", publication.volume.as_deref());
-        set_optional(&mut entry, "number", publication.issue.as_deref());
-        set_optional(&mut entry, "pages", publication.pages.as_deref());
-    }
-    set_optional(
-        &mut entry,
-        "doi",
-        reference.identifiers.dois.first().map(String::as_str),
-    );
-    if let Some(arxiv) = reference.identifiers.arxiv.first() {
-        set_chunks(&mut entry, "eprint", arxiv);
-        set_chunks(&mut entry, "archiveprefix", "arXiv");
-    }
-    set_optional(
-        &mut entry,
-        "primaryclass",
-        reference.primary_category.as_deref(),
-    );
-    set_optional(&mut entry, "url", reference.url.as_deref());
-    entry
-        .to_bibtex_string()
-        .map_err(|error| Error::Render(error.to_string()))
-}
-
-fn set_optional(entry: &mut BibEntry, key: &str, value: Option<&str>) {
-    if let Some(value) = value {
-        set_chunks(entry, key, value);
-    }
-}
-
-fn set_chunks(entry: &mut BibEntry, key: &str, value: &str) {
-    entry.set(
-        key,
-        vec![biblatex::Spanned::zero(Chunk::Normal(value.to_owned()))],
-    );
-}
-
 fn format_person(person: &biblatex::Person) -> String {
     let mut parts = [&person.given_name, &person.prefix, &person.name]
         .into_iter()
@@ -414,23 +320,5 @@ mod tests {
         let raw = "@misc{Old,title={Old}}";
         assert_eq!(rename_entry(raw, "New").unwrap(), "@misc{New,title={Old}}");
         assert!(rename_entry("% outside\n@misc{Old,title={Old}}", "New").is_err());
-    }
-
-    #[test]
-    fn generic_reference_uses_biblatex_serialization() {
-        let reference = Reference {
-            title: "Future adapter".into(),
-            authors: vec!["Doe, Jane".into()],
-            year: Some(2026),
-            identifiers: Identifiers {
-                arxiv: vec!["2601.00001".into()],
-                ..Identifiers::default()
-            },
-            ..Reference::default()
-        };
-        let rendered = render_reference("Future:2026", &reference).unwrap();
-        assert!(rendered.starts_with("@misc{Future:2026,"), "{rendered}");
-        assert!(rendered.contains("title = {Future adapter}"), "{rendered}");
-        BibtexSnapshot::new(rendered).unwrap();
     }
 }

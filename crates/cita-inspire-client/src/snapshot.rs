@@ -94,10 +94,6 @@ impl ReferenceSource for SelectedRecord {
         providers.insert("inspire".to_owned(), vec![self.record_id.to_string()]);
         Ok(Reference {
             title,
-            url: Some(format!(
-                "https://inspirehep.net/literature/{}",
-                self.record_id
-            )),
             identifiers: Identifiers {
                 dois: self.normalized_doi(),
                 arxiv: self.normalized_arxiv(),
@@ -108,21 +104,37 @@ impl ReferenceSource for SelectedRecord {
     }
 }
 
+/// Project authoritative INSPIRE BibTeX, then overlay curated arXiv/DOI and the
+/// stable provider record id.
+pub fn project_inspire(
+    bibtex: &str,
+    arxiv: Option<&str>,
+    doi: Option<&str>,
+    record_id: u64,
+) -> Result<Reference, ProjectionError> {
+    let mut reference =
+        project_bibtex(bibtex).map_err(|error| ProjectionError::Invalid(error.to_string()))?;
+    if let Some(arxiv) = arxiv {
+        reference.identifiers.arxiv = vec![normalize_arxiv(arxiv)];
+    }
+    if let Some(doi) = doi {
+        reference.identifiers.dois = vec![normalize_doi(doi)];
+    }
+    reference
+        .identifiers
+        .providers
+        .insert("inspire".to_owned(), vec![record_id.to_string()]);
+    Ok(reference)
+}
+
 impl ReferenceSource for InspireRecord {
     fn project(&self) -> Result<Reference, ProjectionError> {
-        let mut reference = project_bibtex(&self.bibtex)
-            .map_err(|error| ProjectionError::Invalid(error.to_string()))?;
-        if let Some(arxiv) = &self.arxiv {
-            reference.identifiers.arxiv = vec![normalize_arxiv(arxiv)];
-        }
-        if let Some(doi) = &self.doi {
-            reference.identifiers.dois = vec![normalize_doi(doi)];
-        }
-        reference
-            .identifiers
-            .providers
-            .insert("inspire".to_owned(), vec![self.record_id.to_string()]);
-        Ok(reference)
+        project_inspire(
+            &self.bibtex,
+            self.arxiv.as_deref(),
+            self.doi.as_deref(),
+            self.record_id,
+        )
     }
 }
 
