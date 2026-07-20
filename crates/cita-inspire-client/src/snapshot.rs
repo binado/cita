@@ -60,9 +60,16 @@ impl SelectedRecord {
 
     /// Attach authoritative BibTeX to build the durable record. The caller has
     /// already cross-checked the BibTeX key and identity against this record.
-    pub(crate) fn into_record(self, texkey: String, bibtex: String) -> InspireRecord {
-        let arxiv = self.normalized_arxiv().into_iter().next();
-        let doi = self.normalized_doi().into_iter().next();
+    /// Curated arXiv/DOI are the lexicographically first ID in the intersection
+    /// of normalized JSON identifiers with the BibTeX projection (or `None`).
+    pub(crate) fn into_record(
+        self,
+        texkey: String,
+        bibtex: String,
+        bib: &Reference,
+    ) -> InspireRecord {
+        let arxiv = curated(self.normalized_arxiv(), &bib.identifiers.arxiv);
+        let doi = curated(self.normalized_doi(), &bib.identifiers.dois);
         InspireRecord {
             record_id: self.record_id,
             updated: self.updated,
@@ -127,6 +134,12 @@ fn unique(values: impl IntoIterator<Item = String>) -> Vec<String> {
         .collect()
 }
 
+fn curated(json: Vec<String>, bib: &[String]) -> Option<String> {
+    unique(json.into_iter().filter(|id| bib.contains(id)))
+        .into_iter()
+        .next()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,9 +169,12 @@ mod tests {
 
     #[test]
     fn durable_projection_derives_content_from_bibtex_and_overrides_identity() {
+        let bibtex = "@article{Key:2026,title={Real title},author={Doe, Jane},year={2024},eprint={2401.00001},doi={10.1/X}}";
+        let bib = project_bibtex(bibtex).unwrap();
         let record = selected(&["2401.00001v2"], &["10.1/X"]).into_record(
             "Key:2026".into(),
-            "@article{Key:2026,title={Real title},author={Doe, Jane},year={2024}}".into(),
+            bibtex.into(),
+            &bib,
         );
         let reference = record.project().unwrap();
         assert_eq!(reference.title, "Real title");
@@ -170,6 +186,25 @@ mod tests {
             reference.identifiers.providers.get("inspire").unwrap(),
             &["42".to_owned()]
         );
+    }
+
+    #[test]
+    fn curated_ids_come_from_json_bibtex_intersection_not_lex_first_json() {
+        let bibtex = "@misc{Key:2026,title={T},doi={10.1/zzz},eprint={2401.00002}}";
+        let bib = project_bibtex(bibtex).unwrap();
+        let record = selected(&["2401.00001", "2401.00002"], &["10.1/zzz", "10.1/aaa"])
+            .into_record("Key:2026".into(), bibtex.into(), &bib);
+        assert_eq!(record.doi.as_deref(), Some("10.1/zzz"));
+        assert_eq!(record.arxiv.as_deref(), Some("2401.00002"));
+    }
+
+    #[test]
+    fn curated_ids_are_none_when_json_and_bibtex_have_no_identifiers() {
+        let bibtex = "@misc{Key:2026,title={T}}";
+        let bib = project_bibtex(bibtex).unwrap();
+        let record = selected(&[], &[]).into_record("Key:2026".into(), bibtex.into(), &bib);
+        assert_eq!(record.arxiv, None);
+        assert_eq!(record.doi, None);
     }
 
     #[test]

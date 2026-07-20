@@ -290,7 +290,7 @@ fn cross_check(
         .first()
         .cloned()
         .ok_or_else(|| Error::Malformed("INSPIRE record has no citation key".into()))?;
-    Ok(record.into_record(texkey, bibtex))
+    Ok(record.into_record(texkey, bibtex, &bib_reference))
 }
 
 fn batch_ids(ids: &[u64]) -> Vec<Vec<u64>> {
