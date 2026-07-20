@@ -88,26 +88,18 @@ fn section<'a>(manifest: &'a str, key: &str) -> &'a str {
         .find(&header)
         .unwrap_or_else(|| panic!("{header} missing from:\n{manifest}"));
     let own_subtable = format!("\n[references.{key}.");
-    let mut cursor = start + header.len();
-    let end = loop {
-        match manifest[cursor..].find("\n[references.") {
-            None => break manifest.len(),
-            Some(offset) => {
-                let candidate = cursor + offset;
-                if manifest[candidate..].starts_with(&own_subtable) {
-                    cursor = candidate + own_subtable.len();
-                } else {
-                    break candidate;
-                }
-            }
-        }
-    };
+    // Walk every following `[references.…]` header; skip this entry's own
+    // nested subtables and stop at the first sibling entry (or end of file).
+    let end = manifest[start..]
+        .match_indices("\n[references.")
+        .map(|(offset, _)| start + offset)
+        .find(|&pos| !manifest[pos..].starts_with(&own_subtable))
+        .unwrap_or(manifest.len());
     &manifest[start..end]
 }
 
 struct Paper {
     key: &'static str,
-    locator: &'static str,
     record_id: u64,
     title: &'static str,
     arxiv: Option<&'static str>,
@@ -120,7 +112,6 @@ const PAPERS: [Paper; 4] = [
     // Legacy arXiv identifier (has a v2 on arXiv), math in the title.
     Paper {
         key: "Maldacena",
-        locator: "inspire:451647",
         record_id: 451647,
         title: "Large $N$ limit of superconformal field theories",
         arxiv: Some("hep-th/9711200"),
@@ -128,7 +119,6 @@ const PAPERS: [Paper; 4] = [
     // No arXiv preprint.
     Paper {
         key: "Choptuik",
-        locator: "inspire:33714",
         record_id: 33714,
         title: "Universality and scaling in gravitational collapse",
         arxiv: None,
@@ -136,7 +126,6 @@ const PAPERS: [Paper; 4] = [
     // Collaboration paper with 1000+ authors.
     Paper {
         key: "Ligo",
-        locator: "inspire:1421100",
         record_id: 1421100,
         title: "Observation of Gravitational Waves from a Binary Black Hole Merger",
         arxiv: Some("1602.03837"),
@@ -144,7 +133,6 @@ const PAPERS: [Paper; 4] = [
     // No arXiv preprint.
     Paper {
         key: "Weinberg",
-        locator: "inspire:51188",
         record_id: 51188,
         title: "A Model of Leptons",
         arxiv: None,
@@ -185,23 +173,24 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
     let output = success(cita_stdin(directory.path(), &["import", "-"], seed));
     assert_eq!(output, "Added SeedAlpha\nAdded SeedBeta\n");
     let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
-    assert!(
-        section(&manifest, "SeedAlpha").contains("source = \"import\""),
-        "{manifest}"
-    );
-    assert!(
-        section(&manifest, "SeedBeta").contains("source = \"import\""),
-        "{manifest}"
-    );
     let seed_alpha_before = section(&manifest, "SeedAlpha").to_owned();
     let seed_beta_before = section(&manifest, "SeedBeta").to_owned();
+    assert!(
+        seed_alpha_before.contains("source = \"import\""),
+        "{manifest}"
+    );
+    assert!(
+        seed_beta_before.contains("source = \"import\""),
+        "{manifest}"
+    );
 
     // 3. Progressively `add` each handpicked paper by its stable INSPIRE
     //    record id, checking the manifest after every command.
     for paper in &PAPERS {
+        let locator = format!("inspire:{}", paper.record_id);
         let output = success(cita(
             directory.path(),
-            &["add", "--key", paper.key, paper.locator],
+            &["add", "--key", paper.key, &locator],
         ));
         assert_eq!(output, format!("Added {}\n", paper.key));
 
