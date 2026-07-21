@@ -127,18 +127,24 @@ pub(crate) fn add_message(outcome: &AddOutcome, style: Option<anstyle::Style>) -
                 highlight(conflicting, style)
             )
         }
-        AddOutcome::Overwritten {
-            key,
-            replaced: Some(old),
-        } => format!(
-            "overwrote {} -> {}",
-            highlight(old, style),
-            highlight(key, style)
-        ),
-        AddOutcome::Overwritten {
-            key,
-            replaced: None,
-        } => format!("overwrote {}", highlight(key, style)),
+        AddOutcome::Overwritten { key, replaced } => match replaced.as_slice() {
+            [] => format!("overwrote {}", highlight(key, style)),
+            [only] if only == key => format!("overwrote {}", highlight(key, style)),
+            [old] => format!(
+                "overwrote {} -> {}",
+                highlight(old, style),
+                highlight(key, style)
+            ),
+            replaced => format!(
+                "overwrote {} -> {}",
+                replaced
+                    .iter()
+                    .map(|old| highlight(old, style))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                highlight(key, style)
+            ),
+        },
     }
 }
 

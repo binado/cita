@@ -203,8 +203,8 @@ pub enum AddOutcome {
     Overwritten {
         /// Local key the incoming reference now occupies.
         key: String,
-        /// Removed local key when a different-key duplicate was rekeyed.
-        replaced: Option<String>,
+        /// Every local key removed to make room for the incoming reference.
+        replaced: Vec<String>,
     },
 }
 
@@ -494,41 +494,32 @@ impl Manifest {
         let mut outcomes = Vec::with_capacity(pending.len());
         for item in pending {
             validate_key(item.key.as_str())?;
-            if let Some(record_id) = item.source.inspire_record_id()
+            let forced_collision = if let Some(record_id) = item.source.inspire_record_id()
                 && let Some(existing) = candidate.iter().find_map(|(key, source)| {
                     (source.inspire_record_id() == Some(record_id)).then(|| key.clone())
-                })
-            {
-                match item.key {
-                    KeyRequest::Suggested(_) => outcomes.push(AddOutcome::Existing(existing)),
-                    KeyRequest::Exact(requested) if requested == existing => {
+                }) {
+                match &item.key {
+                    KeyRequest::Suggested(_) => {
                         outcomes.push(AddOutcome::Existing(existing));
+                        continue;
+                    }
+                    KeyRequest::Exact(requested) if requested == &existing => {
+                        outcomes.push(AddOutcome::Existing(existing));
+                        continue;
                     }
                     KeyRequest::Exact(requested) => match policy {
                         ConflictPolicy::Skip => {
                             return Err(Error::CannotRename {
                                 existing,
-                                requested,
+                                requested: requested.clone(),
                             });
                         }
-                        ConflictPolicy::Overwrite => {
-                            insert_reference(
-                                &mut candidate,
-                                &mut index,
-                                requested.clone(),
-                                item.source,
-                            )?;
-                            candidate.remove(&existing);
-                            index.retain(|_, key| key != &existing);
-                            outcomes.push(AddOutcome::Overwritten {
-                                key: requested,
-                                replaced: Some(existing),
-                            });
-                        }
+                        ConflictPolicy::Overwrite => Some(existing),
                     },
                 }
-                continue;
-            }
+            } else {
+                None
+            };
 
             let key = item.key.into_string();
             let source = item.source;
@@ -544,6 +535,12 @@ impl Manifest {
             let mut colliding = Vec::new();
             if candidate.contains_key(&key) {
                 colliding.push(key.clone());
+            }
+            if let Some(existing) = forced_collision
+                && existing != key
+                && !colliding.contains(&existing)
+            {
+                colliding.push(existing);
             }
             for identity in &identities {
                 if let Some(other) = index.get(identity)
@@ -566,7 +563,7 @@ impl Manifest {
                     outcomes.push(AddOutcome::Skipped { key, conflicting });
                 }
                 (false, ConflictPolicy::Overwrite) => {
-                    let replaced = colliding.iter().find(|removed| **removed != key).cloned();
+                    let replaced = colliding.clone();
                     for removed in &colliding {
                         candidate.remove(removed);
                         index.retain(|_, existing| existing != removed);
@@ -803,21 +800,6 @@ fn identity_index(
     Ok(index)
 }
 
-/// Insert one source under `key`, recording its identities in the running index.
-fn insert_reference(
-    candidate: &mut BTreeMap<String, SourceSnapshot>,
-    index: &mut HashMap<String, String>,
-    key: String,
-    source: SourceSnapshot,
-) -> Result<(), Error> {
-    let reference = projected(&key, &source)?.reference;
-    for identity in reference_identities(&reference) {
-        index.insert(identity, key.clone());
-    }
-    candidate.insert(key, source);
-    Ok(())
-}
-
 fn record_identity(
     index: &mut HashMap<String, String>,
     identity: String,
@@ -998,7 +980,7 @@ mod tests {
                 .unwrap(),
             [AddOutcome::Overwritten {
                 key: "B".into(),
-                replaced: Some("A".into()),
+                replaced: vec!["A".into()],
             }]
         );
         assert!(manifest.references().contains_key("B"));
@@ -1081,7 +1063,7 @@ mod tests {
                 .unwrap(),
             [AddOutcome::Overwritten {
                 key: "Renamed".into(),
-                replaced: Some("Local".into()),
+                replaced: vec!["Local".into()],
             }]
         );
         assert!(manifest.references().contains_key("Renamed"));
@@ -1123,7 +1105,7 @@ mod tests {
                 .unwrap(),
             [AddOutcome::Overwritten {
                 key: "Local".into(),
-                replaced: None,
+                replaced: vec!["Local".into()],
             }]
         );
         assert_eq!(
@@ -1230,12 +1212,100 @@ mod tests {
                 AddOutcome::Added("First".into()),
                 AddOutcome::Overwritten {
                     key: "Second".into(),
-                    replaced: Some("First".into()),
+                    replaced: vec!["First".into()],
                 },
             ]
         );
         assert!(fresh.references().contains_key("Second"));
         assert!(!fresh.references().contains_key("First"));
+    }
+
+    #[test]
+    fn overwrite_reports_and_removes_every_identity_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        add(
+            &mut manifest,
+            vec![
+                imported("DoiOwner", "DOI owner", "doi={10.1/BRIDGE}"),
+                imported("ArxivOwner", "arXiv owner", "eprint={2401.00042}"),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            manifest
+                .add_batch(
+                    vec![imported(
+                        "Combined",
+                        "Combined",
+                        "doi={10.1/bridge},eprint={2401.00042}",
+                    )],
+                    ConflictPolicy::Overwrite,
+                )
+                .unwrap(),
+            [AddOutcome::Overwritten {
+                key: "Combined".into(),
+                replaced: vec!["DoiOwner".into(), "ArxivOwner".into()],
+            }]
+        );
+        assert_eq!(
+            manifest.references().keys().cloned().collect::<Vec<_>>(),
+            ["Combined"]
+        );
+    }
+
+    #[test]
+    fn exact_inspire_overwrite_cleans_all_collisions_from_the_running_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        add(
+            &mut manifest,
+            vec![
+                exact(inspire("Local", "Provider:Old", 42)),
+                imported("Renamed", "Requested key occupant", "doi={10.1/FREED}"),
+                imported("ArxivOwner", "arXiv owner", "eprint={2401.00042}"),
+            ],
+        )
+        .unwrap();
+
+        let mut refreshed = record("Provider:New", 42);
+        refreshed.bibtex = "@misc{Provider:New,title={Refreshed},eprint={2401.00042}}".into();
+        refreshed.arxiv = Some("2401.00042".into());
+        let pending = PendingReference {
+            key: KeyRequest::Exact("Renamed".into()),
+            source: SourceSnapshot::inspire(refreshed),
+        };
+
+        assert_eq!(
+            manifest
+                .add_batch(
+                    vec![
+                        pending,
+                        imported("Freed", "Freed identity", "doi={10.1/freed}"),
+                    ],
+                    ConflictPolicy::Overwrite,
+                )
+                .unwrap(),
+            [
+                AddOutcome::Overwritten {
+                    key: "Renamed".into(),
+                    replaced: vec!["Renamed".into(), "Local".into(), "ArxivOwner".into(),],
+                },
+                AddOutcome::Added("Freed".into()),
+            ]
+        );
+        assert_eq!(
+            manifest.references().keys().cloned().collect::<Vec<_>>(),
+            ["Freed", "Renamed"]
+        );
+        assert_eq!(
+            manifest.references()["Renamed"]
+                .inspire_entry()
+                .unwrap()
+                .record_id,
+            42
+        );
     }
 
     #[test]

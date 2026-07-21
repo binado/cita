@@ -412,6 +412,44 @@ fn import_overwrite_rekeys_a_duplicate_and_leaves_others_untouched() {
 }
 
 #[test]
+fn import_overwrite_reports_every_removed_collision() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    let existing = format!(
+        "{}\n{}",
+        entry("DoiOwner", "DOI owner", "doi={10.1/BRIDGE},"),
+        entry("ArxivOwner", "arXiv owner", "eprint={2401.00042},")
+    );
+    success(cita_stdin(directory.path(), &["import", "-"], &existing));
+
+    let incoming = entry(
+        "Combined",
+        "Combined",
+        "doi={10.1/bridge}, eprint={2401.00042},",
+    );
+    assert_eq!(
+        success(cita_stdin(
+            directory.path(),
+            &["import", "--overwrite", "-"],
+            &incoming,
+        )),
+        "overwrote DoiOwner, ArxivOwner -> Combined\n"
+    );
+
+    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
+    assert!(manifest.contains("[references.Combined]"), "{manifest}");
+    assert!(!manifest.contains("[references.DoiOwner]"), "{manifest}");
+    assert!(!manifest.contains("[references.ArxivOwner]"), "{manifest}");
+    let bibliography = fs::read_to_string(directory.path().join("references.bib")).unwrap();
+    assert!(bibliography.contains("@misc{Combined,"), "{bibliography}");
+    assert!(!bibliography.contains("@misc{DoiOwner,"), "{bibliography}");
+    assert!(
+        !bibliography.contains("@misc{ArxivOwner,"),
+        "{bibliography}"
+    );
+}
+
+#[test]
 fn add_overwrite_replaces_a_colliding_local_key() {
     let directory = tempfile::tempdir().unwrap();
     success(cita(directory.path(), &["init"]));
@@ -434,6 +472,56 @@ fn add_overwrite_replaces_a_colliding_local_key() {
     let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
     assert!(manifest.contains("record_id = 42"), "{manifest}");
     assert!(!manifest.contains("10.1000/imported"), "{manifest}");
+}
+
+#[test]
+fn add_exact_overwrite_reports_and_removes_all_collisions() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+
+    let old_json = json_record(42, "Provider:Old", "Old provider", "2301.00042");
+    let old_bib = entry("Provider:Old", "Old provider", "eprint={2301.00042},");
+    let (base, handle) = server(vec![("200 OK", old_json), ("200 OK", old_bib)]);
+    success(cita_with_server(
+        directory.path(),
+        &["add", "--key", "Local", "inspire:42"],
+        &base,
+    ));
+    handle.join().unwrap();
+
+    let occupied = format!(
+        "{}\n{}",
+        entry("Renamed", "Requested key occupant", "doi={10.1/FREED},"),
+        entry("ArxivOwner", "arXiv owner", "eprint={2401.00042},")
+    );
+    success(cita_stdin(directory.path(), &["import", "-"], &occupied));
+
+    let new_json = json_record(42, "Provider:New", "New provider", "2401.00042");
+    let new_bib = entry("Provider:New", "New provider", "eprint={2401.00042},");
+    let (base, handle) = server(vec![("200 OK", new_json), ("200 OK", new_bib)]);
+    assert_eq!(
+        success(cita_with_server(
+            directory.path(),
+            &["add", "--overwrite", "--key", "Renamed", "inspire:42",],
+            &base,
+        )),
+        "overwrote Renamed, Local, ArxivOwner -> Renamed\n"
+    );
+    handle.join().unwrap();
+
+    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
+    assert!(manifest.contains("[references.Renamed]"), "{manifest}");
+    assert!(manifest.contains("record_id = 42"), "{manifest}");
+    assert!(!manifest.contains("[references.Local]"), "{manifest}");
+    assert!(!manifest.contains("[references.ArxivOwner]"), "{manifest}");
+    assert!(!manifest.contains("10.1/FREED"), "{manifest}");
+    let bibliography = fs::read_to_string(directory.path().join("references.bib")).unwrap();
+    assert!(bibliography.contains("@misc{Renamed,"), "{bibliography}");
+    assert!(!bibliography.contains("@misc{Local,"), "{bibliography}");
+    assert!(
+        !bibliography.contains("@misc{ArxivOwner,"),
+        "{bibliography}"
+    );
 }
 
 #[test]
