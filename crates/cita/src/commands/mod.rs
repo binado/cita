@@ -97,9 +97,40 @@ pub(crate) fn add_message(outcome: &AddOutcome) -> String {
     match outcome {
         AddOutcome::Added(key) => format!("Added {key}"),
         AddOutcome::Existing(key) => format!("Already present: {key}"),
+        AddOutcome::Skipped { key, conflicting } if conflicting == key => {
+            format!("Skipped {key}: local key already holds different content")
+        }
+        AddOutcome::Skipped { key, conflicting } => {
+            format!("Skipped {key}: already present as {conflicting}")
+        }
+        AddOutcome::Overwritten {
+            key,
+            replaced: Some(old),
+        } => format!("Overwrote {old} -> {key}"),
+        AddOutcome::Overwritten {
+            key,
+            replaced: None,
+        } => format!("Overwrote {key}"),
     }
 }
 
-pub(crate) fn print_add(outcome: AddOutcome) {
-    println!("{}", add_message(&outcome));
+pub(crate) fn print_add_outcomes(outcomes: &[AddOutcome]) {
+    for outcome in outcomes {
+        println!("{}", add_message(outcome));
+    }
+    let mut added = 0usize;
+    let mut skipped = 0usize;
+    let mut overwritten = 0usize;
+    for outcome in outcomes {
+        match outcome {
+            AddOutcome::Added(_) => added += 1,
+            AddOutcome::Skipped { .. } => skipped += 1,
+            AddOutcome::Overwritten { .. } => overwritten += 1,
+            AddOutcome::Existing(_) => {}
+        }
+    }
+    // Keep a single clean add/import quiet; summarize only non-trivial batches.
+    if outcomes.len() > 1 || skipped > 0 || overwritten > 0 {
+        println!("{added} added, {skipped} skipped, {overwritten} overwritten");
+    }
 }

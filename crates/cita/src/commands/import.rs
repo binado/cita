@@ -1,14 +1,14 @@
-use super::{find_manifest, print_add};
+use super::{find_manifest, print_add_outcomes};
 use anyhow::{Context, Result};
 use cita_bibliography::parse as parse_bibtex;
-use cita_manifest::{KeyRequest, Manifest, PendingReference, SourceSnapshot};
+use cita_manifest::{ConflictPolicy, KeyRequest, Manifest, PendingReference, SourceSnapshot};
 use std::{
     fs,
     io::{self, Read},
     path::Path,
 };
 
-pub(crate) fn import(cwd: &Path, input: &str) -> Result<()> {
+pub(crate) fn import(cwd: &Path, input: &str, overwrite: bool) -> Result<()> {
     let mut source = String::new();
     if input == "-" {
         io::stdin()
@@ -24,9 +24,13 @@ pub(crate) fn import(cwd: &Path, input: &str) -> Result<()> {
             source: SourceSnapshot::Import(snapshot),
         })
         .collect();
+    let policy = if overwrite {
+        ConflictPolicy::Overwrite
+    } else {
+        ConflictPolicy::Skip
+    };
     let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
-    for outcome in manifest.add_batch(pending)? {
-        print_add(outcome);
-    }
+    let outcomes = manifest.add_batch(pending, policy)?;
+    print_add_outcomes(&outcomes);
     Ok(())
 }

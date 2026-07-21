@@ -22,6 +22,9 @@ enum Command {
     },
     /// Import standalone BibTeX entries from a path or stdin (`-`)
     Import {
+        /// Replace colliding existing entries instead of skipping them
+        #[arg(long)]
+        overwrite: bool,
         /// BibTeX file to import, or `-` to read from standard input
         path: String,
     },
@@ -30,6 +33,9 @@ enum Command {
         /// Keep this local citation key (one locator only)
         #[arg(long)]
         key: Option<String>,
+        /// Replace colliding existing entries instead of skipping them
+        #[arg(long)]
+        overwrite: bool,
         /// INSPIRE locator: arXiv ID, `arxiv:`, `doi:`, or `inspire:`
         #[arg(required = true)]
         locators: Vec<String>,
@@ -117,10 +123,12 @@ async fn run() -> Result<()> {
             println!();
         }
         Some(Command::Init { path }) => commands::init(&cwd, path.as_deref())?,
-        Some(Command::Import { path }) => commands::import(&cwd, &path)?,
-        Some(Command::Add { key, locators }) => {
-            commands::add(&cwd, key.as_deref(), &locators).await?
-        }
+        Some(Command::Import { overwrite, path }) => commands::import(&cwd, &path, overwrite)?,
+        Some(Command::Add {
+            key,
+            overwrite,
+            locators,
+        }) => commands::add(&cwd, key.as_deref(), &locators, overwrite).await?,
         Some(Command::Sync) => commands::sync(&cwd).await?,
         Some(Command::Remove { selectors }) => commands::remove(&cwd, &selectors)?,
         Some(Command::List {
