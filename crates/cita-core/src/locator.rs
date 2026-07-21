@@ -83,10 +83,8 @@ fn parse_url(value: &str) -> Option<Locator> {
             let path = decoded.strip_suffix('/').unwrap_or(&decoded);
             let (id, pdf) = if let Some(id) = path.strip_prefix("/abs/") {
                 (id, false)
-            } else if let Some(id) = path.strip_prefix("/pdf/") {
-                (id, true)
             } else {
-                return None;
+                (path.strip_prefix("/pdf/")?, true)
             };
             let id = if pdf {
                 id.strip_suffix(".pdf").unwrap_or(id)
