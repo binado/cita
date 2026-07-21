@@ -22,6 +22,7 @@ anstyle = "1"
 anyhow = "1.0.94"
 biblatex = "0.12"
 clap = { version = "4.5.23", features = ["derive"] }
+clap_complete = "4"
 cita-bibliography = { path = "crates/cita-bibliography", version = "0.1.0" }
 cita-core = { path = "crates/cita-core", version = "0.1.0" }
 cita-documents = { path = "crates/cita-documents", version = "0.1.0" }

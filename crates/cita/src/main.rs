@@ -78,6 +78,11 @@ enum Command {
     },
     /// Commit the managed files; refuses to run if either managed file is already staged
     Commit,
+    /// Generate a shell completion script on stdout
+    Completions {
+        /// Shell to generate completions for
+        shell: clap_complete::Shell,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
@@ -133,6 +138,11 @@ async fn run() -> Result<()> {
             selector,
         }) => commands::fetch(&cwd, &selector, force, cache_only, url, open, save).await?,
         Some(Command::Commit) => git::commit(&commands::find_manifest(&cwd)?)?,
+        Some(Command::Completions { shell }) => {
+            let mut command = Cli::command();
+            let name = command.get_name().to_string();
+            clap_complete::generate(shell, &mut command, name, &mut std::io::stdout());
+        }
     }
     Ok(())
 }
@@ -160,5 +170,10 @@ mod tests {
         assert!(Cli::try_parse_from(["cita", "fetch", "--url", "--save", "1207.7214"]).is_ok());
         assert!(Cli::try_parse_from(["cita", "open", "1207.7214"]).is_err());
         assert!(Cli::try_parse_from(["cita", "fetch", "--dry-run", "1207.7214"]).is_err());
+    }
+    #[test]
+    fn completions_accepts_known_shells_only() {
+        assert!(Cli::try_parse_from(["cita", "completions", "zsh"]).is_ok());
+        assert!(Cli::try_parse_from(["cita", "completions", "nonsense"]).is_err());
     }
 }

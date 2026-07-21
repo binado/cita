@@ -20,6 +20,7 @@ path = "src/main.rs"
 anstyle.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+clap_complete.workspace = true
 cita-core.workspace = true
 cita-documents.workspace = true
 cita-inspire-client.workspace = true

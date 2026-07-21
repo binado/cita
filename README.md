@@ -58,6 +58,8 @@ provider ID, normalized DOI, or normalized arXiv ID.
 - `cita commit` is an optional Git helper. It validates consistency and commits
   only `cita.toml` and `references.bib`, leaving unrelated staged changes
   intact. It refuses to run if either managed file is already staged.
+- `cita completions <bash|elvish|fish|powershell|zsh>` prints a shell completion
+  script to stdout, e.g. `cita completions zsh > ~/.zfunc/_cita`.
 
 Successful `fetch` output is suitable for command substitution; status messages
 are written to stderr. For example, choose a specific PDF viewer on macOS with
@@ -111,16 +113,19 @@ Provider and document tests are hermetic and use local TCP listeners.
 
 ## Publishing
 
-All six crates share version 0.1.0. The five library APIs are intentionally
-unstable throughout 0.x. After the release checks pass, publish manually in
-dependency order:
+All six crates share one version and their APIs are intentionally unstable
+throughout 0.x. Releases are automated with
+[release-plz](https://release-plz.dev) (`release-plz.toml`,
+`.github/workflows/release-plz.yml`):
 
-1. `cita-core`
-2. `cita-bibliography` and `cita-documents`
-3. `cita-inspire-client`
-4. `cita-manifest`
-5. `cita`
+1. Merge Conventional-Commit PRs to `main`.
+2. release-plz opens (or updates) a "release PR" that bumps the shared version
+   and updates every crate's `CHANGELOG.md`.
+3. Merging that release PR publishes all six crates in dependency order and tags
+   them.
 
-Immediately before publishing, recheck that all six crate names are available.
-After publishing, smoke-test with
-`cargo install cita --version 0.1.0 --locked`.
+After the first release, smoke-test with `cargo install cita --locked`.
+
+As an emergency fallback, the crates can still be published by hand in
+dependency order: `cita-core`, then `cita-bibliography` and `cita-documents`,
+then `cita-inspire-client`, then `cita-manifest`, and finally `cita`.
