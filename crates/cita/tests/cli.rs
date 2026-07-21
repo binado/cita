@@ -346,6 +346,32 @@ fn import_is_source_preserving_and_skips_duplicates_by_default() {
 }
 
 #[test]
+fn batch_summary_accounts_for_already_present_duplicates() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    success(cita_stdin(
+        directory.path(),
+        &["import", "-"],
+        &entry("A", "Alpha", "doi={10.1/A},"),
+    ));
+    // A batch re-listing an identical existing entry alongside a fresh one adds
+    // the new entry and reports the identical one as an idempotent "already
+    // present" no-op, which the summary must account for rather than drop.
+    let mixed = format!(
+        "{}\n{}",
+        entry("A", "Alpha", "doi={10.1/A},"),
+        entry("B", "Beta", "doi={10.1/B},")
+    );
+    let output = success(cita_stdin(directory.path(), &["import", "-"], &mixed));
+    assert!(output.contains("Added B"), "{output}");
+    assert!(output.contains("Already present: A"), "{output}");
+    assert!(
+        output.contains("1 added, 0 skipped, 0 overwritten, 1 already present"),
+        "{output}"
+    );
+}
+
+#[test]
 fn import_overwrite_rekeys_a_duplicate_and_leaves_others_untouched() {
     let directory = tempfile::tempdir().unwrap();
     success(cita(directory.path(), &["init"]));

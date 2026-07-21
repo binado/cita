@@ -121,16 +121,23 @@ pub(crate) fn print_add_outcomes(outcomes: &[AddOutcome]) {
     let mut added = 0usize;
     let mut skipped = 0usize;
     let mut overwritten = 0usize;
+    let mut existing = 0usize;
     for outcome in outcomes {
         match outcome {
             AddOutcome::Added(_) => added += 1,
             AddOutcome::Skipped { .. } => skipped += 1,
             AddOutcome::Overwritten { .. } => overwritten += 1,
-            AddOutcome::Existing(_) => {}
+            AddOutcome::Existing(_) => existing += 1,
         }
     }
     // Keep a single clean add/import quiet; summarize only non-trivial batches.
     if outcomes.len() > 1 || skipped > 0 || overwritten > 0 {
-        println!("{added} added, {skipped} skipped, {overwritten} overwritten");
+        let mut summary = format!("{added} added, {skipped} skipped, {overwritten} overwritten");
+        // Idempotent "already present" no-ops are otherwise invisible in the
+        // counts; surface them so the totals account for every input.
+        if existing > 0 {
+            summary.push_str(&format!(", {existing} already present"));
+        }
+        println!("{summary}");
     }
 }
