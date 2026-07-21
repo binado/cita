@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "cita"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -166,7 +166,7 @@ dependencies = [
 
 [[package]]
 name = "cita-bibliography"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "biblatex",
  "cita-core",
@@ -176,14 +176,14 @@ dependencies = [
 
 [[package]]
 name = "cita-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "cita-documents"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cita-core",
  "reqwest",
@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "cita-inspire-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cita-bibliography",
  "cita-core",
@@ -210,7 +210,7 @@ dependencies = [
 
 [[package]]
 name = "cita-manifest"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cita-bibliography",
  "cita-core",

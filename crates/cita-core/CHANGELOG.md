@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/binado/cita/compare/cita-core-v0.1.0...cita-core-v0.2.0) - 2026-07-21
+
+### Other
+
+- release v0.1.0 ([#24](https://github.com/binado/cita/pull/24))
+
 ## [0.1.0](https://github.com/binado/cita/releases/tag/cita-core-v0.1.0) - 2026-07-21
 
 ### Added
