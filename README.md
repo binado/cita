@@ -18,16 +18,18 @@ cargo install cita
 
 ```bash
 cita init
-cita add 1207.7214 doi:10.1016/j.physletb.2012.08.020
+cita add https://arxiv.org/abs/1207.7214 doi:10.1016/j.physletb.2012.08.020
 cita import local-references.bib
 cita list
 cita sync
 cita fetch 1207.7214
 ```
 
-Supported locators are bare arXiv IDs and explicit `arxiv:`, `doi:`, or
-`inspire:` locators. Selectors first match an exact local citation key, then a
-provider ID, normalized DOI, or normalized arXiv ID.
+Supported locators are bare arXiv IDs; explicit `arxiv:`, `doi:`, or `inspire:`
+locators; and canonical `https://arxiv.org`, `https://inspirehep.net`, or
+`https://doi.org` URLs. Selectors first match an exact local citation key, then
+a provider ID, normalized DOI, or normalized arXiv ID. The same canonical URLs
+work as selectors.
 
 ## Commands
 

@@ -36,7 +36,7 @@ enum Command {
         /// Replace colliding existing entries instead of skipping them
         #[arg(long)]
         overwrite: bool,
-        /// INSPIRE locator: arXiv ID, `arxiv:`, `doi:`, or `inspire:`
+        /// INSPIRE locator: arXiv ID, `arxiv:`, `doi:`, `inspire:`, or canonical URL
         #[arg(required = true)]
         locators: Vec<String>,
     },
@@ -44,7 +44,7 @@ enum Command {
     Sync,
     /// Remove references by local key or provider/DOI/arXiv identity
     Remove {
-        /// Local key, provider ID, DOI, or arXiv ID to remove
+        /// Local key, provider ID, DOI, arXiv ID, or canonical URL to remove
         #[arg(required = true)]
         selectors: Vec<String>,
     },
@@ -79,7 +79,7 @@ enum Command {
         /// Save an unmatched INSPIRE locator to the manifest before fetching
         #[arg(long)]
         save: bool,
-        /// Local key, provider ID, DOI, arXiv ID, or unmatched INSPIRE locator
+        /// Local key, provider ID, DOI, arXiv ID, canonical URL, or unmatched INSPIRE locator
         selector: String,
     },
     /// Commit the managed files; refuses to run if either managed file is already staged
