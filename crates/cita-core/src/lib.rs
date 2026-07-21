@@ -1,4 +1,4 @@
-//! Provider-neutral bibliography vocabulary shared by Cita crates.
+//! Provider-neutral bibliography vocabulary shared by cita crates.
 #![warn(missing_docs)]
 
 mod locator;

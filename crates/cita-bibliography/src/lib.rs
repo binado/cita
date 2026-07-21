@@ -91,7 +91,7 @@ pub fn parse(source: &str) -> Result<BTreeMap<String, BibtexSnapshot>, Error> {
     Ok(entries)
 }
 
-/// Project one standalone entry into Cita's source-neutral reference fields.
+/// Project one standalone entry into cita's source-neutral reference fields.
 pub fn project_bibtex(source: &str) -> Result<Reference, Error> {
     let raw = scan_raw_entries(source)?;
     if raw.len() != 1 {
@@ -244,7 +244,7 @@ fn chunks(entry: &BibEntry, field: &str) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
-/// Validate a citation key against Cita's safe key character set.
+/// Validate a citation key against cita's safe key character set.
 pub fn validate_key(key: &str) -> Result<(), Error> {
     if !key.is_empty()
         && key.bytes().all(|byte| {

@@ -1,4 +1,4 @@
-//! arXiv PDF download and local cache management for Cita.
+//! arXiv PDF download and local cache management for cita.
 #![warn(missing_docs)]
 
 use cita_core::Locator;

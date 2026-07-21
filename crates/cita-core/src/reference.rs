@@ -28,7 +28,7 @@ pub struct Identifiers {
     pub providers: BTreeMap<String, Vec<String>>,
 }
 
-/// A source snapshot that can produce Cita's deliberately trimmed semantic view.
+/// A source snapshot that can produce cita's deliberately trimmed semantic view.
 pub trait ReferenceSource {
     /// Project the authoritative source into a reference.
     fn project(&self) -> Result<Reference, ProjectionError>;

@@ -26,7 +26,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const CACHE_IGNORE_COMMENT: &str = "# Cita document cache";
+const CACHE_IGNORE_COMMENT: &str = "# cita document cache";
 const CACHE_IGNORE_RULE: &str = "/.cita/files/";
 
 pub(crate) fn find_manifest(start: &Path) -> Result<PathBuf> {

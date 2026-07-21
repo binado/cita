@@ -1,7 +1,7 @@
 # cita-documents
 
 Validated arXiv PDF URLs, downloads, and atomic local document caching for
-[Cita](https://github.com/binado/cita).
+[cita](https://github.com/binado/cita).
 
-This crate is published for reuse by the Cita workspace. Its public API is
+This crate is published for reuse by the cita workspace. Its public API is
 unstable while the version is 0.x and may change between minor releases.

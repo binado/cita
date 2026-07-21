@@ -2,7 +2,7 @@
 
 ## What this is
 
-Cita is a Git-friendly bibliography CLI. Authoritative BibTeX (plus curated
+cita is a Git-friendly bibliography CLI. Authoritative BibTeX (plus curated
 INSPIRE identifiers) lives in schema-1 `cita.toml`; `references.bib` is a
 deterministic, tracked generated artifact. Rust edition 2024, MSRV 1.88.
 

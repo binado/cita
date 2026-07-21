@@ -78,7 +78,7 @@ pub fn commit(manifest_path: &Path) -> Result<()> {
     if old_manifest_bytes.as_deref() == Some(manifest_bytes.as_slice())
         && old_bib_bytes.as_deref() == Some(bib_bytes.as_slice())
     {
-        println!("Cita references have no Git changes");
+        println!("cita references have no Git changes");
         return Ok(());
     }
     let (subject, body) = match old_manifest_bytes.as_deref() {
@@ -129,7 +129,7 @@ pub fn commit(manifest_path: &Path) -> Result<()> {
             error,
         ));
     }
-    println!("Committed Cita references: {subject}");
+    println!("Committed cita references: {subject}");
     Ok(())
 }
 
@@ -225,7 +225,7 @@ fn rollback_error(
     ) {
         Ok(()) => original,
         Err(cleanup) => anyhow::anyhow!(
-            "{original:#}; additionally failed to restore Cita's index entries: {cleanup:#}"
+            "{original:#}; additionally failed to restore cita's index entries: {cleanup:#}"
         ),
     }
 }
