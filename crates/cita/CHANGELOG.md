@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/binado/cita/compare/cita-v0.1.0...cita-v0.2.0) - 2026-07-21
+
+### Added
+
+- collision-tolerant import/add with skip-by-default and --overwrite ([#26](https://github.com/binado/cita/pull/26))
+
+### Other
+
+- release v0.1.0 ([#24](https://github.com/binado/cita/pull/24))
+
 ## [0.1.0](https://github.com/binado/cita/releases/tag/cita-v0.1.0) - 2026-07-21
 
 ### Added
