@@ -321,7 +321,7 @@ fn import_is_source_preserving_and_skips_duplicates_by_default() {
     let input = entry("B", "Beta", "doi={10.1/B},");
     assert_eq!(
         success(cita_stdin(directory.path(), &["import", "-"], &input)),
-        "Added B\n"
+        "added B\n"
     );
     // An import mixing a fresh entry with a different-key duplicate of an
     // existing DOI adds the fresh one and skips the duplicate, exiting 0.
@@ -331,13 +331,9 @@ fn import_is_source_preserving_and_skips_duplicates_by_default() {
         entry("D", "Delta", "doi={10.1/b},")
     );
     let output = success(cita_stdin(directory.path(), &["import", "-"], &mixed));
-    assert!(output.contains("Added C"), "{output}");
+    assert!(output.contains("added C"), "{output}");
     assert!(
-        output.contains("Skipped D: already present as B"),
-        "{output}"
-    );
-    assert!(
-        output.contains("1 added, 1 skipped, 0 overwritten"),
+        output.contains("skipped D: already present as B"),
         "{output}"
     );
     let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
@@ -346,7 +342,7 @@ fn import_is_source_preserving_and_skips_duplicates_by_default() {
 }
 
 #[test]
-fn batch_summary_accounts_for_already_present_duplicates() {
+fn import_reports_identical_duplicates_as_skipped() {
     let directory = tempfile::tempdir().unwrap();
     success(cita(directory.path(), &["init"]));
     success(cita_stdin(
@@ -356,19 +352,16 @@ fn batch_summary_accounts_for_already_present_duplicates() {
     ));
     // A batch re-listing an identical existing entry alongside a fresh one adds
     // the new entry and reports the identical one as an idempotent "already
-    // present" no-op, which the summary must account for rather than drop.
+    // present" no-op, printed per-line as `skipped A` with no aggregate summary.
     let mixed = format!(
         "{}\n{}",
         entry("A", "Alpha", "doi={10.1/A},"),
         entry("B", "Beta", "doi={10.1/B},")
     );
     let output = success(cita_stdin(directory.path(), &["import", "-"], &mixed));
-    assert!(output.contains("Added B"), "{output}");
-    assert!(output.contains("Already present: A"), "{output}");
-    assert!(
-        output.contains("1 added, 0 skipped, 0 overwritten, 1 already present"),
-        "{output}"
-    );
+    assert!(output.contains("added B"), "{output}");
+    assert!(output.contains("skipped A"), "{output}");
+    assert!(!output.contains(" added,"), "{output}");
 }
 
 #[test]
@@ -389,14 +382,10 @@ fn import_overwrite_rekeys_a_duplicate_and_leaves_others_untouched() {
     );
     let output = success(cita_stdin(directory.path(), &["import", "-"], &second));
     assert!(
-        output.contains("Skipped bar: already present as foo"),
+        output.contains("skipped bar: already present as foo"),
         "{output}"
     );
-    assert!(output.contains("Added baz"), "{output}");
-    assert!(
-        output.contains("1 added, 1 skipped, 0 overwritten"),
-        "{output}"
-    );
+    assert!(output.contains("added baz"), "{output}");
     let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
     assert!(manifest.contains("[references.foo]"), "{manifest}");
     assert!(manifest.contains("[references.baz]"), "{manifest}");
@@ -408,12 +397,8 @@ fn import_overwrite_rekeys_a_duplicate_and_leaves_others_untouched() {
         &["import", "--overwrite", "-"],
         &second,
     ));
-    assert!(output.contains("Overwrote foo -> bar"), "{output}");
-    assert!(output.contains("Already present: baz"), "{output}");
-    assert!(
-        output.contains("0 added, 0 skipped, 1 overwritten"),
-        "{output}"
-    );
+    assert!(output.contains("overwrote foo -> bar"), "{output}");
+    assert!(output.contains("skipped baz"), "{output}");
     let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
     assert!(manifest.contains("[references.bar]"), "{manifest}");
     assert!(manifest.contains("[references.baz]"), "{manifest}");
@@ -445,7 +430,7 @@ fn add_overwrite_replaces_a_colliding_local_key() {
         &base,
     ));
     handle.join().unwrap();
-    assert!(output.contains("Overwrote Provider:42"), "{output}");
+    assert!(output.contains("overwrote Provider:42"), "{output}");
     let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
     assert!(manifest.contains("record_id = 42"), "{manifest}");
     assert!(!manifest.contains("10.1000/imported"), "{manifest}");
@@ -464,7 +449,7 @@ fn add_uses_json_and_bibtex_and_preserves_an_explicit_local_key() {
             &["add", "--key", "Local:42", "2401.00042"],
             &base
         )),
-        "Added Local:42\n"
+        "added Local:42\n"
     );
     let requests = handle.join().unwrap();
     assert!(requests[0].contains("format=json"));
@@ -501,7 +486,7 @@ fn add_skips_a_suggested_key_that_collides_with_different_content() {
     ));
     handle.join().unwrap();
     assert!(
-        output.contains("Skipped Provider:42: local key already holds different content"),
+        output.contains("skipped Provider:42: local key already holds different content"),
         "{output}"
     );
     let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
@@ -639,7 +624,7 @@ fn stale_provider_texkeys_remain_selectable_for_save_and_remove() {
     assert_eq!(
         stderr,
         concat!(
-            "Already present: Provider:Old\n",
+            "skipped Provider:Old\n",
             "Already fetched Provider:Old: https://arxiv.org/pdf/2401.00042\n"
         )
     );
@@ -1057,7 +1042,7 @@ fn fetch_url_can_save_metadata_without_creating_the_pdf_cache() {
     ));
     handle.join().unwrap();
     assert_eq!(stdout, "https://arxiv.org/pdf/2401.00042\n");
-    assert_eq!(stderr, "Added Provider:42\n");
+    assert_eq!(stderr, "added Provider:42\n");
     assert!(!directory.path().join(".cita").exists());
     assert!(
         fs::read_to_string(directory.path().join("cita.toml"))
@@ -1097,7 +1082,7 @@ fn fetch_save_uses_the_actual_existing_local_key() {
     assert_eq!(
         stderr,
         concat!(
-            "Already present: Local\n",
+            "skipped Local\n",
             "Already fetched Local: https://arxiv.org/pdf/2401.00042\n"
         )
     );
@@ -1124,7 +1109,7 @@ fn fetch_save_skips_a_local_key_that_holds_different_content() {
         &base,
     ));
     handle.join().unwrap();
-    assert!(stderr.contains("Skipped Provider:42"), "{stderr}");
+    assert!(stderr.contains("skipped Provider:42"), "{stderr}");
     assert!(stdout.contains("2401.00042"), "{stdout}");
     let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
     assert!(manifest.contains("10.1000/imported"), "{manifest}");

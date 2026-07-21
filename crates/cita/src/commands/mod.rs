@@ -22,7 +22,7 @@ use cita_manifest::{AddOutcome, MANIFEST_FILE};
 use std::{
     env, fs,
     fs::OpenOptions,
-    io::{self, Write},
+    io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
 };
 
@@ -93,51 +93,58 @@ pub(crate) fn inspire_client() -> Result<Client> {
     Ok(builder.build()?)
 }
 
-pub(crate) fn add_message(outcome: &AddOutcome) -> String {
+/// Bold-cyan identifier style, or None when the target stream should stay plain.
+/// Matches the header styling in `list::print_rows` and honors NO_COLOR.
+pub(crate) fn highlight_style(stream_is_terminal: bool) -> Option<anstyle::Style> {
+    (stream_is_terminal && env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())).then(|| {
+        anstyle::Style::new()
+            .bold()
+            .fg_color(Some(anstyle::AnsiColor::Cyan.into()))
+    })
+}
+
+fn highlight(key: &str, style: Option<anstyle::Style>) -> String {
+    match style {
+        Some(s) => format!("{s}{key}{s:#}"),
+        None => key.to_string(),
+    }
+}
+
+pub(crate) fn add_message(outcome: &AddOutcome, style: Option<anstyle::Style>) -> String {
     match outcome {
-        AddOutcome::Added(key) => format!("Added {key}"),
-        AddOutcome::Existing(key) => format!("Already present: {key}"),
+        AddOutcome::Added(key) => format!("added {}", highlight(key, style)),
+        AddOutcome::Existing(key) => format!("skipped {}", highlight(key, style)),
         AddOutcome::Skipped { key, conflicting } if conflicting == key => {
-            format!("Skipped {key}: local key already holds different content")
+            format!(
+                "skipped {}: local key already holds different content",
+                highlight(key, style)
+            )
         }
         AddOutcome::Skipped { key, conflicting } => {
-            format!("Skipped {key}: already present as {conflicting}")
+            format!(
+                "skipped {}: already present as {}",
+                highlight(key, style),
+                highlight(conflicting, style)
+            )
         }
         AddOutcome::Overwritten {
             key,
             replaced: Some(old),
-        } => format!("Overwrote {old} -> {key}"),
+        } => format!(
+            "overwrote {} -> {}",
+            highlight(old, style),
+            highlight(key, style)
+        ),
         AddOutcome::Overwritten {
             key,
             replaced: None,
-        } => format!("Overwrote {key}"),
+        } => format!("overwrote {}", highlight(key, style)),
     }
 }
 
 pub(crate) fn print_add_outcomes(outcomes: &[AddOutcome]) {
+    let style = highlight_style(io::stdout().is_terminal());
     for outcome in outcomes {
-        println!("{}", add_message(outcome));
-    }
-    let mut added = 0usize;
-    let mut skipped = 0usize;
-    let mut overwritten = 0usize;
-    let mut existing = 0usize;
-    for outcome in outcomes {
-        match outcome {
-            AddOutcome::Added(_) => added += 1,
-            AddOutcome::Skipped { .. } => skipped += 1,
-            AddOutcome::Overwritten { .. } => overwritten += 1,
-            AddOutcome::Existing(_) => existing += 1,
-        }
-    }
-    // Keep a single clean add/import quiet; summarize only non-trivial batches.
-    if outcomes.len() > 1 || skipped > 0 || overwritten > 0 {
-        let mut summary = format!("{added} added, {skipped} skipped, {overwritten} overwritten");
-        // Idempotent "already present" no-ops are otherwise invisible in the
-        // counts; surface them so the totals account for every input.
-        if existing > 0 {
-            summary.push_str(&format!(", {existing} already present"));
-        }
-        println!("{summary}");
+        println!("{}", add_message(outcome, style));
     }
 }

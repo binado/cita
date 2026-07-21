@@ -1,9 +1,8 @@
-use super::find_manifest;
+use super::{find_manifest, highlight_style};
 use crate::{Order, SortBy};
 use anyhow::Result;
 use cita_manifest::Manifest;
 use std::{
-    env,
     io::{self, IsTerminal},
     path::Path,
 };
@@ -96,13 +95,9 @@ fn print_rows(rows: Vec<Row>, wrap_title: bool) {
         aw = author_width,
         yw = year_width
     );
-    if io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none_or(|value| value.is_empty()) {
-        let style = anstyle::Style::new()
-            .bold()
-            .fg_color(Some(anstyle::AnsiColor::Cyan.into()));
-        println!("{style}{header}{style:#}");
-    } else {
-        println!("{header}");
+    match highlight_style(io::stdout().is_terminal()) {
+        Some(style) => println!("{style}{header}{style:#}"),
+        None => println!("{header}"),
     }
     for row in rows {
         let titles = match title_width {

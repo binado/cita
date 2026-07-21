@@ -1,4 +1,4 @@
-use super::{add_message, ensure_cache_layout, find_manifest, inspire_client};
+use super::{add_message, ensure_cache_layout, find_manifest, highlight_style, inspire_client};
 use anyhow::{Context, Result};
 use cita_core::{Locator, MetadataProvider, Reference, ReferenceSource};
 use cita_documents::{
@@ -9,6 +9,7 @@ use cita_manifest::{
 };
 use std::{
     fmt,
+    io::{self, IsTerminal},
     path::{Path, PathBuf},
 };
 
@@ -92,7 +93,10 @@ pub(crate) async fn fetch(
     };
     let selected = select(cwd, selector, save).await?;
     if let Some(outcome) = &selected.save_outcome {
-        eprintln!("{}", add_message(outcome));
+        eprintln!(
+            "{}",
+            add_message(outcome, highlight_style(io::stderr().is_terminal()))
+        );
     }
     let arxiv = selected
         .reference
