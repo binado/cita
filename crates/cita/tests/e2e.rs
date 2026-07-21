@@ -76,7 +76,7 @@ fn git_success(directory: &Path, args: &[&str]) -> String {
 fn init_git(directory: &Path) {
     git_success(directory, &["init", "-q"]);
     git_success(directory, &["config", "user.email", "cita@example.test"]);
-    git_success(directory, &["config", "user.name", "Cita Test"]);
+    git_success(directory, &["config", "user.name", "cita Test"]);
 }
 
 /// Slice `cita.toml` text down to one `[references.<key>]` entry, including

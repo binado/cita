@@ -1,4 +1,5 @@
 //! Schema-1 source snapshot storage and generated-bibliography coordination.
+#![warn(missing_docs)]
 
 use cita_bibliography::{
     BibtexSnapshot, parse as parse_bibtex, project_bibtex, rename_entry, validate_key,
@@ -17,43 +18,57 @@ use std::{
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
+/// Manifest schema version supported by this crate.
 pub const SCHEMA: u32 = 1;
+/// Name of the authoritative project manifest.
 pub const MANIFEST_FILE: &str = "cita.toml";
+/// Name of the deterministic generated BibTeX artifact.
 pub const BIBLIOGRAPHY_FILE: &str = "references.bib";
 
 /// A stored reference tagged by the source that owns its refresh lifecycle.
 /// Bibliographic content is always projected from the authoritative BibTeX;
-/// INSPIRE records additionally carry the canonical identity BibTeX cannot hold.
+/// INSPIRE records additionally carry canonical values selected from and
+/// cross-checked against the authoritative BibTeX.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "lowercase", deny_unknown_fields)]
 pub enum SourceSnapshot {
+    /// A refreshable INSPIRE-managed snapshot.
     Inspire(InspireEntry),
+    /// A source-preserving generic BibTeX import.
     Import(BibtexSnapshot),
 }
 
 /// An INSPIRE-managed reference: authoritative BibTeX plus refresh bookkeeping
-/// and the curated HEP identifiers that BibTeX rendering cannot express.
+/// and curated canonical HEP identifiers selected from and cross-checked
+/// against that BibTeX.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InspireEntry {
+    /// Stable INSPIRE record identifier used for refresh.
     pub record_id: u64,
+    /// Provider update timestamp.
     pub updated: String,
+    /// Complete authoritative standalone BibTeX entry.
     pub bibtex: String,
+    /// Canonical identifiers selected from and cross-checked against the BibTeX.
     #[serde(default, skip_serializing_if = "HepIdentifiers::is_empty")]
     pub identifiers: HepIdentifiers,
 }
 
-/// Canonical, normalized identifiers stored alongside INSPIRE BibTeX.
+/// Curated canonical, normalized identifiers cross-checked against INSPIRE BibTeX.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HepIdentifiers {
+    /// Canonical normalized, versionless arXiv identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arxiv: Option<String>,
+    /// Canonical normalized DOI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub doi: Option<String>,
 }
 
 impl HepIdentifiers {
+    /// Normalize and construct a curated identifier set.
     pub fn new(arxiv: Option<String>, doi: Option<String>) -> Self {
         Self {
             arxiv: arxiv.as_deref().map(normalize_arxiv),
@@ -61,6 +76,7 @@ impl HepIdentifiers {
         }
     }
 
+    /// Return whether neither curated identifier is present.
     pub fn is_empty(&self) -> bool {
         self.arxiv.is_none() && self.doi.is_none()
     }
@@ -78,6 +94,7 @@ impl InspireEntry {
 }
 
 impl SourceSnapshot {
+    /// Convert a durable provider record into a manifest snapshot.
     pub fn inspire(record: InspireRecord) -> Self {
         Self::Inspire(InspireEntry {
             record_id: record.record_id,
@@ -87,6 +104,7 @@ impl SourceSnapshot {
         })
     }
 
+    /// Return the authoritative raw BibTeX entry.
     pub fn raw_bibtex(&self) -> &str {
         match self {
             Self::Inspire(entry) => &entry.bibtex,
@@ -94,6 +112,7 @@ impl SourceSnapshot {
         }
     }
 
+    /// Return INSPIRE bookkeeping for a managed snapshot.
     pub fn inspire_entry(&self) -> Option<&InspireEntry> {
         match self {
             Self::Inspire(entry) => Some(entry),
@@ -116,14 +135,20 @@ impl ReferenceSource for SourceSnapshot {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// A local citation key paired with its projected semantic reference.
 pub struct ProjectedReference {
+    /// Local citation key.
     pub key: String,
+    /// Source-neutral projected reference.
     pub reference: Reference,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Controls whether an add must use a key or may resolve an identity collision.
 pub enum KeyRequest {
+    /// Require this exact local citation key.
     Exact(String),
+    /// Use this key unless its INSPIRE record ID already exists under another key.
     Suggested(String),
 }
 
@@ -142,18 +167,25 @@ impl KeyRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// A validated source snapshot waiting to be added under a requested key.
 pub struct PendingReference {
+    /// Exact or suggested local key request.
     pub key: KeyRequest,
+    /// Authoritative source snapshot.
     pub source: SourceSnapshot,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Result of adding one pending reference.
 pub enum AddOutcome {
+    /// A new reference was stored under this actual local key.
     Added(String),
+    /// The same identity was already stored under this actual local key.
     Existing(String),
 }
 
 #[derive(Debug)]
+/// Loaded schema-1 manifest and its coordinated bibliography artifact.
 pub struct Manifest {
     path: PathBuf,
     bibliography_path: PathBuf,
@@ -169,50 +201,100 @@ struct ManifestData {
 }
 
 #[derive(Debug, Error)]
+/// Error produced by manifest loading, validation, mutation, or persistence.
 pub enum Error {
+    /// Initialization found an existing managed artifact.
     #[error("project already contains {0}")]
     AlreadyExists(PathBuf),
+    /// A managed file could not be read.
     #[error("could not read {path}: {source}")]
     Read {
+        /// File that could not be read.
         path: PathBuf,
+        /// Underlying filesystem error.
         source: std::io::Error,
     },
+    /// A manifest failed syntax or semantic validation.
     #[error("invalid manifest {path}: {message}")]
-    Invalid { path: PathBuf, message: String },
+    Invalid {
+        /// Invalid manifest path.
+        path: PathBuf,
+        /// Validation diagnostic.
+        message: String,
+    },
+    /// The manifest uses a schema this release cannot migrate or read.
     #[error(
         "unsupported cita.toml schema {found}; this version supports schema 1 and provides no legacy migration"
     )]
-    UnsupportedSchema { found: i64 },
+    UnsupportedSchema {
+        /// Schema value found in the file.
+        found: i64,
+    },
+    /// A managed file could not be written atomically.
     #[error("could not write {path}: {source}")]
     Write {
+        /// File that could not be written.
         path: PathBuf,
+        /// Underlying filesystem error.
         source: std::io::Error,
     },
+    /// Generated BibTeX differs from the manifest-derived bytes.
     #[error("generated bibliography drift at {path}; run `cita generate`")]
-    BibliographyDrift { path: PathBuf },
+    BibliographyDrift {
+        /// Drifted bibliography path.
+        path: PathBuf,
+    },
+    /// A local key is occupied by different source content.
     #[error("citation key conflict: `{key}` has different source content")]
-    KeyConflict { key: String },
+    KeyConflict {
+        /// Conflicting local key.
+        key: String,
+    },
+    /// An exact-key add tried to rename an already stored identity.
     #[error("cannot rename existing reference `{existing}` to `{requested}` during add")]
-    CannotRename { existing: String, requested: String },
+    CannotRename {
+        /// Current local key.
+        existing: String,
+        /// Requested replacement key.
+        requested: String,
+    },
+    /// Two local keys share a normalized DOI, arXiv, or provider identity.
     #[error("identifier conflict: {identity} is shared by `{first}` and `{second}`")]
     IdentityConflict {
+        /// Conflicting normalized identity.
         identity: String,
+        /// First local key.
         first: String,
+        /// Second local key.
         second: String,
     },
+    /// No reference matched a selector.
     #[error("reference `{0}` was not found")]
     ReferenceNotFound(String),
+    /// A stored snapshot cannot be projected or violates source invariants.
     #[error("invalid source for `{key}`: {message}")]
-    InvalidSource { key: String, message: String },
+    InvalidSource {
+        /// Local key of the invalid source.
+        key: String,
+        /// Validation diagnostic.
+        message: String,
+    },
+    /// Refreshed INSPIRE records do not explain the requested managed set.
     #[error("invalid INSPIRE refresh record set: {message}")]
-    RefreshRecordSet { message: String },
+    RefreshRecordSet {
+        /// Record-set validation diagnostic.
+        message: String,
+    },
+    /// BibTeX parsing, projection, or re-keying failed.
     #[error(transparent)]
     Bibtex(#[from] cita_bibliography::Error),
+    /// Deterministic TOML serialization failed.
     #[error("could not serialize manifest: {0}")]
     Serialize(#[from] toml::ser::Error),
 }
 
 impl Manifest {
+    /// Create an empty schema-1 manifest and bibliography in a directory.
     pub fn create(directory: impl AsRef<Path>) -> Result<Self, Error> {
         let directory = directory.as_ref();
         let path = directory.join(MANIFEST_FILE);
@@ -259,6 +341,7 @@ impl Manifest {
         Ok(manifest)
     }
 
+    /// Load and semantically validate a manifest without checking generated output.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref().to_path_buf();
         let source = fs::read_to_string(&path).map_err(|source| Error::Read {
@@ -298,22 +381,27 @@ impl Manifest {
         })
     }
 
+    /// Load a manifest and verify its generated bibliography byte-for-byte.
     pub fn load_verified(path: impl AsRef<Path>) -> Result<Self, Error> {
         let manifest = Self::load(path)?;
         manifest.verify_bibliography()?;
         Ok(manifest)
     }
 
+    /// Return the authoritative manifest path.
     pub fn path(&self) -> &Path {
         &self.path
     }
+    /// Return the coordinated generated bibliography path.
     pub fn bibliography_path(&self) -> &Path {
         &self.bibliography_path
     }
+    /// Return snapshots ordered by local citation key.
     pub fn references(&self) -> &BTreeMap<String, SourceSnapshot> {
         &self.references
     }
 
+    /// Return stable IDs for all INSPIRE-managed references in key order.
     pub fn inspire_record_ids(&self) -> Vec<u64> {
         self.references
             .values()
@@ -321,6 +409,7 @@ impl Manifest {
             .collect()
     }
 
+    /// Project every snapshot into source-neutral reference fields.
     pub fn projected(&self) -> Result<Vec<ProjectedReference>, Error> {
         self.references
             .iter()
@@ -336,6 +425,7 @@ impl Manifest {
             .collect()
     }
 
+    /// Find by exact local key, then provider ID, DOI, or arXiv ID.
     pub fn find(&self, selector: &str) -> Result<Option<ProjectedReference>, Error> {
         if let Some(source) = self.references.get(selector) {
             return Ok(Some(projected(selector, source)?));
@@ -369,6 +459,7 @@ impl Manifest {
         Ok(None)
     }
 
+    /// Validate and atomically add a complete batch of references.
     pub fn add_batch(&mut self, pending: Vec<PendingReference>) -> Result<Vec<AddOutcome>, Error> {
         let mut candidate = self.references.clone();
         let mut outcomes = Vec::with_capacity(pending.len());
@@ -414,6 +505,7 @@ impl Manifest {
         Ok(outcomes)
     }
 
+    /// Resolve and atomically remove all supplied selectors.
     pub fn remove_batch(&mut self, selectors: &[String]) -> Result<Vec<ProjectedReference>, Error> {
         let mut keys = Vec::new();
         for selector in selectors {
@@ -435,6 +527,7 @@ impl Manifest {
         Ok(removed)
     }
 
+    /// Replace the complete managed INSPIRE set while preserving local keys.
     pub fn replace_inspire(&mut self, refreshed: Vec<InspireRecord>) -> Result<bool, Error> {
         let expected = self
             .references
@@ -485,10 +578,12 @@ impl Manifest {
         Ok(changed)
     }
 
+    /// Render deterministic BibTeX sorted and re-keyed by local key.
     pub fn render_bibliography(&self) -> Result<String, Error> {
         render_bibliography(&self.references)
     }
 
+    /// Verify that the generated bibliography exactly matches the manifest.
     pub fn verify_bibliography(&self) -> Result<(), Error> {
         let expected = self.render_bibliography()?;
         // A missing file is drift (repairable by `cita generate`); any other
@@ -511,6 +606,7 @@ impl Manifest {
         Ok(())
     }
 
+    /// Atomically regenerate the bibliography from authoritative snapshots.
     pub fn generate(&self) -> Result<(), Error> {
         atomic_write(
             &self.bibliography_path,

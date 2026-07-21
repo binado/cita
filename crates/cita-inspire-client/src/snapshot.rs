@@ -9,12 +9,17 @@ use std::collections::{BTreeMap, BTreeSet};
 /// from the BibTeX; only identity and refresh bookkeeping travel alongside it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InspireRecord {
+    /// Stable numeric INSPIRE record identifier used for refresh.
     pub record_id: u64,
+    /// Provider update timestamp.
     pub updated: String,
     /// The INSPIRE texkey used as the suggested local citation key.
     pub texkey: String,
+    /// Complete authoritative standalone BibTeX entry.
     pub bibtex: String,
+    /// Curated, normalized, versionless arXiv identifier.
     pub arxiv: Option<String>,
+    /// Curated, normalized DOI.
     pub doi: Option<String>,
 }
 

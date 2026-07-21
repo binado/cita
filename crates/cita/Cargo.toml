@@ -10,6 +10,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+publish = ["crates-io"]
 
 [[bin]]
 name = "cita"
@@ -19,11 +20,12 @@ path = "src/main.rs"
 anstyle.workspace = true
 anyhow.workspace = true
 clap.workspace = true
-cita-core = { path = "../cita-core" }
-cita-documents = { path = "../cita-documents" }
-cita-inspire-client = { path = "../cita-inspire-client" }
-cita-bibliography = { path = "../cita-bibliography" }
-cita-manifest = { path = "../cita-manifest" }
+clap_complete.workspace = true
+cita-core.workspace = true
+cita-documents.workspace = true
+cita-inspire-client.workspace = true
+cita-bibliography.workspace = true
+cita-manifest.workspace = true
 opener.workspace = true
 tempfile.workspace = true
 terminal_size.workspace = true

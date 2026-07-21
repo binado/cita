@@ -1,0 +1,30 @@
+[workspace]
+# release-plz reads Conventional Commits for version bumps and writes per-crate
+# CHANGELOGs. All six crates share `version_group = "cita"` so they stay in
+# lockstep on a single version, matching the manual "all crates share one
+# version" contract. Default per-crate git tags ({{ package }}-v{{ version }})
+# and changelog updates are kept.
+
+[[package]]
+name = "cita-core"
+version_group = "cita"
+
+[[package]]
+name = "cita-bibliography"
+version_group = "cita"
+
+[[package]]
+name = "cita-documents"
+version_group = "cita"
+
+[[package]]
+name = "cita-inspire-client"
+version_group = "cita"
+
+[[package]]
+name = "cita-manifest"
+version_group = "cita"
+
+[[package]]
+name = "cita"
+version_group = "cita"

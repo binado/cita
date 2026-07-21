@@ -3,7 +3,7 @@ mod git;
 
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
-use std::env;
+use std::{env, path::PathBuf};
 
 #[derive(Debug, Parser)]
 #[command(name = "cita", version, about = "A Git-friendly bibliography database")]
@@ -15,14 +15,22 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Initialize cita.toml and its generated references.bib
-    Init,
+    Init {
+        /// Initialize in this existing directory instead of the current directory
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
     /// Import standalone BibTeX entries from a path or stdin (`-`)
-    Import { path: String },
+    Import {
+        /// BibTeX file to import, or `-` to read from standard input
+        path: String,
+    },
     /// Resolve and add one or more references through INSPIRE
     Add {
         /// Keep this local citation key (one locator only)
         #[arg(long)]
         key: Option<String>,
+        /// INSPIRE locator: arXiv ID, `arxiv:`, `doi:`, or `inspire:`
         #[arg(required = true)]
         locators: Vec<String>,
     },
@@ -30,15 +38,19 @@ enum Command {
     Sync,
     /// Remove references by local key or provider/DOI/arXiv identity
     Remove {
+        /// Local key, provider ID, DOI, or arXiv ID to remove
         #[arg(required = true)]
         selectors: Vec<String>,
     },
     /// List stored references
     List {
+        /// Field used to sort the displayed references
         #[arg(long, value_enum, default_value_t = SortBy::Key)]
         sort_by: SortBy,
+        /// Sort direction; references without a year remain last
         #[arg(long, value_enum, default_value_t = Order::Asc)]
         order: Order,
+        /// Do not wrap long titles to the terminal width
         #[arg(long)]
         no_wrap_title: bool,
     },
@@ -46,6 +58,7 @@ enum Command {
     Generate,
     /// Fetch or resolve a reference's arXiv PDF
     Fetch {
+        /// Download again even when a valid PDF is already cached
         #[arg(long, conflicts_with_all = ["cache_only", "url"])]
         force: bool,
         /// Require an existing cached PDF without downloading
@@ -57,12 +70,19 @@ enum Command {
         /// Open the returned path or URL with the system default application
         #[arg(long)]
         open: bool,
+        /// Save an unmatched INSPIRE locator to the manifest before fetching
         #[arg(long)]
         save: bool,
+        /// Local key, provider ID, DOI, arXiv ID, or unmatched INSPIRE locator
         selector: String,
     },
-    /// Commit cita.toml and references.bib, leaving unrelated files alone
+    /// Commit the managed files; refuses to run if either managed file is already staged
     Commit,
+    /// Generate a shell completion script on stdout
+    Completions {
+        /// Shell to generate completions for
+        shell: clap_complete::Shell,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
@@ -96,7 +116,7 @@ async fn run() -> Result<()> {
             Cli::command().print_help()?;
             println!();
         }
-        Some(Command::Init) => commands::init(&cwd)?,
+        Some(Command::Init { path }) => commands::init(&cwd, path.as_deref())?,
         Some(Command::Import { path }) => commands::import(&cwd, &path)?,
         Some(Command::Add { key, locators }) => {
             commands::add(&cwd, key.as_deref(), &locators).await?
@@ -118,6 +138,11 @@ async fn run() -> Result<()> {
             selector,
         }) => commands::fetch(&cwd, &selector, force, cache_only, url, open, save).await?,
         Some(Command::Commit) => git::commit(&commands::find_manifest(&cwd)?)?,
+        Some(Command::Completions { shell }) => {
+            let mut command = Cli::command();
+            let name = command.get_name().to_string();
+            clap_complete::generate(shell, &mut command, name, &mut std::io::stdout());
+        }
     }
     Ok(())
 }
@@ -145,5 +170,10 @@ mod tests {
         assert!(Cli::try_parse_from(["cita", "fetch", "--url", "--save", "1207.7214"]).is_ok());
         assert!(Cli::try_parse_from(["cita", "open", "1207.7214"]).is_err());
         assert!(Cli::try_parse_from(["cita", "fetch", "--dry-run", "1207.7214"]).is_err());
+    }
+    #[test]
+    fn completions_accepts_known_shells_only() {
+        assert!(Cli::try_parse_from(["cita", "completions", "zsh"]).is_ok());
+        assert!(Cli::try_parse_from(["cita", "completions", "nonsense"]).is_err());
     }
 }

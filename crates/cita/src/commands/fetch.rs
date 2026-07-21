@@ -40,11 +40,21 @@ async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
         let reference = record.project()?;
         let outcome = manifest
             .add_batch(vec![PendingReference {
-                key: KeyRequest::Suggested(key.clone()),
+                key: KeyRequest::Suggested(key),
                 source: SourceSnapshot::inspire(record),
-            }])?
+            }])
+            .map_err(|error| match error {
+                error @ cita_manifest::Error::KeyConflict { .. } => anyhow::Error::from(error)
+                    .context(
+                        "save with a different local key using `cita add --key <key> <locator>`",
+                    ),
+                error => error.into(),
+            })?
             .pop()
             .expect("one outcome");
+        let key = match &outcome {
+            AddOutcome::Added(key) | AddOutcome::Existing(key) => key.clone(),
+        };
         Ok(Selected {
             key,
             reference,

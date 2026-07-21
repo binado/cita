@@ -1,4 +1,5 @@
-//! arXiv PDF download and local cache management for Cita.
+//! arXiv PDF download and local cache management for cita.
+#![warn(missing_docs)]
 
 use cita_core::Locator;
 use reqwest::StatusCode;
@@ -17,20 +18,28 @@ const DEFAULT_USER_AGENT: &str = concat!("cita-documents/", env!("CARGO_PKG_VERS
 const PDF_SIGNATURE: &[u8] = b"%PDF-";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Controls whether a document fetch may use or update the cache.
 pub enum FetchPolicy {
+    /// Return a valid cached PDF, otherwise download it.
     #[default]
     UseCache,
+    /// Return only a valid cached PDF and never make a network request.
     CacheOnly,
+    /// Download the PDF even when a valid cached copy exists.
     Force,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Describes whether a PDF was downloaded or found in the cache.
 pub enum FetchOutcome {
+    /// A PDF was downloaded and atomically stored at this path.
     Downloaded(PathBuf),
+    /// A valid PDF was already cached at this path.
     Cached(PathBuf),
 }
 
 impl FetchOutcome {
+    /// Return the absolute or caller-supplied-root-relative cached path.
     pub fn path(&self) -> &Path {
         match self {
             Self::Downloaded(path) | Self::Cached(path) => path,
@@ -39,6 +48,7 @@ impl FetchOutcome {
 }
 
 #[derive(Clone, Debug)]
+/// Downloads validated arXiv PDFs into an atomic local cache.
 pub struct DocumentStore {
     cache_root: PathBuf,
     http: reqwest::Client,
@@ -46,14 +56,17 @@ pub struct DocumentStore {
 }
 
 impl DocumentStore {
+    /// Create a store with the default arXiv endpoint and HTTP settings.
     pub fn new(cache_root: impl Into<PathBuf>) -> Result<Self, Error> {
         Self::builder(cache_root).build()
     }
 
+    /// Begin configuring a document store.
     pub fn builder(cache_root: impl Into<PathBuf>) -> DocumentStoreBuilder {
         DocumentStoreBuilder::new(cache_root)
     }
 
+    /// Fetch an arXiv PDF according to the requested cache policy.
     pub async fn fetch(&self, arxiv_id: &str, policy: FetchPolicy) -> Result<FetchOutcome, Error> {
         let arxiv_id = validated_arxiv_id(arxiv_id)?;
         let destination = cache_path(&self.cache_root, &arxiv_id);
@@ -115,6 +128,7 @@ impl DocumentStore {
 }
 
 #[derive(Clone, Debug)]
+/// Configures a [`DocumentStore`].
 pub struct DocumentStoreBuilder {
     cache_root: PathBuf,
     base_url: String,
@@ -123,6 +137,7 @@ pub struct DocumentStoreBuilder {
 }
 
 impl DocumentStoreBuilder {
+    /// Create a builder rooted at the supplied cache directory.
     pub fn new(cache_root: impl Into<PathBuf>) -> Self {
         Self {
             cache_root: cache_root.into(),
@@ -132,21 +147,25 @@ impl DocumentStoreBuilder {
         }
     }
 
+    /// Override the arXiv-compatible base URL.
     pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self
     }
 
+    /// Override the HTTP user-agent header.
     pub fn user_agent(mut self, user_agent: impl Into<String>) -> Self {
         self.user_agent = user_agent.into();
         self
     }
 
+    /// Override the request timeout.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
 
+    /// Validate the configuration and construct the store.
     pub fn build(self) -> Result<DocumentStore, Error> {
         let mut base_url =
             Url::parse(&self.base_url).map_err(|_| Error::InvalidBaseUrl(self.base_url.clone()))?;
@@ -168,37 +187,56 @@ impl DocumentStoreBuilder {
 }
 
 #[derive(Debug, Error)]
+/// Error produced while locating, downloading, validating, or caching a PDF.
 pub enum Error {
+    /// The supplied arXiv identifier is invalid.
     #[error("reference contains an invalid arXiv identifier: `{0}`")]
     InvalidArxivIdentifier(String),
+    /// The configured base URL is invalid.
     #[error("invalid arXiv base URL: {0}")]
     InvalidBaseUrl(String),
+    /// A cache directory could not be created.
     #[error("could not create document cache directory {path}: {source}")]
     CreateCacheDirectory {
+        /// Directory that could not be created.
         path: PathBuf,
+        /// Underlying filesystem error.
         source: std::io::Error,
     },
+    /// An existing cached file could not be inspected.
     #[error("could not inspect cached PDF {path}: {source}")]
     InspectCachedPdf {
+        /// Cached file that could not be inspected.
         path: PathBuf,
+        /// Underlying filesystem error.
         source: std::io::Error,
     },
+    /// An existing cache entry does not have a PDF signature.
     #[error("cached file {0} is not a valid PDF")]
     InvalidCachedPdf(PathBuf),
+    /// Cache-only mode found no file at the expected path.
     #[error("PDF is not cached at {0}")]
     NotCached(PathBuf),
+    /// The HTTP request failed before a response was received.
     #[error("arXiv request failed: {0}")]
     Transport(#[source] reqwest::Error),
+    /// arXiv returned an unsuccessful HTTP status.
     #[error("arXiv returned HTTP {status} for `{arxiv_id}`")]
     HttpStatus {
+        /// Normalized arXiv identifier requested.
         arxiv_id: String,
+        /// HTTP response status.
         status: StatusCode,
     },
+    /// The downloaded response does not have a PDF signature.
     #[error("arXiv returned non-PDF content for `{0}`")]
     InvalidDownloadedPdf(String),
+    /// A temporary or final cache file could not be written.
     #[error("could not write PDF cache file {path}: {source}")]
     Write {
+        /// Intended final cache path.
         path: PathBuf,
+        /// Underlying filesystem error.
         source: std::io::Error,
     },
 }
@@ -210,6 +248,7 @@ fn validated_arxiv_id(value: &str) -> Result<String, Error> {
     }
 }
 
+/// Build the public arXiv PDF URL for a validated identifier.
 pub fn arxiv_pdf_url(arxiv_id: &str) -> Result<Url, Error> {
     let arxiv_id = validated_arxiv_id(arxiv_id)?;
     let base_url =
