@@ -171,7 +171,7 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
         "}\n",
     );
     let output = success(cita_stdin(directory.path(), &["import", "-"], seed));
-    assert_eq!(output, "Added SeedAlpha\nAdded SeedBeta\n");
+    assert_eq!(output, "added SeedAlpha\nadded SeedBeta\n");
     let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
     let seed_alpha_before = section(&manifest, "SeedAlpha").to_owned();
     let seed_beta_before = section(&manifest, "SeedBeta").to_owned();
@@ -192,7 +192,7 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
             directory.path(),
             &["add", "--key", paper.key, &locator],
         ));
-        assert_eq!(output, format!("Added {}\n", paper.key));
+        assert_eq!(output, format!("added {}\n", paper.key));
 
         let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
         let entry = section(&manifest, paper.key);
@@ -216,7 +216,7 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
         directory.path(),
         &["add", "--key", "Maldacena", "inspire:451647"],
     ));
-    assert_eq!(output, "Already present: Maldacena\n");
+    assert_eq!(output, "skipped Maldacena\n");
     assert_eq!(
         fs::read(directory.path().join("cita.toml")).unwrap(),
         before

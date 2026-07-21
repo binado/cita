@@ -315,30 +315,212 @@ fn legacy_manifest_is_rejected_without_rewriting() {
 }
 
 #[test]
-fn file_and_stdin_import_are_atomic_and_source_preserving() {
+fn import_is_source_preserving_and_skips_duplicates_by_default() {
     let directory = tempfile::tempdir().unwrap();
     success(cita(directory.path(), &["init"]));
     let input = entry("B", "Beta", "doi={10.1/B},");
     assert_eq!(
         success(cita_stdin(directory.path(), &["import", "-"], &input)),
-        "Added B\n"
+        "added B\n"
     );
-    let before_manifest = fs::read(directory.path().join("cita.toml")).unwrap();
-    let before_bib = fs::read(directory.path().join("references.bib")).unwrap();
-    let conflicting = format!(
+    // An import mixing a fresh entry with a different-key duplicate of an
+    // existing DOI adds the fresh one and skips the duplicate, exiting 0.
+    let mixed = format!(
         "{}\n{}",
         entry("C", "Gamma", "doi={10.1/C},"),
         entry("D", "Delta", "doi={10.1/b},")
     );
-    let error = failure(cita_stdin(directory.path(), &["import", "-"], &conflicting));
-    assert!(error.contains("identifier conflict"), "{error}");
-    assert_eq!(
-        fs::read(directory.path().join("cita.toml")).unwrap(),
-        before_manifest
+    let output = success(cita_stdin(directory.path(), &["import", "-"], &mixed));
+    assert!(output.contains("added C"), "{output}");
+    assert!(
+        output.contains("skipped D: already present as B"),
+        "{output}"
+    );
+    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
+    assert!(manifest.contains("[references.C]"), "{manifest}");
+    assert!(!manifest.contains("[references.D]"), "{manifest}");
+}
+
+#[test]
+fn import_reports_identical_duplicates_as_skipped() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    success(cita_stdin(
+        directory.path(),
+        &["import", "-"],
+        &entry("A", "Alpha", "doi={10.1/A},"),
+    ));
+    // A batch re-listing an identical existing entry alongside a fresh one adds
+    // the new entry and reports the identical one as an idempotent "already
+    // present" no-op, printed per-line as `skipped A` with no aggregate summary.
+    let mixed = format!(
+        "{}\n{}",
+        entry("A", "Alpha", "doi={10.1/A},"),
+        entry("B", "Beta", "doi={10.1/B},")
+    );
+    let output = success(cita_stdin(directory.path(), &["import", "-"], &mixed));
+    assert!(output.contains("added B"), "{output}");
+    assert!(output.contains("skipped A"), "{output}");
+    assert!(!output.contains(" added,"), "{output}");
+}
+
+#[test]
+fn import_overwrite_rekeys_a_duplicate_and_leaves_others_untouched() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    success(cita_stdin(
+        directory.path(),
+        &["import", "-"],
+        &entry("foo", "Foo", "eprint={2107.00001},"),
+    ));
+
+    // bar duplicates foo's arXiv identity; baz is fresh.
+    let second = format!(
+        "{}\n{}",
+        entry("bar", "Bar", "eprint={2107.00001},"),
+        entry("baz", "Baz", "eprint={2202.00002},")
+    );
+    let output = success(cita_stdin(directory.path(), &["import", "-"], &second));
+    assert!(
+        output.contains("skipped bar: already present as foo"),
+        "{output}"
+    );
+    assert!(output.contains("added baz"), "{output}");
+    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
+    assert!(manifest.contains("[references.foo]"), "{manifest}");
+    assert!(manifest.contains("[references.baz]"), "{manifest}");
+    assert!(!manifest.contains("[references.bar]"), "{manifest}");
+
+    // Re-import with --overwrite rekeys foo -> bar and leaves baz as-is.
+    let output = success(cita_stdin(
+        directory.path(),
+        &["import", "--overwrite", "-"],
+        &second,
+    ));
+    assert!(output.contains("overwrote foo -> bar"), "{output}");
+    assert!(output.contains("skipped baz"), "{output}");
+    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
+    assert!(manifest.contains("[references.bar]"), "{manifest}");
+    assert!(manifest.contains("[references.baz]"), "{manifest}");
+    assert!(!manifest.contains("[references.foo]"), "{manifest}");
+
+    // The generated bibliography follows the rekey with no drift.
+    let bibliography = fs::read_to_string(directory.path().join("references.bib")).unwrap();
+    assert!(bibliography.contains("@misc{bar,"), "{bibliography}");
+    assert!(!bibliography.contains("@misc{foo,"), "{bibliography}");
+    success(cita(directory.path(), &["generate"]));
+}
+
+#[test]
+fn import_overwrite_reports_every_removed_collision() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    let existing = format!(
+        "{}\n{}",
+        entry("DoiOwner", "DOI owner", "doi={10.1/BRIDGE},"),
+        entry("ArxivOwner", "arXiv owner", "eprint={2401.00042},")
+    );
+    success(cita_stdin(directory.path(), &["import", "-"], &existing));
+
+    let incoming = entry(
+        "Combined",
+        "Combined",
+        "doi={10.1/bridge}, eprint={2401.00042},",
     );
     assert_eq!(
-        fs::read(directory.path().join("references.bib")).unwrap(),
-        before_bib
+        success(cita_stdin(
+            directory.path(),
+            &["import", "--overwrite", "-"],
+            &incoming,
+        )),
+        "overwrote DoiOwner, ArxivOwner -> Combined\n"
+    );
+
+    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
+    assert!(manifest.contains("[references.Combined]"), "{manifest}");
+    assert!(!manifest.contains("[references.DoiOwner]"), "{manifest}");
+    assert!(!manifest.contains("[references.ArxivOwner]"), "{manifest}");
+    let bibliography = fs::read_to_string(directory.path().join("references.bib")).unwrap();
+    assert!(bibliography.contains("@misc{Combined,"), "{bibliography}");
+    assert!(!bibliography.contains("@misc{DoiOwner,"), "{bibliography}");
+    assert!(
+        !bibliography.contains("@misc{ArxivOwner,"),
+        "{bibliography}"
+    );
+}
+
+#[test]
+fn add_overwrite_replaces_a_colliding_local_key() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    success(cita_stdin(
+        directory.path(),
+        &["import", "-"],
+        &entry("Provider:42", "Imported", "doi={10.1000/imported},"),
+    ));
+    let json = json_record(42, "Provider:42", "Provider", "2401.00042");
+    let bib = entry("Provider:42", "Provider", "eprint={2401.00042},");
+    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bib)]);
+
+    let output = success(cita_with_server(
+        directory.path(),
+        &["add", "--overwrite", "2401.00042"],
+        &base,
+    ));
+    handle.join().unwrap();
+    assert!(output.contains("overwrote Provider:42"), "{output}");
+    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
+    assert!(manifest.contains("record_id = 42"), "{manifest}");
+    assert!(!manifest.contains("10.1000/imported"), "{manifest}");
+}
+
+#[test]
+fn add_exact_overwrite_reports_and_removes_all_collisions() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+
+    let old_json = json_record(42, "Provider:Old", "Old provider", "2301.00042");
+    let old_bib = entry("Provider:Old", "Old provider", "eprint={2301.00042},");
+    let (base, handle) = server(vec![("200 OK", old_json), ("200 OK", old_bib)]);
+    success(cita_with_server(
+        directory.path(),
+        &["add", "--key", "Local", "inspire:42"],
+        &base,
+    ));
+    handle.join().unwrap();
+
+    let occupied = format!(
+        "{}\n{}",
+        entry("Renamed", "Requested key occupant", "doi={10.1/FREED},"),
+        entry("ArxivOwner", "arXiv owner", "eprint={2401.00042},")
+    );
+    success(cita_stdin(directory.path(), &["import", "-"], &occupied));
+
+    let new_json = json_record(42, "Provider:New", "New provider", "2401.00042");
+    let new_bib = entry("Provider:New", "New provider", "eprint={2401.00042},");
+    let (base, handle) = server(vec![("200 OK", new_json), ("200 OK", new_bib)]);
+    assert_eq!(
+        success(cita_with_server(
+            directory.path(),
+            &["add", "--overwrite", "--key", "Renamed", "inspire:42",],
+            &base,
+        )),
+        "overwrote Renamed, Local, ArxivOwner -> Renamed\n"
+    );
+    handle.join().unwrap();
+
+    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
+    assert!(manifest.contains("[references.Renamed]"), "{manifest}");
+    assert!(manifest.contains("record_id = 42"), "{manifest}");
+    assert!(!manifest.contains("[references.Local]"), "{manifest}");
+    assert!(!manifest.contains("[references.ArxivOwner]"), "{manifest}");
+    assert!(!manifest.contains("10.1/FREED"), "{manifest}");
+    let bibliography = fs::read_to_string(directory.path().join("references.bib")).unwrap();
+    assert!(bibliography.contains("@misc{Renamed,"), "{bibliography}");
+    assert!(!bibliography.contains("@misc{Local,"), "{bibliography}");
+    assert!(
+        !bibliography.contains("@misc{ArxivOwner,"),
+        "{bibliography}"
     );
 }
 
@@ -355,7 +537,7 @@ fn add_uses_json_and_bibtex_and_preserves_an_explicit_local_key() {
             &["add", "--key", "Local:42", "2401.00042"],
             &base
         )),
-        "Added Local:42\n"
+        "added Local:42\n"
     );
     let requests = handle.join().unwrap();
     assert!(requests[0].contains("format=json"));
@@ -371,7 +553,7 @@ fn add_uses_json_and_bibtex_and_preserves_an_explicit_local_key() {
 }
 
 #[test]
-fn add_key_conflicts_recommend_an_explicit_local_key() {
+fn add_skips_a_suggested_key_that_collides_with_different_content() {
     let directory = tempfile::tempdir().unwrap();
     success(cita(directory.path(), &["init"]));
     success(cita_stdin(
@@ -383,14 +565,21 @@ fn add_key_conflicts_recommend_an_explicit_local_key() {
     let bib = entry("Provider:42", "Provider", "eprint={2401.00042},");
     let (base, handle) = server(vec![("200 OK", json), ("200 OK", bib)]);
 
-    let error = failure(cita_with_server(
+    // The suggested texkey already holds unrelated imported content: the add is
+    // skipped (not fatal) and the existing entry is left untouched.
+    let output = success(cita_with_server(
         directory.path(),
         &["add", "2401.00042"],
         &base,
     ));
     handle.join().unwrap();
-    assert!(error.contains("citation key conflict"), "{error}");
-    assert!(error.contains("cita add --key <key> <locator>"), "{error}");
+    assert!(
+        output.contains("skipped Provider:42: local key already holds different content"),
+        "{output}"
+    );
+    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
+    assert!(manifest.contains("10.1000/imported"), "{manifest}");
+    assert!(!manifest.contains("record_id = 42"), "{manifest}");
 }
 
 #[test]
@@ -523,7 +712,7 @@ fn stale_provider_texkeys_remain_selectable_for_save_and_remove() {
     assert_eq!(
         stderr,
         concat!(
-            "Already present: Provider:Old\n",
+            "skipped Provider:Old\n",
             "Already fetched Provider:Old: https://arxiv.org/pdf/2401.00042\n"
         )
     );
@@ -941,7 +1130,7 @@ fn fetch_url_can_save_metadata_without_creating_the_pdf_cache() {
     ));
     handle.join().unwrap();
     assert_eq!(stdout, "https://arxiv.org/pdf/2401.00042\n");
-    assert_eq!(stderr, "Added Provider:42\n");
+    assert_eq!(stderr, "added Provider:42\n");
     assert!(!directory.path().join(".cita").exists());
     assert!(
         fs::read_to_string(directory.path().join("cita.toml"))
@@ -981,14 +1170,14 @@ fn fetch_save_uses_the_actual_existing_local_key() {
     assert_eq!(
         stderr,
         concat!(
-            "Already present: Local\n",
+            "skipped Local\n",
             "Already fetched Local: https://arxiv.org/pdf/2401.00042\n"
         )
     );
 }
 
 #[test]
-fn fetch_save_key_conflicts_recommend_cita_add_with_a_key() {
+fn fetch_save_skips_a_local_key_that_holds_different_content() {
     let directory = tempfile::tempdir().unwrap();
     success(cita(directory.path(), &["init"]));
     success(cita_stdin(
@@ -999,14 +1188,20 @@ fn fetch_save_key_conflicts_recommend_cita_add_with_a_key() {
     let json = json_record(42, "Provider:42", "Provider", "2401.00042");
     let bib = entry("Provider:42", "Provider", "eprint={2401.00042},");
     let (base, handle) = server(vec![("200 OK", json), ("200 OK", bib)]);
-    let error = failure(cita_with_server(
+    // The suggested texkey already holds unrelated imported content: the save is
+    // skipped, the URL for the resolved paper is still returned, and the
+    // pre-existing entry is left untouched.
+    let (stdout, stderr) = success_streams(cita_with_server(
         directory.path(),
         &["fetch", "--url", "--save", "2401.00042"],
         &base,
     ));
     handle.join().unwrap();
-    assert!(error.contains("citation key conflict"), "{error}");
-    assert!(error.contains("cita add --key <key> <locator>"), "{error}");
+    assert!(stderr.contains("skipped Provider:42"), "{stderr}");
+    assert!(stdout.contains("2401.00042"), "{stdout}");
+    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
+    assert!(manifest.contains("10.1000/imported"), "{manifest}");
+    assert!(!manifest.contains("record_id = 42"), "{manifest}");
 }
 
 #[test]

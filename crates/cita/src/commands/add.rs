@@ -1,10 +1,15 @@
-use super::{find_manifest, inspire_client, print_add};
+use super::{find_manifest, inspire_client, print_add_outcomes};
 use anyhow::{Result, bail};
 use cita_core::{Locator, MetadataProvider};
-use cita_manifest::{KeyRequest, Manifest, PendingReference, SourceSnapshot};
+use cita_manifest::{ConflictPolicy, KeyRequest, Manifest, PendingReference, SourceSnapshot};
 use std::path::Path;
 
-pub(crate) async fn add(cwd: &Path, explicit_key: Option<&str>, values: &[String]) -> Result<()> {
+pub(crate) async fn add(
+    cwd: &Path,
+    explicit_key: Option<&str>,
+    values: &[String],
+    overwrite: bool,
+) -> Result<()> {
     if explicit_key.is_some() && values.len() != 1 {
         bail!("--key may only be used with one locator");
     }
@@ -25,15 +30,13 @@ pub(crate) async fn add(cwd: &Path, explicit_key: Option<&str>, values: &[String
             source: SourceSnapshot::inspire(record),
         });
     }
+    let policy = if overwrite {
+        ConflictPolicy::Overwrite
+    } else {
+        ConflictPolicy::Skip
+    };
     let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
-    let outcomes = manifest.add_batch(pending).map_err(|error| match error {
-        error @ cita_manifest::Error::KeyConflict { .. } => anyhow::Error::from(error).context(
-            "choose a different local key by rerunning one locator with `cita add --key <key> <locator>`",
-        ),
-        error => error.into(),
-    })?;
-    for outcome in outcomes {
-        print_add(outcome);
-    }
+    let outcomes = manifest.add_batch(pending, policy)?;
+    print_add_outcomes(&outcomes);
     Ok(())
 }

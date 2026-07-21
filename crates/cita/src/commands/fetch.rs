@@ -1,12 +1,15 @@
-use super::{add_message, ensure_cache_layout, find_manifest, inspire_client};
+use super::{add_message, ensure_cache_layout, find_manifest, highlight_style, inspire_client};
 use anyhow::{Context, Result};
 use cita_core::{Locator, MetadataProvider, Reference, ReferenceSource};
 use cita_documents::{
     DocumentStore, Error as DocumentError, FetchOutcome, FetchPolicy, arxiv_pdf_url,
 };
-use cita_manifest::{AddOutcome, KeyRequest, Manifest, PendingReference, SourceSnapshot};
+use cita_manifest::{
+    AddOutcome, ConflictPolicy, KeyRequest, Manifest, PendingReference, SourceSnapshot,
+};
 use std::{
     fmt,
+    io::{self, IsTerminal},
     path::{Path, PathBuf},
 };
 
@@ -39,21 +42,20 @@ async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
         let key = record.texkey.clone();
         let reference = record.project()?;
         let outcome = manifest
-            .add_batch(vec![PendingReference {
-                key: KeyRequest::Suggested(key),
-                source: SourceSnapshot::inspire(record),
-            }])
-            .map_err(|error| match error {
-                error @ cita_manifest::Error::KeyConflict { .. } => anyhow::Error::from(error)
-                    .context(
-                        "save with a different local key using `cita add --key <key> <locator>`",
-                    ),
-                error => error.into(),
-            })?
+            .add_batch(
+                vec![PendingReference {
+                    key: KeyRequest::Suggested(key),
+                    source: SourceSnapshot::inspire(record),
+                }],
+                ConflictPolicy::Skip,
+            )?
             .pop()
             .expect("one outcome");
         let key = match &outcome {
-            AddOutcome::Added(key) | AddOutcome::Existing(key) => key.clone(),
+            AddOutcome::Added(key)
+            | AddOutcome::Existing(key)
+            | AddOutcome::Overwritten { key, .. } => key.clone(),
+            AddOutcome::Skipped { conflicting, .. } => conflicting.clone(),
         };
         Ok(Selected {
             key,
@@ -91,7 +93,10 @@ pub(crate) async fn fetch(
     };
     let selected = select(cwd, selector, save).await?;
     if let Some(outcome) = &selected.save_outcome {
-        eprintln!("{}", add_message(outcome));
+        eprintln!(
+            "{}",
+            add_message(outcome, highlight_style(io::stderr().is_terminal()))
+        );
     }
     let arxiv = selected
         .reference

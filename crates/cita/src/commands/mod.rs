@@ -22,7 +22,7 @@ use cita_manifest::{AddOutcome, MANIFEST_FILE};
 use std::{
     env, fs,
     fs::OpenOptions,
-    io::{self, Write},
+    io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
 };
 
@@ -93,13 +93,64 @@ pub(crate) fn inspire_client() -> Result<Client> {
     Ok(builder.build()?)
 }
 
-pub(crate) fn add_message(outcome: &AddOutcome) -> String {
-    match outcome {
-        AddOutcome::Added(key) => format!("Added {key}"),
-        AddOutcome::Existing(key) => format!("Already present: {key}"),
+/// Bold-cyan identifier style, or None when the target stream should stay plain.
+/// Matches the header styling in `list::print_rows` and honors NO_COLOR.
+pub(crate) fn highlight_style(stream_is_terminal: bool) -> Option<anstyle::Style> {
+    (stream_is_terminal && env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())).then(|| {
+        anstyle::Style::new()
+            .bold()
+            .fg_color(Some(anstyle::AnsiColor::Cyan.into()))
+    })
+}
+
+fn highlight(key: &str, style: Option<anstyle::Style>) -> String {
+    match style {
+        Some(s) => format!("{s}{key}{s:#}"),
+        None => key.to_string(),
     }
 }
 
-pub(crate) fn print_add(outcome: AddOutcome) {
-    println!("{}", add_message(&outcome));
+pub(crate) fn add_message(outcome: &AddOutcome, style: Option<anstyle::Style>) -> String {
+    match outcome {
+        AddOutcome::Added(key) => format!("added {}", highlight(key, style)),
+        AddOutcome::Existing(key) => format!("skipped {}", highlight(key, style)),
+        AddOutcome::Skipped { key, conflicting } if conflicting == key => {
+            format!(
+                "skipped {}: local key already holds different content",
+                highlight(key, style)
+            )
+        }
+        AddOutcome::Skipped { key, conflicting } => {
+            format!(
+                "skipped {}: already present as {}",
+                highlight(key, style),
+                highlight(conflicting, style)
+            )
+        }
+        AddOutcome::Overwritten { key, replaced } => match replaced.as_slice() {
+            [] => format!("overwrote {}", highlight(key, style)),
+            [only] if only == key => format!("overwrote {}", highlight(key, style)),
+            [old] => format!(
+                "overwrote {} -> {}",
+                highlight(old, style),
+                highlight(key, style)
+            ),
+            replaced => format!(
+                "overwrote {} -> {}",
+                replaced
+                    .iter()
+                    .map(|old| highlight(old, style))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                highlight(key, style)
+            ),
+        },
+    }
+}
+
+pub(crate) fn print_add_outcomes(outcomes: &[AddOutcome]) {
+    let style = highlight_style(io::stdout().is_terminal());
+    for outcome in outcomes {
+        println!("{}", add_message(outcome, style));
+    }
 }

@@ -175,6 +175,16 @@ pub struct PendingReference {
     pub source: SourceSnapshot,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+/// Controls how `add_batch` resolves a collision with an existing reference.
+pub enum ConflictPolicy {
+    /// Leave the existing reference in place and report the incoming one as skipped.
+    #[default]
+    Skip,
+    /// Replace the colliding existing reference(s) with the incoming one.
+    Overwrite,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Result of adding one pending reference.
 pub enum AddOutcome {
@@ -182,6 +192,20 @@ pub enum AddOutcome {
     Added(String),
     /// The same identity was already stored under this actual local key.
     Existing(String),
+    /// An incoming reference collided with an existing one and was left out.
+    Skipped {
+        /// Local key the incoming reference requested.
+        key: String,
+        /// Existing local key it collides with (equal to `key` for a same-key clash).
+        conflicting: String,
+    },
+    /// An incoming reference replaced a colliding existing reference.
+    Overwritten {
+        /// Local key the incoming reference now occupies.
+        key: String,
+        /// Every local key removed to make room for the incoming reference.
+        replaced: Vec<String>,
+    },
 }
 
 #[derive(Debug)]
@@ -243,12 +267,6 @@ pub enum Error {
     BibliographyDrift {
         /// Drifted bibliography path.
         path: PathBuf,
-    },
-    /// A local key is occupied by different source content.
-    #[error("citation key conflict: `{key}` has different source content")]
-    KeyConflict {
-        /// Conflicting local key.
-        key: String,
     },
     /// An exact-key add tried to rename an already stored identity.
     #[error("cannot rename existing reference `{existing}` to `{requested}` during add")]
@@ -460,40 +478,101 @@ impl Manifest {
     }
 
     /// Validate and atomically add a complete batch of references.
-    pub fn add_batch(&mut self, pending: Vec<PendingReference>) -> Result<Vec<AddOutcome>, Error> {
+    ///
+    /// Collisions never abort the batch: under [`ConflictPolicy::Skip`] a
+    /// colliding incoming entry is reported as [`AddOutcome::Skipped`] and left
+    /// out, while under [`ConflictPolicy::Overwrite`] it replaces the colliding
+    /// entry (rekeying when the collision is a different-key duplicate). Only
+    /// malformed input still aborts, leaving the manifest untouched.
+    pub fn add_batch(
+        &mut self,
+        pending: Vec<PendingReference>,
+        policy: ConflictPolicy,
+    ) -> Result<Vec<AddOutcome>, Error> {
         let mut candidate = self.references.clone();
+        let mut index = identity_index(&candidate)?;
         let mut outcomes = Vec::with_capacity(pending.len());
         for item in pending {
             validate_key(item.key.as_str())?;
-            if let Some(record_id) = item.source.inspire_record_id()
+            let forced_collision = if let Some(record_id) = item.source.inspire_record_id()
                 && let Some(existing) = candidate.iter().find_map(|(key, source)| {
                     (source.inspire_record_id() == Some(record_id)).then(|| key.clone())
-                })
-            {
-                match item.key {
-                    KeyRequest::Suggested(_) => outcomes.push(AddOutcome::Existing(existing)),
-                    KeyRequest::Exact(requested) if requested == existing => {
+                }) {
+                match &item.key {
+                    KeyRequest::Suggested(_) => {
                         outcomes.push(AddOutcome::Existing(existing));
+                        continue;
                     }
-                    KeyRequest::Exact(requested) => {
-                        return Err(Error::CannotRename {
-                            existing,
-                            requested,
-                        });
+                    KeyRequest::Exact(requested) if requested == &existing => {
+                        outcomes.push(AddOutcome::Existing(existing));
+                        continue;
                     }
+                    KeyRequest::Exact(requested) => match policy {
+                        ConflictPolicy::Skip => {
+                            return Err(Error::CannotRename {
+                                existing,
+                                requested: requested.clone(),
+                            });
+                        }
+                        ConflictPolicy::Overwrite => Some(existing),
+                    },
                 }
-                continue;
-            }
+            } else {
+                None
+            };
 
             let key = item.key.into_string();
-            match candidate.get(&key) {
-                Some(existing) if existing == &item.source => {
-                    outcomes.push(AddOutcome::Existing(key))
+            let source = item.source;
+            if candidate
+                .get(&key)
+                .is_some_and(|existing| existing == &source)
+            {
+                outcomes.push(AddOutcome::Existing(key));
+                continue;
+            }
+            let reference = projected(&key, &source)?.reference;
+            let identities = reference_identities(&reference);
+            let mut colliding = Vec::new();
+            if candidate.contains_key(&key) {
+                colliding.push(key.clone());
+            }
+            if let Some(existing) = forced_collision
+                && existing != key
+                && !colliding.contains(&existing)
+            {
+                colliding.push(existing);
+            }
+            for identity in &identities {
+                if let Some(other) = index.get(identity)
+                    && other != &key
+                    && !colliding.iter().any(|existing| existing == other)
+                {
+                    colliding.push(other.clone());
                 }
-                Some(_) => return Err(Error::KeyConflict { key }),
-                None => {
-                    candidate.insert(key.clone(), item.source);
+            }
+            match (colliding.is_empty(), policy) {
+                (true, _) => {
+                    for identity in identities {
+                        index.insert(identity, key.clone());
+                    }
+                    candidate.insert(key.clone(), source);
                     outcomes.push(AddOutcome::Added(key));
+                }
+                (false, ConflictPolicy::Skip) => {
+                    let conflicting = colliding.into_iter().next().expect("collision present");
+                    outcomes.push(AddOutcome::Skipped { key, conflicting });
+                }
+                (false, ConflictPolicy::Overwrite) => {
+                    let replaced = colliding.clone();
+                    for removed in &colliding {
+                        candidate.remove(removed);
+                        index.retain(|_, existing| existing != removed);
+                    }
+                    for identity in identities {
+                        index.insert(identity, key.clone());
+                    }
+                    candidate.insert(key.clone(), source);
+                    outcomes.push(AddOutcome::Overwritten { key, replaced });
                 }
             }
         }
@@ -683,23 +762,42 @@ fn validate_references(references: &BTreeMap<String, SourceSnapshot>) -> Result<
                 message: "missing title".into(),
             });
         }
-        for doi in &reference.identifiers.dois {
-            record_identity(&mut identities, format!("doi:{}", normalize_doi(doi)), key)?;
-        }
-        for arxiv in &reference.identifiers.arxiv {
-            record_identity(
-                &mut identities,
-                format!("arxiv:{}", normalize_arxiv(arxiv)),
-                key,
-            )?;
-        }
-        for (provider, values) in &reference.identifiers.providers {
-            for value in values {
-                record_identity(&mut identities, format!("{provider}:{value}"), key)?;
-            }
+        for identity in reference_identities(&reference) {
+            record_identity(&mut identities, identity, key)?;
         }
     }
     Ok(())
+}
+
+/// Normalized identity strings (`doi:` / `arxiv:` / `<provider>:`) for a reference.
+fn reference_identities(reference: &Reference) -> Vec<String> {
+    let mut identities = Vec::new();
+    for doi in &reference.identifiers.dois {
+        identities.push(format!("doi:{}", normalize_doi(doi)));
+    }
+    for arxiv in &reference.identifiers.arxiv {
+        identities.push(format!("arxiv:{}", normalize_arxiv(arxiv)));
+    }
+    for (provider, values) in &reference.identifiers.providers {
+        for value in values {
+            identities.push(format!("{provider}:{value}"));
+        }
+    }
+    identities
+}
+
+/// Build an `identity -> local key` index over already-valid references.
+fn identity_index(
+    references: &BTreeMap<String, SourceSnapshot>,
+) -> Result<HashMap<String, String>, Error> {
+    let mut index = HashMap::new();
+    for (key, source) in references {
+        let reference = projected(key, source)?.reference;
+        for identity in reference_identities(&reference) {
+            index.insert(identity, key.clone());
+        }
+    }
+    Ok(index)
 }
 
 fn record_identity(
@@ -801,6 +899,14 @@ mod tests {
         pending
     }
 
+    /// Add a batch with the default skip-on-collision policy.
+    fn add(
+        manifest: &mut Manifest,
+        pending: Vec<PendingReference>,
+    ) -> Result<Vec<AddOutcome>, Error> {
+        manifest.add_batch(pending, ConflictPolicy::Skip)
+    }
+
     fn updated(provider_key: &str, record_id: u64, timestamp: &str) -> InspireRecord {
         InspireRecord {
             updated: timestamp.into(),
@@ -812,12 +918,11 @@ mod tests {
     fn schema_round_trips_and_generated_output_is_verified() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
-        manifest
-            .add_batch(vec![
-                imported("Zed", "Last", ""),
-                imported("Alpha", "First", ""),
-            ])
-            .unwrap();
+        add(
+            &mut manifest,
+            vec![imported("Zed", "Last", ""), imported("Alpha", "First", "")],
+        )
+        .unwrap();
         let text = fs::read_to_string(dir.path().join(MANIFEST_FILE)).unwrap();
         assert!(text.contains("schema = 1"));
         assert!(text.contains("[references.Alpha]"), "{text}");
@@ -840,18 +945,21 @@ mod tests {
     }
 
     #[test]
-    fn cross_source_identity_conflicts_are_atomic() {
+    fn cross_source_identity_conflicts_skip_by_default_and_rekey_on_overwrite() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
-        manifest
-            .add_batch(vec![imported("A", "A", "doi={10.1/X}")])
-            .unwrap();
+        add(&mut manifest, vec![imported("A", "A", "doi={10.1/X}")]).unwrap();
         let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
         let before_bib = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
-        assert!(
-            manifest
-                .add_batch(vec![imported("B", "B", "doi={10.1/x}")])
-                .is_err()
+
+        // A different key sharing the same normalized DOI is skipped, not fatal,
+        // and leaves both managed files byte-for-byte unchanged.
+        assert_eq!(
+            add(&mut manifest, vec![imported("B", "B", "doi={10.1/x}")]).unwrap(),
+            [AddOutcome::Skipped {
+                key: "B".into(),
+                conflicting: "A".into(),
+            }]
         );
         assert_eq!(
             fs::read(dir.path().join(MANIFEST_FILE)).unwrap(),
@@ -861,15 +969,29 @@ mod tests {
             fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap(),
             before_bib
         );
+
+        // Overwrite rekeys: the old key is removed and the incoming key stored.
+        assert_eq!(
+            manifest
+                .add_batch(
+                    vec![imported("B", "B", "doi={10.1/x}")],
+                    ConflictPolicy::Overwrite,
+                )
+                .unwrap(),
+            [AddOutcome::Overwritten {
+                key: "B".into(),
+                replaced: vec!["A".into()],
+            }]
+        );
+        assert!(manifest.references().contains_key("B"));
+        assert!(!manifest.references().contains_key("A"));
     }
 
     #[test]
     fn suggested_inspire_additions_are_idempotent_by_record_id() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
-        manifest
-            .add_batch(vec![inspire("Local", "Provider:Old", 42)])
-            .unwrap();
+        add(&mut manifest, vec![inspire("Local", "Provider:Old", 42)]).unwrap();
         let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
         let before_bibliography = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
 
@@ -881,7 +1003,7 @@ mod tests {
         entry.bibtex = "@misc{Provider:New,title={Changed provider title}}".into();
 
         assert_eq!(
-            manifest.add_batch(vec![changed]).unwrap(),
+            add(&mut manifest, vec![changed]).unwrap(),
             [AddOutcome::Existing("Local".into())]
         );
         let stored = manifest.references()["Local"].inspire_entry().unwrap();
@@ -900,20 +1022,25 @@ mod tests {
     fn exact_inspire_additions_cannot_rename_an_existing_record() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
-        manifest
-            .add_batch(vec![exact(inspire("Local", "Provider:Old", 42))])
-            .unwrap();
+        add(
+            &mut manifest,
+            vec![exact(inspire("Local", "Provider:Old", 42))],
+        )
+        .unwrap();
         let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
         let before_bibliography = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
 
         assert_eq!(
-            manifest
-                .add_batch(vec![exact(inspire("Local", "Provider:New", 42))])
-                .unwrap(),
+            add(
+                &mut manifest,
+                vec![exact(inspire("Local", "Provider:New", 42))]
+            )
+            .unwrap(),
             [AddOutcome::Existing("Local".into())]
         );
+        // The explicit-key rename of an already stored record stays a default error.
         assert!(matches!(
-            manifest.add_batch(vec![exact(inspire("Renamed", "Provider:New", 42))]),
+            add(&mut manifest, vec![exact(inspire("Renamed", "Provider:New", 42))]),
             Err(Error::CannotRename { existing, requested })
                 if existing == "Local" && requested == "Renamed"
         ));
@@ -925,22 +1052,40 @@ mod tests {
             fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap(),
             before_bibliography
         );
+
+        // Under overwrite the same explicit-key request rekeys the record.
+        assert_eq!(
+            manifest
+                .add_batch(
+                    vec![exact(inspire("Renamed", "Provider:New", 42))],
+                    ConflictPolicy::Overwrite,
+                )
+                .unwrap(),
+            [AddOutcome::Overwritten {
+                key: "Renamed".into(),
+                replaced: vec!["Local".into()],
+            }]
+        );
+        assert!(manifest.references().contains_key("Renamed"));
+        assert!(!manifest.references().contains_key("Local"));
     }
 
     #[test]
-    fn occupied_keys_from_different_records_remain_conflicts() {
+    fn occupied_keys_from_different_records_skip_then_overwrite_in_place() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
-        manifest
-            .add_batch(vec![inspire("Local", "Provider:One", 1)])
-            .unwrap();
+        add(&mut manifest, vec![inspire("Local", "Provider:One", 1)]).unwrap();
         let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
         let before_bibliography = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
 
-        assert!(matches!(
-            manifest.add_batch(vec![inspire("Local", "Provider:Two", 2)]),
-            Err(Error::KeyConflict { key }) if key == "Local"
-        ));
+        // Same local key, different record: skipped without touching the files.
+        assert_eq!(
+            add(&mut manifest, vec![inspire("Local", "Provider:Two", 2)]).unwrap(),
+            [AddOutcome::Skipped {
+                key: "Local".into(),
+                conflicting: "Local".into(),
+            }]
+        );
         assert_eq!(
             fs::read(dir.path().join(MANIFEST_FILE)).unwrap(),
             before_manifest
@@ -949,47 +1094,217 @@ mod tests {
             fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap(),
             before_bibliography
         );
+
+        // Overwrite replaces the content in place under the same key.
+        assert_eq!(
+            manifest
+                .add_batch(
+                    vec![inspire("Local", "Provider:Two", 2)],
+                    ConflictPolicy::Overwrite,
+                )
+                .unwrap(),
+            [AddOutcome::Overwritten {
+                key: "Local".into(),
+                replaced: vec!["Local".into()],
+            }]
+        );
+        assert_eq!(
+            manifest.references()["Local"]
+                .inspire_entry()
+                .unwrap()
+                .record_id,
+            2
+        );
     }
 
     #[test]
-    fn mixed_existing_and_new_batches_preserve_order_and_are_atomic() {
+    fn mixed_existing_new_and_skipped_batches_preserve_order() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
-        manifest
-            .add_batch(vec![inspire("Local", "Provider:Old", 1)])
-            .unwrap();
+        add(&mut manifest, vec![inspire("Local", "Provider:Old", 1)]).unwrap();
 
         assert_eq!(
-            manifest
-                .add_batch(vec![
+            add(
+                &mut manifest,
+                vec![
                     inspire("Provider:New", "Provider:New", 1),
                     inspire("Second", "Provider:Two", 2),
-                ])
-                .unwrap(),
+                ],
+            )
+            .unwrap(),
             [
                 AddOutcome::Existing("Local".into()),
                 AddOutcome::Added("Second".into())
             ]
         );
 
-        let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
-        let before_bibliography = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
-        assert!(
-            manifest
-                .add_batch(vec![
+        // A clean addition and a colliding one coexist: the new key is added and
+        // the collision is skipped rather than aborting the whole batch.
+        assert_eq!(
+            add(
+                &mut manifest,
+                vec![
                     inspire("Third", "Provider:Three", 3),
                     inspire("Second", "Provider:Four", 4),
-                ])
-                .is_err()
+                ],
+            )
+            .unwrap(),
+            [
+                AddOutcome::Added("Third".into()),
+                AddOutcome::Skipped {
+                    key: "Second".into(),
+                    conflicting: "Second".into(),
+                },
+            ]
         );
-        assert!(!manifest.references().contains_key("Third"));
+        assert!(manifest.references().contains_key("Third"));
+        // The skipped colliding entry keeps its original record.
         assert_eq!(
-            fs::read(dir.path().join(MANIFEST_FILE)).unwrap(),
-            before_manifest
+            manifest.references()["Second"]
+                .inspire_entry()
+                .unwrap()
+                .record_id,
+            2
+        );
+    }
+
+    #[test]
+    fn intra_batch_duplicates_resolve_first_wins_then_later_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+
+        // Two entries in one batch sharing a DOI: the first wins, the later one
+        // skips against the running candidate.
+        assert_eq!(
+            add(
+                &mut manifest,
+                vec![
+                    imported("First", "First", "doi={10.1/DUP}"),
+                    imported("Second", "Second", "doi={10.1/dup}"),
+                ],
+            )
+            .unwrap(),
+            [
+                AddOutcome::Added("First".into()),
+                AddOutcome::Skipped {
+                    key: "Second".into(),
+                    conflicting: "First".into(),
+                },
+            ]
+        );
+        assert!(manifest.references().contains_key("First"));
+        assert!(!manifest.references().contains_key("Second"));
+
+        // Under overwrite the later entry rekeys the earlier one it collides with.
+        let other = tempfile::tempdir().unwrap();
+        let mut fresh = Manifest::create(other.path()).unwrap();
+        assert_eq!(
+            fresh
+                .add_batch(
+                    vec![
+                        imported("First", "First", "doi={10.1/DUP}"),
+                        imported("Second", "Second", "doi={10.1/dup}"),
+                    ],
+                    ConflictPolicy::Overwrite,
+                )
+                .unwrap(),
+            [
+                AddOutcome::Added("First".into()),
+                AddOutcome::Overwritten {
+                    key: "Second".into(),
+                    replaced: vec!["First".into()],
+                },
+            ]
+        );
+        assert!(fresh.references().contains_key("Second"));
+        assert!(!fresh.references().contains_key("First"));
+    }
+
+    #[test]
+    fn overwrite_reports_and_removes_every_identity_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        add(
+            &mut manifest,
+            vec![
+                imported("DoiOwner", "DOI owner", "doi={10.1/BRIDGE}"),
+                imported("ArxivOwner", "arXiv owner", "eprint={2401.00042}"),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            manifest
+                .add_batch(
+                    vec![imported(
+                        "Combined",
+                        "Combined",
+                        "doi={10.1/bridge},eprint={2401.00042}",
+                    )],
+                    ConflictPolicy::Overwrite,
+                )
+                .unwrap(),
+            [AddOutcome::Overwritten {
+                key: "Combined".into(),
+                replaced: vec!["DoiOwner".into(), "ArxivOwner".into()],
+            }]
         );
         assert_eq!(
-            fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap(),
-            before_bibliography
+            manifest.references().keys().cloned().collect::<Vec<_>>(),
+            ["Combined"]
+        );
+    }
+
+    #[test]
+    fn exact_inspire_overwrite_cleans_all_collisions_from_the_running_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        add(
+            &mut manifest,
+            vec![
+                exact(inspire("Local", "Provider:Old", 42)),
+                imported("Renamed", "Requested key occupant", "doi={10.1/FREED}"),
+                imported("ArxivOwner", "arXiv owner", "eprint={2401.00042}"),
+            ],
+        )
+        .unwrap();
+
+        let mut refreshed = record("Provider:New", 42);
+        refreshed.bibtex = "@misc{Provider:New,title={Refreshed},eprint={2401.00042}}".into();
+        refreshed.arxiv = Some("2401.00042".into());
+        let pending = PendingReference {
+            key: KeyRequest::Exact("Renamed".into()),
+            source: SourceSnapshot::inspire(refreshed),
+        };
+
+        assert_eq!(
+            manifest
+                .add_batch(
+                    vec![
+                        pending,
+                        imported("Freed", "Freed identity", "doi={10.1/freed}"),
+                    ],
+                    ConflictPolicy::Overwrite,
+                )
+                .unwrap(),
+            [
+                AddOutcome::Overwritten {
+                    key: "Renamed".into(),
+                    replaced: vec!["Renamed".into(), "Local".into(), "ArxivOwner".into(),],
+                },
+                AddOutcome::Added("Freed".into()),
+            ]
+        );
+        assert_eq!(
+            manifest.references().keys().cloned().collect::<Vec<_>>(),
+            ["Freed", "Renamed"]
+        );
+        assert_eq!(
+            manifest.references()["Renamed"]
+                .inspire_entry()
+                .unwrap()
+                .record_id,
+            42
         );
     }
 
@@ -1031,9 +1346,7 @@ mod tests {
     fn nested_shape_and_unknown_fields_are_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
-        manifest
-            .add_batch(vec![imported("Alpha", "First", "")])
-            .unwrap();
+        add(&mut manifest, vec![imported("Alpha", "First", "")]).unwrap();
         let path = dir.path().join(MANIFEST_FILE);
         let flat = fs::read_to_string(&path).unwrap();
 
@@ -1063,12 +1376,14 @@ mod tests {
             arxiv: Some("2401.00001v9".into()),
             doi: Some("10.1/BIBTEXCASE".into()),
         };
-        manifest
-            .add_batch(vec![PendingReference {
+        add(
+            &mut manifest,
+            vec![PendingReference {
                 key: KeyRequest::Suggested("Local".into()),
                 source: SourceSnapshot::inspire(record),
-            }])
-            .unwrap();
+            }],
+        )
+        .unwrap();
         let projected = manifest.projected().unwrap();
         let reference = &projected
             .iter()
@@ -1091,12 +1406,14 @@ mod tests {
             arxiv: Some("2401.00001v3".into()),
             doi: None,
         };
-        manifest
-            .add_batch(vec![PendingReference {
+        add(
+            &mut manifest,
+            vec![PendingReference {
                 key: KeyRequest::Suggested("Local".into()),
                 source: SourceSnapshot::inspire(record),
-            }])
-            .unwrap();
+            }],
+        )
+        .unwrap();
         let projected = manifest.projected().unwrap();
         let reference = &projected
             .iter()
@@ -1112,7 +1429,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
         assert!(matches!(
-            manifest.add_batch(vec![inspire("Local", "Key", 0)]),
+            add(&mut manifest, vec![inspire("Local", "Key", 0)]),
             Err(Error::InvalidSource { .. })
         ));
     }
@@ -1150,7 +1467,7 @@ mod tests {
             }),
         };
         assert!(matches!(
-            manifest.add_batch(vec![mismatched]),
+            add(&mut manifest, vec![mismatched]),
             Err(Error::InvalidSource { .. })
         ));
     }
@@ -1159,13 +1476,15 @@ mod tests {
     fn refresh_reconciles_out_of_order_ids_without_changing_local_keys() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
-        manifest
-            .add_batch(vec![
+        add(
+            &mut manifest,
+            vec![
                 inspire("LocalA", "ProviderA", 1),
                 inspire("LocalB", "ProviderB", 2),
                 imported("Imported", "Imported", ""),
-            ])
-            .unwrap();
+            ],
+        )
+        .unwrap();
         assert_eq!(manifest.inspire_record_ids(), [1, 2]);
 
         let refreshed = vec![
@@ -1197,12 +1516,14 @@ mod tests {
     fn invalid_refresh_record_sets_leave_both_files_unchanged() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
-        manifest
-            .add_batch(vec![
+        add(
+            &mut manifest,
+            vec![
                 inspire("LocalA", "ProviderA", 1),
                 inspire("LocalB", "ProviderB", 2),
-            ])
-            .unwrap();
+            ],
+        )
+        .unwrap();
         let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
         let before_bibliography = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
         let one = updated("ProviderA", 1, "new");
@@ -1232,13 +1553,15 @@ mod tests {
     fn missing_refresh_record_ids_are_sorted() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
-        manifest
-            .add_batch(vec![
+        add(
+            &mut manifest,
+            vec![
                 inspire("Ten", "Provider:Ten", 10),
                 inspire("Two", "Provider:Two", 2),
                 inspire("Seven", "Provider:Seven", 7),
-            ])
-            .unwrap();
+            ],
+        )
+        .unwrap();
 
         assert!(matches!(
             manifest.replace_inspire(Vec::new()),
