@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/binado/cita/compare/cita-v0.2.0...cita-v0.2.1) - 2026-07-22
+
+### Added
+
+- accept canonical reference URLs ([#28](https://github.com/binado/cita/pull/28))
+
 ## [0.2.0](https://github.com/binado/cita/compare/cita-v0.1.0...cita-v0.2.0) - 2026-07-21
 
 ### Added
