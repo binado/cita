@@ -525,7 +525,7 @@ fn add_exact_overwrite_reports_and_removes_all_collisions() {
 }
 
 #[test]
-fn add_uses_json_and_bibtex_and_preserves_an_explicit_local_key() {
+fn add_accepts_an_arxiv_url_and_preserves_an_explicit_local_key() {
     let directory = tempfile::tempdir().unwrap();
     success(cita(directory.path(), &["init"]));
     let json = json_record(42, "Provider:42", "Provider title", "2401.00042");
@@ -534,7 +534,12 @@ fn add_uses_json_and_bibtex_and_preserves_an_explicit_local_key() {
     assert_eq!(
         success(cita_with_server(
             directory.path(),
-            &["add", "--key", "Local:42", "2401.00042"],
+            &[
+                "add",
+                "--key",
+                "Local:42",
+                "https://arxiv.org/abs/2401.00042",
+            ],
             &base
         )),
         "added Local:42\n"
@@ -694,7 +699,7 @@ fn stale_provider_texkeys_remain_selectable_for_save_and_remove() {
     cached_pdf_for(directory.path(), "2401.00042", b"%PDF-cached");
     let (stdout, stderr) = success_streams(cita_with_server(
         directory.path(),
-        &["fetch", "--save", "inspire:42"],
+        &["fetch", "--save", "https://inspirehep.net/literature/42"],
         "http://127.0.0.1:1/",
     ));
     assert_eq!(
@@ -965,7 +970,10 @@ fn remove_is_atomic_and_resolves_identity_selectors() {
     );
     assert_eq!(fs::read(&manifest_path).unwrap(), before);
     assert_eq!(
-        success(cita(directory.path(), &["remove", "doi:10.1000/example"])),
+        success(cita(
+            directory.path(),
+            &["remove", "https://doi.org/10.1000/example"]
+        )),
         "Removed Alpha\n"
     );
     assert!(

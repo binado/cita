@@ -178,7 +178,9 @@ dependencies = [
 name = "cita-core"
 version = "0.2.0"
 dependencies = [
+ "percent-encoding",
  "thiserror",
+ "url",
 ]
 
 [[package]]

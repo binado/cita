@@ -1,5 +1,7 @@
-use std::{fmt, str::FromStr};
+use percent_encoding::percent_decode_str;
+use std::{borrow::Cow, fmt, str::FromStr};
 use thiserror::Error as ThisError;
+use url::Url;
 
 #[derive(Clone, Debug, PartialEq, Eq, ThisError)]
 /// Error returned when a reference locator cannot be parsed.
@@ -43,9 +45,8 @@ impl FromStr for Locator {
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         let input = input.trim();
         if let Some(value) = strip_prefix_ci(input, "inspire:") {
-            let id = value.parse::<u64>().map_err(|_| invalid(input))?;
-            return (id > 0)
-                .then_some(Self::Inspire(id))
+            return parse_inspire(value)
+                .map(Self::Inspire)
                 .ok_or_else(|| invalid(input));
         }
         if let Some(value) = strip_prefix_ci(input, "arxiv:") {
@@ -58,15 +59,66 @@ impl FromStr for Locator {
                 .map(Self::Doi)
                 .ok_or_else(|| invalid(input));
         }
+        if let Some(locator) = parse_url(input) {
+            return Ok(locator);
+        }
         parse_arxiv(input)
             .map(Self::Arxiv)
             .ok_or_else(|| invalid(input))
     }
 }
 
+fn parse_url(value: &str) -> Option<Locator> {
+    let url = Url::parse(value).ok()?;
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+    {
+        return None;
+    }
+    match url.host_str()? {
+        "arxiv.org" => {
+            let decoded = decoded_path(&url)?;
+            let path = decoded.strip_suffix('/').unwrap_or(&decoded);
+            let (id, pdf) = if let Some(id) = path.strip_prefix("/abs/") {
+                (id, false)
+            } else {
+                (path.strip_prefix("/pdf/")?, true)
+            };
+            let id = if pdf {
+                id.strip_suffix(".pdf").unwrap_or(id)
+            } else {
+                id
+            };
+            parse_arxiv(id).map(Locator::Arxiv)
+        }
+        "inspirehep.net" => {
+            let decoded = decoded_path(&url)?;
+            let path = decoded.strip_suffix('/').unwrap_or(&decoded);
+            path.strip_prefix("/literature/")
+                .and_then(parse_inspire)
+                .map(Locator::Inspire)
+        }
+        "doi.org" => {
+            let decoded = decoded_path(&url)?;
+            let doi = decoded.strip_prefix('/')?;
+            if doi.trim() != doi {
+                return None;
+            }
+            parse_doi(doi).map(Locator::Doi)
+        }
+        _ => None,
+    }
+}
+
+fn decoded_path(url: &Url) -> Option<Cow<'_, str>> {
+    percent_decode_str(url.path()).decode_utf8().ok()
+}
+
 fn invalid(input: &str) -> Error {
     Error::InvalidLocator(format!(
-        "`{input}` (use an arXiv id or an explicit arxiv:, doi:, or inspire: locator)"
+        "`{input}` (use an arXiv id, an explicit arxiv:, doi:, or inspire: locator, or a canonical URL)"
     ))
 }
 
@@ -94,6 +146,11 @@ fn parse_arxiv(value: &str) -> Option<String> {
             && number.bytes().all(|c| c.is_ascii_digit())
     });
     (modern || legacy).then_some(normalized)
+}
+
+fn parse_inspire(value: &str) -> Option<u64> {
+    let id = value.parse::<u64>().ok()?;
+    (id > 0).then_some(id)
 }
 
 /// Strip a trailing lowercase `v` + non-empty digit run from an arXiv id.
@@ -162,8 +219,74 @@ mod tests {
     }
 
     #[test]
+    fn accepts_arxiv_urls_as_locators() {
+        assert_eq!(
+            "https://arxiv.org/abs/2506.14764v2".parse(),
+            Ok(Locator::Arxiv("2506.14764".into()))
+        );
+    }
+
+    #[test]
+    fn accepts_arxiv_pdf_urls_as_locators() {
+        assert_eq!(
+            "https://arxiv.org/pdf/2506.14764v3.pdf".parse(),
+            Ok(Locator::Arxiv("2506.14764".into()))
+        );
+    }
+
+    #[test]
+    fn accepts_canonical_arxiv_url_variants() {
+        assert_eq!(
+            "https://arxiv.org/pdf/2506.14764?download=1#page=2".parse(),
+            Ok(Locator::Arxiv("2506.14764".into()))
+        );
+        assert_eq!(
+            "  https://arxiv.org/abs/hep-th%2F9901001/  ".parse(),
+            Ok(Locator::Arxiv("hep-th/9901001".into()))
+        );
+    }
+
+    #[test]
+    fn accepts_inspire_literature_urls_as_locators() {
+        assert_eq!(
+            "https://inspirehep.net/literature/1234567/?utm_source=cita#metadata".parse(),
+            Ok(Locator::Inspire(1_234_567))
+        );
+    }
+
+    #[test]
+    fn accepts_doi_urls_as_locators() {
+        assert_eq!(
+            "https://doi.org/10.1000%2FABC%2FDef%28ghi%29?utm_source=cita#details".parse(),
+            Ok(Locator::Doi("10.1000/abc/def(ghi)".into()))
+        );
+    }
+
+    #[test]
     fn rejects_ambiguous_and_invalid_values() {
         for value in ["10.1000/x", "arxiv:nope", "inspire:0", ""] {
+            assert!(value.parse::<Locator>().is_err(), "{value}");
+        }
+    }
+
+    #[test]
+    fn rejects_noncanonical_and_malformed_urls() {
+        for value in [
+            "http://arxiv.org/abs/2506.14764",
+            "https://www.arxiv.org/abs/2506.14764",
+            "https://arxiv.org.example/abs/2506.14764",
+            "https://user@arxiv.org/abs/2506.14764",
+            "https://arxiv.org:8443/abs/2506.14764",
+            "https://arxiv.org/export/2506.14764",
+            "https://arxiv.org/abs/2506.14764/extra",
+            "https://arxiv.org/abs/2506.14764.pdf",
+            "https://inspirehep.net/literature/0",
+            "https://inspirehep.net/literature/nope",
+            "https://inspirehep.net/literature/42/extra",
+            "https://dx.doi.org/10.1000/example",
+            "https://doi.org/not-a-doi",
+            "https://doi.org/10.1000/example%20",
+        ] {
             assert!(value.parse::<Locator>().is_err(), "{value}");
         }
     }
