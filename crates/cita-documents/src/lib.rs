@@ -456,6 +456,7 @@ fn extract_source_archive(bytes: &[u8], destination: &Path, arxiv_id: &str) -> R
 
     let decoder = GzDecoder::new(Cursor::new(bytes));
     let mut archive = tar::Archive::new(decoder);
+    let entries = archive
         .entries()
         .map_err(|error| invalid_source_archive(arxiv_id, error))?;
     let mut file_count = 0_usize;
