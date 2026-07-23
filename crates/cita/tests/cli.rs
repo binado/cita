@@ -204,6 +204,12 @@ fn cached_pdf_for(directory: &Path, arxiv: &str, bytes: &[u8]) {
     fs::write(pdf, bytes).unwrap();
 }
 
+fn cached_source_for(directory: &Path, arxiv: &str, name: &str, bytes: &[u8]) {
+    let source = directory.join(format!(".cita/files/arxiv/{arxiv}/source/{name}"));
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(source, bytes).unwrap();
+}
+
 #[test]
 fn init_creates_schema_one_and_imports_an_existing_bibliography() {
     let empty = tempfile::tempdir().unwrap();
@@ -1121,6 +1127,93 @@ fn fetch_url_prints_only_the_url_without_touching_the_cache() {
         "https://arxiv.org/pdf/2001.00001\n"
     );
     assert!(!directory.path().join(".cita").exists());
+}
+
+#[test]
+fn fetch_source_reuses_the_cached_directory_from_nested_working_directories() {
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    cached_source_for(
+        directory.path(),
+        "2001.00001",
+        "figures/plot.tex",
+        b"cached",
+    );
+    let nested = directory.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+
+    let (stdout, stderr) =
+        success_streams(cita(&nested, &["fetch", "--source", "--cache-only", "Zed"]));
+    assert_eq!(
+        stdout,
+        format!(
+            "{}\n",
+            directory
+                .path()
+                .canonicalize()
+                .unwrap()
+                .join(".cita/files/arxiv/2001.00001/source")
+                .display()
+        )
+    );
+    assert_eq!(stderr, "Already fetched source for Zed\n");
+}
+
+#[test]
+fn fetch_source_cache_miss_has_guidance_and_creates_no_cache_state() {
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    fs::remove_dir_all(directory.path().join(".cita")).unwrap();
+
+    let error = failure(cita(
+        directory.path(),
+        &["fetch", "--source", "--cache-only", "Zed"],
+    ));
+    assert!(error.contains("source is not cached"), "{error}");
+    assert!(error.contains("rerun without --cache-only"), "{error}");
+    assert!(!directory.path().join(".cita").exists());
+}
+
+#[test]
+fn fetch_source_conflicts_with_url_and_still_checks_for_arxiv_ids() {
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    let conflict = failure(cita(
+        directory.path(),
+        &["fetch", "--source", "--url", "Zed"],
+    ));
+    assert!(conflict.contains("cannot be used with"), "{conflict}");
+
+    let missing = failure(cita(
+        directory.path(),
+        &["fetch", "--source", "--cache-only", "Alpha"],
+    ));
+    assert!(
+        missing.contains("reference `Alpha` has no arXiv eprint"),
+        "{missing}"
+    );
+}
+
+#[test]
+fn fetch_source_save_uses_the_selected_local_key() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    cached_source_for(directory.path(), "2401.00042", "main.tex", b"cached source");
+    let record = json_record(42, "Provider:42", "Saved", "2401.00042");
+    let bibtex = entry("Provider:42", "Saved", "eprint={2401.00042},");
+    let (base, handle) = server(vec![("200 OK", record), ("200 OK", bibtex)]);
+
+    let (stdout, stderr) = success_streams(cita_with_server(
+        directory.path(),
+        &["fetch", "--source", "--cache-only", "--save", "2401.00042"],
+        &base,
+    ));
+    handle.join().unwrap();
+    assert!(stdout.ends_with(".cita/files/arxiv/2401.00042/source\n"));
+    assert_eq!(
+        stderr,
+        "added Provider:42\nAlready fetched source for Provider:42\n"
+    );
 }
 
 #[test]

@@ -2,7 +2,7 @@ use super::{add_message, ensure_cache_layout, find_manifest, highlight_style, in
 use anyhow::{Context, Result};
 use cita_core::{Locator, MetadataProvider, Reference, ReferenceSource};
 use cita_documents::{
-    DocumentStore, Error as DocumentError, FetchOutcome, FetchPolicy, arxiv_pdf_url,
+    ArtifactKind, DocumentStore, Error as DocumentError, FetchOutcome, FetchPolicy, arxiv_pdf_url,
 };
 use cita_manifest::{
     AddOutcome, ConflictPolicy, KeyRequest, Manifest, PendingReference, SourceSnapshot,
@@ -74,24 +74,30 @@ async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn fetch(
-    cwd: &Path,
-    selector: &str,
-    force: bool,
-    cache_only: bool,
-    return_url: bool,
-    open: bool,
-    save: bool,
-) -> Result<()> {
-    let policy = if force {
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct FetchOptions {
+    pub(crate) force: bool,
+    pub(crate) cache_only: bool,
+    pub(crate) return_url: bool,
+    pub(crate) source: bool,
+    pub(crate) open: bool,
+    pub(crate) save: bool,
+}
+
+pub(crate) async fn fetch(cwd: &Path, selector: &str, options: FetchOptions) -> Result<()> {
+    let policy = if options.force {
         FetchPolicy::Force
-    } else if cache_only {
+    } else if options.cache_only {
         FetchPolicy::CacheOnly
     } else {
         FetchPolicy::UseCache
     };
-    let selected = select(cwd, selector, save).await?;
+    let kind = if options.source {
+        ArtifactKind::Source
+    } else {
+        ArtifactKind::Pdf
+    };
+    let selected = select(cwd, selector, options.save).await?;
     if let Some(outcome) = &selected.save_outcome {
         eprintln!(
             "{}",
@@ -105,14 +111,14 @@ pub(crate) async fn fetch(
         .first()
         .ok_or_else(|| anyhow::anyhow!("reference `{}` has no arXiv eprint", selected.key))?;
     let url = arxiv_pdf_url(arxiv)?.to_string();
-    let target = if return_url {
+    let target = if options.return_url {
         FetchTarget::Url(url)
     } else {
-        let outcome = fetch_selected(&selected.manifest_path, arxiv, policy).await?;
-        eprintln!("{}", fetch_message(&selected.key, &url, &outcome));
+        let outcome = fetch_selected(&selected.manifest_path, arxiv, kind, policy).await?;
+        eprintln!("{}", fetch_message(&selected.key, &url, kind, &outcome));
         FetchTarget::Path(outcome.path().to_owned())
     };
-    if open {
+    if options.open {
         open_target(&target)?;
         eprintln!("Opened {target}");
     }
@@ -144,32 +150,45 @@ fn open_target(target: &FetchTarget) -> Result<()> {
     }
 }
 
-async fn fetch_selected(path: &Path, arxiv: &str, policy: FetchPolicy) -> Result<FetchOutcome> {
+async fn fetch_selected(
+    path: &Path,
+    arxiv: &str,
+    kind: ArtifactKind,
+    policy: FetchPolicy,
+) -> Result<FetchOutcome> {
     let root = path.parent().unwrap_or_else(|| Path::new("."));
     if policy != FetchPolicy::CacheOnly {
         ensure_cache_layout(root)?;
     }
     DocumentStore::new(root.join(".cita/files"))?
-        .fetch(arxiv, policy)
+        .fetch_artifact(arxiv, kind, policy)
         .await
         .map_err(document_error_with_hint)
 }
 
 fn document_error_with_hint(error: DocumentError) -> anyhow::Error {
     match error {
-        error @ DocumentError::InvalidCachedPdf(_) => {
+        error @ (DocumentError::InvalidCachedPdf(_) | DocumentError::InvalidCachedSource(_)) => {
             anyhow::Error::from(error).context("retry with --force")
         }
-        error @ DocumentError::NotCached(_) => {
+        error @ (DocumentError::NotCached(_) | DocumentError::SourceNotCached(_)) => {
             anyhow::Error::from(error).context("rerun without --cache-only")
         }
         error => error.into(),
     }
 }
-fn fetch_message(key: &str, url: &str, outcome: &FetchOutcome) -> String {
-    match outcome {
-        FetchOutcome::Downloaded(_) => format!("Fetched {key}: {url}"),
-        FetchOutcome::Cached(_) => format!("Already fetched {key}: {url}"),
+fn fetch_message(key: &str, url: &str, kind: ArtifactKind, outcome: &FetchOutcome) -> String {
+    match (kind, outcome) {
+        (ArtifactKind::Pdf, FetchOutcome::Downloaded(_)) => format!("Fetched {key}: {url}"),
+        (ArtifactKind::Pdf, FetchOutcome::Cached(_)) => {
+            format!("Already fetched {key}: {url}")
+        }
+        (ArtifactKind::Source, FetchOutcome::Downloaded(_)) => {
+            format!("Fetched source for {key}")
+        }
+        (ArtifactKind::Source, FetchOutcome::Cached(_)) => {
+            format!("Already fetched source for {key}")
+        }
     }
 }
 
@@ -185,6 +204,30 @@ mod tests {
         assert_eq!(
             FetchTarget::Path(PathBuf::from("/tmp/1207.7214.pdf")).to_string(),
             "/tmp/1207.7214.pdf"
+        );
+    }
+
+    #[test]
+    fn fetch_messages_distinguish_pdfs_and_source_packages() {
+        let downloaded = FetchOutcome::Downloaded(PathBuf::from("/tmp/source"));
+        let cached = FetchOutcome::Cached(PathBuf::from("/tmp/source"));
+        assert_eq!(
+            fetch_message(
+                "Paper",
+                "https://arxiv.org/pdf/1207.7214",
+                ArtifactKind::Source,
+                &downloaded
+            ),
+            "Fetched source for Paper"
+        );
+        assert_eq!(
+            fetch_message(
+                "Paper",
+                "https://arxiv.org/pdf/1207.7214",
+                ArtifactKind::Source,
+                &cached
+            ),
+            "Already fetched source for Paper"
         );
     }
 }
