@@ -89,8 +89,7 @@ work as selectors.
   existing standalone `references.bib`, or adopt an existing verified cita
   project. Initialization completes before registration, so a registry write
   failure leaves a usable standalone shelf for a safe retry.
-- `cita library shelf <name>
-  <add|import|remove|list|generate|export|sync|fetch|commit> ...` runs the
+- `cita library shelf <name> <add|import|remove|list|generate|export|sync|fetch|commit> ...` runs the
   corresponding command in that shelf. Import and export paths remain relative
   to the directory where the user invoked cita, not to the shelf.
 - `cita library generate`, `cita library export`, and `cita library sync`
