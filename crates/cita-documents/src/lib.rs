@@ -5,8 +5,8 @@ use cita_core::Locator;
 use flate2::read::GzDecoder;
 use reqwest::StatusCode;
 use std::{
-    fmt, fs,
-    io::{Cursor, Read, Seek, SeekFrom, Write},
+    cmp, fmt, fs,
+    io::{self, Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
     time::Duration,
 };
@@ -17,6 +17,25 @@ use url::Url;
 const DEFAULT_BASE_URL: &str = "https://arxiv.org/";
 const DEFAULT_USER_AGENT: &str = concat!("cita-documents/", env!("CARGO_PKG_VERSION"));
 const PDF_SIGNATURE: &[u8] = b"%PDF-";
+/// Upper bound on the compressed `/src/` response body.
+const MAX_COMPRESSED_SOURCE_BYTES: usize = 64 * 1024 * 1024;
+/// Upper bound on gzip-decompressed bytes read while parsing the tar stream.
+const MAX_DECOMPRESSED_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
+/// Upper bound on regular files extracted from one source package.
+const MAX_SOURCE_ARCHIVE_FILES: usize = 10_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SourceArchiveLimits {
+    max_compressed_bytes: usize,
+    max_decompressed_bytes: u64,
+    max_files: usize,
+}
+
+const DEFAULT_SOURCE_LIMITS: SourceArchiveLimits = SourceArchiveLimits {
+    max_compressed_bytes: MAX_COMPRESSED_SOURCE_BYTES,
+    max_decompressed_bytes: MAX_DECOMPRESSED_SOURCE_BYTES,
+    max_files: MAX_SOURCE_ARCHIVE_FILES,
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 /// Controls whether a document fetch may use or update the cache.
@@ -64,6 +83,7 @@ pub struct DocumentStore {
     cache_root: PathBuf,
     http: reqwest::Client,
     base_url: Url,
+    source_limits: SourceArchiveLimits,
 }
 
 impl DocumentStore {
@@ -193,6 +213,12 @@ impl DocumentStore {
 
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(Error::Transport)? {
+            if bytes.len().saturating_add(chunk.len()) > self.source_limits.max_compressed_bytes {
+                return Err(invalid_source_archive(
+                    &arxiv_id,
+                    "compressed source exceeds size limit",
+                ));
+            }
             bytes.extend_from_slice(&chunk);
         }
         if bytes.starts_with(PDF_SIGNATURE) {
@@ -203,7 +229,7 @@ impl DocumentStore {
             path: destination.clone(),
             source,
         })?;
-        extract_source_archive(&bytes, staging.path(), &arxiv_id)?;
+        extract_source_archive_with_limits(&bytes, staging.path(), &arxiv_id, self.source_limits)?;
         publish_source(staging, &destination)?;
         Ok(FetchOutcome::Downloaded(destination))
     }
@@ -264,6 +290,7 @@ impl DocumentStoreBuilder {
             cache_root: self.cache_root,
             http,
             base_url,
+            source_limits: DEFAULT_SOURCE_LIMITS,
         })
     }
 }
@@ -446,7 +473,18 @@ fn validate_cached_source(path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-fn extract_source_archive(bytes: &[u8], destination: &Path, arxiv_id: &str) -> Result<(), Error> {
+fn extract_source_archive_with_limits(
+    bytes: &[u8],
+    destination: &Path,
+    arxiv_id: &str,
+    limits: SourceArchiveLimits,
+) -> Result<(), Error> {
+    if bytes.len() > limits.max_compressed_bytes {
+        return Err(invalid_source_archive(
+            arxiv_id,
+            "compressed source exceeds size limit",
+        ));
+    }
     if !bytes.starts_with(&[0x1f, 0x8b]) {
         return Err(invalid_source_archive(
             arxiv_id,
@@ -454,12 +492,13 @@ fn extract_source_archive(bytes: &[u8], destination: &Path, arxiv_id: &str) -> R
         ));
     }
 
-    let decoder = GzDecoder::new(Cursor::new(bytes));
+    let decoder = LimitedReader::new(GzDecoder::new(bytes), limits.max_decompressed_bytes);
     let mut archive = tar::Archive::new(decoder);
     let entries = archive
         .entries()
         .map_err(|error| invalid_source_archive(arxiv_id, error))?;
     let mut file_count = 0_usize;
+    let mut extracted_bytes = 0_u64;
 
     for entry in entries {
         let mut entry = entry.map_err(|error| invalid_source_archive(arxiv_id, error))?;
@@ -486,6 +525,22 @@ fn extract_source_archive(bytes: &[u8], destination: &Path, arxiv_id: &str) -> R
                 source,
             })?;
         } else if entry_type.is_file() {
+            if file_count >= limits.max_files {
+                return Err(invalid_source_archive(
+                    arxiv_id,
+                    "source archive has too many files",
+                ));
+            }
+            let entry_size = entry.size();
+            let next_total = extracted_bytes.saturating_add(entry_size);
+            if entry_size > limits.max_decompressed_bytes
+                || next_total > limits.max_decompressed_bytes
+            {
+                return Err(invalid_source_archive(
+                    arxiv_id,
+                    "extracted source exceeds size limit",
+                ));
+            }
             let parent = output
                 .parent()
                 .expect("a validated relative archive path has a parent");
@@ -501,6 +556,7 @@ fn extract_source_archive(bytes: &[u8], destination: &Path, arxiv_id: &str) -> R
                     path: output.clone(),
                     source,
                 })?;
+            let mut written = 0_u64;
             let mut buffer = [0_u8; 8192];
             loop {
                 let length = entry
@@ -508,6 +564,15 @@ fn extract_source_archive(bytes: &[u8], destination: &Path, arxiv_id: &str) -> R
                     .map_err(|error| invalid_source_archive(arxiv_id, error))?;
                 if length == 0 {
                     break;
+                }
+                written = written.saturating_add(length as u64);
+                if written > entry_size
+                    || extracted_bytes.saturating_add(written) > limits.max_decompressed_bytes
+                {
+                    return Err(invalid_source_archive(
+                        arxiv_id,
+                        "extracted source exceeds size limit",
+                    ));
                 }
                 file.write_all(&buffer[..length])
                     .map_err(|source| Error::ExtractSource {
@@ -519,6 +584,7 @@ fn extract_source_archive(bytes: &[u8], destination: &Path, arxiv_id: &str) -> R
                 path: output,
                 source,
             })?;
+            extracted_bytes = extracted_bytes.saturating_add(written);
             file_count += 1;
         } else {
             return Err(invalid_source_archive(
@@ -532,6 +598,35 @@ fn extract_source_archive(bytes: &[u8], destination: &Path, arxiv_id: &str) -> R
         return Err(invalid_source_archive(arxiv_id, "archive is empty"));
     }
     Ok(())
+}
+
+struct LimitedReader<R> {
+    inner: R,
+    remaining: u64,
+}
+
+impl<R> LimitedReader<R> {
+    fn new(inner: R, limit: u64) -> Self {
+        Self {
+            inner,
+            remaining: limit,
+        }
+    }
+}
+
+impl<R: Read> Read for LimitedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.remaining == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "decompressed source exceeds size limit",
+            ));
+        }
+        let max = cmp::min(buf.len() as u64, self.remaining) as usize;
+        let read = self.inner.read(&mut buf[..max])?;
+        self.remaining -= read as u64;
+        Ok(read)
+    }
 }
 
 fn safe_relative_archive_path(path: &Path) -> Option<PathBuf> {
@@ -957,6 +1052,105 @@ mod tests {
             assert!(!directory.path().join("escape.tex").exists());
             assert!(!directory.path().join("arxiv/1207.7214/source").exists());
         }
+    }
+
+    #[test]
+    fn rejects_source_archives_that_exceed_size_limits() {
+        let oversized = gzip_tar(&[("main.tex", b"hello world")]);
+        let directory = tempfile::tempdir().unwrap();
+        let error = extract_source_archive_with_limits(
+            &oversized,
+            directory.path(),
+            "1207.7214",
+            SourceArchiveLimits {
+                max_compressed_bytes: oversized.len() - 1,
+                max_decompressed_bytes: MAX_DECOMPRESSED_SOURCE_BYTES,
+                max_files: MAX_SOURCE_ARCHIVE_FILES,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::InvalidSourceArchive { reason, .. } if reason.contains("compressed source exceeds size limit")
+        ));
+
+        let large = vec![b'a'; 8 * 1024];
+        let archive = gzip_tar(&[("main.tex", large.as_slice())]);
+        let directory = tempfile::tempdir().unwrap();
+        let error = extract_source_archive_with_limits(
+            &archive,
+            directory.path(),
+            "1207.7214",
+            SourceArchiveLimits {
+                max_compressed_bytes: MAX_COMPRESSED_SOURCE_BYTES,
+                max_decompressed_bytes: 1024,
+                max_files: MAX_SOURCE_ARCHIVE_FILES,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::InvalidSourceArchive { reason, .. } if reason.contains("extracted source exceeds size limit")
+        ));
+        assert!(directory.path().read_dir().unwrap().next().is_none());
+
+        let archive = gzip_tar(&[("a.tex", b"a"), ("b.tex", b"b"), ("c.tex", b"c")]);
+        let directory = tempfile::tempdir().unwrap();
+        let error = extract_source_archive_with_limits(
+            &archive,
+            directory.path(),
+            "1207.7214",
+            SourceArchiveLimits {
+                max_compressed_bytes: MAX_COMPRESSED_SOURCE_BYTES,
+                max_decompressed_bytes: MAX_DECOMPRESSED_SOURCE_BYTES,
+                max_files: 2,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::InvalidSourceArchive { reason, .. } if reason.contains("too many files")
+        ));
+    }
+
+    #[test]
+    fn limited_reader_enforces_decompressed_budget() {
+        let data = vec![1_u8; 32];
+        let mut reader = LimitedReader::new(data.as_slice(), 8);
+        let mut buffer = [0_u8; 16];
+        assert_eq!(reader.read(&mut buffer).unwrap(), 8);
+        assert_eq!(&buffer[..8], &[1_u8; 8]);
+        let error = reader.read(&mut buffer).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_compressed_source_downloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let body = vec![0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff]
+            .into_iter()
+            .chain(std::iter::repeat_n(0_u8, 64))
+            .collect::<Vec<_>>();
+        let (base_url, handle) = server("200 OK", &body);
+        let mut store = DocumentStore::builder(directory.path())
+            .base_url(base_url)
+            .build()
+            .unwrap();
+        store.source_limits = SourceArchiveLimits {
+            max_compressed_bytes: 32,
+            max_decompressed_bytes: MAX_DECOMPRESSED_SOURCE_BYTES,
+            max_files: MAX_SOURCE_ARCHIVE_FILES,
+        };
+        let error = store
+            .fetch_artifact("1207.7214", ArtifactKind::Source, FetchPolicy::UseCache)
+            .await
+            .unwrap_err();
+        handle.join().unwrap();
+        assert!(matches!(
+            error,
+            Error::InvalidSourceArchive { reason, .. } if reason.contains("compressed source exceeds size limit")
+        ));
+        assert!(!directory.path().join("arxiv/1207.7214/source").exists());
     }
 
     #[tokio::test]
