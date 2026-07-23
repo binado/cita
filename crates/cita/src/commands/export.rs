@@ -1,0 +1,103 @@
+use super::find_manifest;
+use anyhow::{Context, Result, anyhow, bail};
+use cita_bibliography::insert_field;
+use cita_core::ReferenceSource;
+use cita_documents::arxiv_pdf_url;
+use cita_manifest::{Manifest, SourceSnapshot, atomic_write};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+const URL_FIELD: &str = "url";
+
+/// Write a derived bibliography and report where it went.
+pub(crate) fn export(project: &Path, caller: &Path, output: Option<&Path>) -> Result<()> {
+    let path = export_outcome(project, caller, output)?;
+    println!("Exported {}", path.display());
+    Ok(())
+}
+
+/// Write a derived bibliography for the project containing `project`.
+///
+/// A relative `output` resolves against `caller`, matching how import paths use
+/// the caller's directory rather than the resolved project.
+pub(crate) fn export_outcome(
+    project: &Path,
+    caller: &Path,
+    output: Option<&Path>,
+) -> Result<PathBuf> {
+    // The export claims to hold the same entries as references.bib, so a
+    // drifted bibliography must fail rather than silently disagree with it.
+    let manifest = Manifest::load_verified(find_manifest(project)?)?;
+    let directory = manifest
+        .path()
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+    let path = match output {
+        Some(output) if output.is_absolute() => output.to_path_buf(),
+        Some(output) => caller.join(output),
+        None => default_export_path(&directory)?,
+    };
+    ensure_not_managed(&path, &manifest)?;
+    let rendered = manifest.render_derived(derive_entry)?;
+    atomic_write(&path, rendered.as_bytes())?;
+    Ok(path)
+}
+
+/// Add the derived arXiv PDF URL to one re-keyed entry that has an arXiv ID.
+fn derive_entry(key: &str, source: &SourceSnapshot, entry: String) -> Result<String> {
+    let reference = source
+        .project()
+        .with_context(|| format!("could not project `{key}`"))?;
+    // The projected identity already carries INSPIRE's curated arXiv ID, so one
+    // rule covers imported and INSPIRE snapshots alike.
+    let Some(arxiv) = reference.identifiers.arxiv.first() else {
+        return Ok(entry);
+    };
+    let url = arxiv_pdf_url(arxiv)
+        .with_context(|| format!("could not build an arXiv URL for `{key}`"))?;
+    Ok(insert_field(&entry, URL_FIELD, url.as_str())?)
+}
+
+fn default_export_path(directory: &Path) -> Result<PathBuf> {
+    let name = directory.file_name().ok_or_else(|| {
+        anyhow!(
+            "could not derive an export file name from {}; pass --output",
+            directory.display()
+        )
+    })?;
+    // `OsString` rather than `format!` so a non-UTF-8 directory name works.
+    let mut file = name.to_os_string();
+    file.push(".bib");
+    Ok(directory.join(file))
+}
+
+/// Refuse to write over `cita.toml` or the generated bibliography.
+fn ensure_not_managed(path: &Path, manifest: &Manifest) -> Result<()> {
+    let target = resolved(path)?;
+    for managed in [manifest.bibliography_path(), manifest.path()] {
+        if target == resolved(managed)? {
+            bail!(
+                "refusing to write the export over the managed file {}",
+                managed.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// An absolute path whose parent is canonicalized, so `..` segments and
+/// symlinked directories cannot alias a managed file. The target need not exist.
+fn resolved(path: &Path) -> Result<PathBuf> {
+    let absolute = std::path::absolute(path)
+        .with_context(|| format!("could not resolve {}", path.display()))?;
+    match (
+        absolute.parent().map(fs::canonicalize),
+        absolute.file_name(),
+    ) {
+        (Some(Ok(parent)), Some(file)) => Ok(parent.join(file)),
+        _ => Ok(absolute),
+    }
+}

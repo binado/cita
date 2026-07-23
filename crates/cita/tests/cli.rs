@@ -1787,3 +1787,183 @@ fn corrupt_loose_objects(directory: &Path) {
         }
     }
 }
+
+#[test]
+fn export_injects_arxiv_urls_and_leaves_the_generated_bibliography_untouched() {
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    let generated = fs::read(directory.path().join("references.bib")).unwrap();
+
+    let stdout = success(cita(directory.path(), &["export"]));
+    assert!(stdout.starts_with("Exported "), "{stdout}");
+
+    // The export is a separate artifact; references.bib stays authoritative.
+    assert_eq!(
+        fs::read(directory.path().join("references.bib")).unwrap(),
+        generated
+    );
+    let name = directory.path().file_name().unwrap().to_str().unwrap();
+    let exported = fs::read_to_string(directory.path().join(format!("{name}.bib"))).unwrap();
+    assert!(
+        exported.contains("url = {https://arxiv.org/pdf/2001.00001}"),
+        "{exported}"
+    );
+    // The DOI-only entry has no arXiv ID, so it gets no derived URL.
+    let alpha = exported
+        .split("\n\n")
+        .find(|block| block.starts_with("@misc{Alpha,"))
+        .unwrap_or_else(|| panic!("{exported}"));
+    assert!(!alpha.contains("url"), "{alpha}");
+    assert_eq!(exported.matches("url = {").count(), 1, "{exported}");
+}
+
+#[test]
+fn export_honors_output_and_resolves_it_against_the_caller() {
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    let nested = directory.path().join("sub");
+    fs::create_dir(&nested).unwrap();
+
+    // The manifest is found by walking ancestors, but a relative --output
+    // resolves against the caller's directory, as import paths do.
+    success(cita(&nested, &["export", "-o", "custom.bib"]));
+    assert!(nested.join("custom.bib").is_file());
+    let name = directory.path().file_name().unwrap().to_str().unwrap();
+    assert!(!directory.path().join(format!("{name}.bib")).exists());
+}
+
+#[test]
+fn export_refuses_to_overwrite_the_managed_files() {
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    let generated = fs::read(directory.path().join("references.bib")).unwrap();
+    let manifest = fs::read(directory.path().join("cita.toml")).unwrap();
+
+    for target in ["references.bib", "./sub/../references.bib", "cita.toml"] {
+        fs::create_dir_all(directory.path().join("sub")).unwrap();
+        let stderr = failure(cita(directory.path(), &["export", "-o", target]));
+        assert!(stderr.contains("managed file"), "{stderr}");
+    }
+    assert_eq!(
+        fs::read(directory.path().join("references.bib")).unwrap(),
+        generated
+    );
+    assert_eq!(
+        fs::read(directory.path().join("cita.toml")).unwrap(),
+        manifest
+    );
+}
+
+#[test]
+fn export_is_byte_stable_and_keeps_an_authored_url() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    let input = entry(
+        "Authored",
+        "Has its own url",
+        "eprint={2001.00001},\n  url = {https://example.test/paper},",
+    );
+    success(cita_stdin(directory.path(), &["import", "-"], &input));
+
+    success(cita(directory.path(), &["export"]));
+    let name = directory.path().file_name().unwrap().to_str().unwrap();
+    let exported = directory.path().join(format!("{name}.bib"));
+    let first = fs::read(&exported).unwrap();
+    success(cita(directory.path(), &["export"]));
+    // Re-running must not append a second url or otherwise churn the bytes.
+    assert_eq!(fs::read(&exported).unwrap(), first);
+    let text = String::from_utf8(first).unwrap();
+    assert!(text.contains("https://example.test/paper"), "{text}");
+    assert!(!text.contains("arxiv.org"), "{text}");
+}
+
+#[test]
+fn export_requires_a_project_and_a_current_bibliography() {
+    let bare = tempfile::tempdir().unwrap();
+    let stderr = failure(cita(bare.path(), &["export"]));
+    assert!(stderr.contains("no cita.toml found"), "{stderr}");
+
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    fs::write(directory.path().join("references.bib"), "drift\n").unwrap();
+    // Export claims to hold the same entries as references.bib, so it must
+    // refuse to run against drift rather than silently disagree with it.
+    let stderr = failure(cita(directory.path(), &["export"]));
+    assert!(stderr.contains("run `cita generate`"), "{stderr}");
+    let name = directory.path().file_name().unwrap().to_str().unwrap();
+    assert!(!directory.path().join(format!("{name}.bib")).exists());
+}
+
+#[test]
+fn shelf_export_is_named_for_the_shelf_not_its_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["library", "init"]));
+    success(cita(
+        directory.path(),
+        &["library", "shelf", "paper", "init", "--path", "papers/one"],
+    ));
+    success(cita_stdin(
+        directory.path(),
+        &["library", "shelf", "paper", "import", "-"],
+        &entry("Zed", "Shelved", "eprint={2001.00001},"),
+    ));
+
+    success(cita(
+        directory.path(),
+        &["library", "shelf", "paper", "export"],
+    ));
+    let exported = fs::read_to_string(directory.path().join("papers/one/paper.bib")).unwrap();
+    assert!(
+        exported.contains("url = {https://arxiv.org/pdf/2001.00001}"),
+        "{exported}"
+    );
+    assert!(!directory.path().join("papers/one/one.bib").exists());
+
+    // An explicit --output still wins, resolved against the caller.
+    success(cita(
+        directory.path(),
+        &["library", "shelf", "paper", "export", "-o", "out.bib"],
+    ));
+    assert!(directory.path().join("out.bib").is_file());
+}
+
+#[test]
+fn library_export_is_ordered_continues_after_failure_and_reports_once() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["library", "init"]));
+    for name in ["zeta", "alpha", "middle"] {
+        success(cita(directory.path(), &["library", "shelf", name, "init"]));
+        success(cita_stdin(
+            directory.path(),
+            &["library", "shelf", name, "import", "-"],
+            &entry("Zed", "Shelved", "eprint={2001.00001},"),
+        ));
+    }
+    fs::write(
+        directory.path().join("middle/cita.toml"),
+        "schema = 1\ninvalid = true\n",
+    )
+    .unwrap();
+
+    let output = cita(directory.path(), &["library", "export"]);
+    assert!(!output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let alpha = stdout.find("Shelf alpha: exported").unwrap();
+    let middle = stdout.find("Shelf middle: failed:").unwrap();
+    let zeta = stdout.find("Shelf zeta: exported").unwrap();
+    assert!(alpha < middle && middle < zeta, "{stdout}");
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| line.starts_with("Shelf "))
+            .count(),
+        3,
+        "{stdout}"
+    );
+    assert!(stderr.is_empty(), "{stderr}");
+    // A failing shelf does not stop the batch.
+    assert!(directory.path().join("alpha/alpha.bib").is_file());
+    assert!(directory.path().join("zeta/zeta.bib").is_file());
+    assert!(!directory.path().join("middle/middle.bib").exists());
+}

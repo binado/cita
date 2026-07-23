@@ -28,6 +28,8 @@ enum Command {
     List(ListArgs),
     /// Regenerate a missing or edited references.bib
     Generate,
+    /// Write a derived BibTeX export with arXiv PDF URLs, for tools like Zotero
+    Export(ExportArgs),
     /// Fetch or resolve a reference's arXiv PDF or source package
     Fetch(FetchArgs),
     /// Commit the managed files; refuses to run if either managed file is already staged
@@ -94,6 +96,13 @@ struct ListArgs {
 }
 
 #[derive(Debug, Args)]
+struct ExportArgs {
+    /// Write the export here instead of `<project>.bib`; relative paths use the caller's directory
+    #[arg(short = 'o', long)]
+    output: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
 struct FetchArgs {
     /// Download again even when a valid artifact is already cached
     #[arg(long, conflicts_with_all = ["cache_only", "url"])]
@@ -148,6 +157,8 @@ enum LibraryCommand {
     },
     /// Regenerate references.bib in every shelf
     Generate,
+    /// Write a `<shelf>.bib` export in every shelf
+    Export,
     /// Refresh INSPIRE snapshots in every shelf
     Sync,
 }
@@ -172,6 +183,8 @@ enum ShelfCommand {
     List(ListArgs),
     /// Regenerate references.bib
     Generate,
+    /// Write a derived BibTeX export named for this shelf
+    Export(ExportArgs),
     /// Fetch or resolve an arXiv document
     Fetch(FetchArgs),
     /// Commit this shelf's managed files; refuses to run if either managed file is already staged
@@ -233,6 +246,7 @@ async fn run() -> Result<RunOutcome> {
             no_wrap_title,
         })) => commands::list(&cwd, sort_by, order, !no_wrap_title)?,
         Some(Command::Generate) => commands::generate(&cwd)?,
+        Some(Command::Export(args)) => commands::export(&cwd, &cwd, args.output.as_deref())?,
         Some(Command::Fetch(args)) => {
             let (selector, options) = args.into_options();
             commands::fetch(&cwd, &selector, options).await?
@@ -260,6 +274,7 @@ async fn run() -> Result<RunOutcome> {
                         ShelfCommand::Remove(args) => Some(commands::ShelfAction::Remove(args)),
                         ShelfCommand::List(args) => Some(commands::ShelfAction::List(args)),
                         ShelfCommand::Generate => Some(commands::ShelfAction::Generate),
+                        ShelfCommand::Export(args) => Some(commands::ShelfAction::Export(args)),
                         ShelfCommand::Fetch(args) => Some(commands::ShelfAction::Fetch(args)),
                         ShelfCommand::Commit => Some(commands::ShelfAction::Commit),
                     };
@@ -269,6 +284,7 @@ async fn run() -> Result<RunOutcome> {
                     Ok(false)
                 }
                 LibraryCommand::Generate => commands::library_generate(&cwd),
+                LibraryCommand::Export => commands::library_export(&cwd),
                 LibraryCommand::Sync => commands::library_sync(&cwd).await,
             }?;
             if failed {
@@ -344,11 +360,25 @@ mod tests {
             vec!["cita", "library", "shelf", "paper", "sync"],
             vec!["cita", "library", "shelf", "paper", "fetch", "Key"],
             vec!["cita", "library", "shelf", "paper", "commit"],
+            vec!["cita", "library", "shelf", "paper", "export"],
+            vec!["cita", "library", "shelf", "paper", "export", "-o", "x.bib"],
             vec!["cita", "library", "generate"],
+            vec!["cita", "library", "export"],
             vec!["cita", "library", "sync"],
         ] {
             assert!(Cli::try_parse_from(args).is_ok());
         }
         assert!(Cli::try_parse_from(["cita", "library", "commit"]).is_err());
+    }
+
+    #[test]
+    fn export_takes_an_optional_output_flag_but_never_a_path_argument() {
+        assert!(Cli::try_parse_from(["cita", "export"]).is_ok());
+        assert!(Cli::try_parse_from(["cita", "export", "-o", "x.bib"]).is_ok());
+        assert!(Cli::try_parse_from(["cita", "export", "--output", "x.bib"]).is_ok());
+        assert!(Cli::try_parse_from(["cita", "export", "x.bib"]).is_err());
+        // One --output cannot name a file for each shelf, so the batch form
+        // deliberately takes no path.
+        assert!(Cli::try_parse_from(["cita", "library", "export", "-o", "x.bib"]).is_err());
     }
 }

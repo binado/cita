@@ -154,6 +154,11 @@ struct RawEntry {
     key: String,
     entry_range: Range<usize>,
     key_range: Range<usize>,
+    /// Field names in source order, for case-insensitive presence checks.
+    field_names: Vec<String>,
+    /// From the start of the last field's name to just past its value with
+    /// trailing whitespace removed; `None` when the entry declares no fields.
+    last_field: Option<Range<usize>>,
 }
 
 /// Locate and validate complete raw entries without applying BibTeX semantics.
@@ -205,10 +210,37 @@ fn scan_raw_entries(source: &str) -> Result<Vec<RawEntry>, Error> {
         if !keys.insert(key.clone()) {
             return Err(Error::KeyConflict(key));
         }
+        let field_names = item
+            .v
+            .fields
+            .iter()
+            .map(|pair| pair.key.v.to_owned())
+            .collect::<Vec<_>>();
+        let last_field = match item.v.fields.last() {
+            None => None,
+            Some(pair) => {
+                let field_start = pair.key.span.start;
+                // `abbr_field` eats trailing whitespace before returning, so the
+                // value span runs past the field itself.
+                let head = source.get(..pair.value.span.end).ok_or_else(|| {
+                    Error::InvalidBibtex("field value has an invalid source range".into())
+                })?;
+                let field_end = head.trim_end().len();
+                if !(start..end).contains(&field_start) || !(field_start..end).contains(&field_end)
+                {
+                    return Err(Error::InvalidBibtex(
+                        "entry field has an invalid source range".into(),
+                    ));
+                }
+                Some(field_start..field_end)
+            }
+        };
         entries.push(RawEntry {
             key,
             entry_range: start..end,
             key_range,
+            field_names,
+            last_field,
         });
         cursor = end;
     }
@@ -272,6 +304,89 @@ pub fn rename_entry(source: &str, new_key: &str) -> Result<String, Error> {
     Ok(renamed)
 }
 
+/// Add one field to a complete raw entry without changing its other bytes.
+///
+/// The field is inserted immediately after the entry's last field, separated by
+/// a comma and indented like that field; an entry written on one line stays on
+/// one line. An entry that already defines `name` is returned unchanged, so an
+/// authored value is never replaced and repeated calls are idempotent. Field
+/// names are compared case-insensitively, as BibTeX does.
+///
+/// The value is written verbatim inside braces, so it must be non-empty and
+/// must not contain `{`, `}`, `\`, `%`, or a control character.
+pub fn insert_field(source: &str, name: &str, value: &str) -> Result<String, Error> {
+    validate_field_name(name)?;
+    validate_field_value(value)?;
+    let raw = scan_raw_entries(source)?;
+    let [entry] = raw.as_slice() else {
+        return Err(Error::InvalidBibtex(
+            "expected exactly one entry to extend".into(),
+        ));
+    };
+    if entry
+        .field_names
+        .iter()
+        .any(|field| field.eq_ignore_ascii_case(name))
+    {
+        return Ok(source.to_owned());
+    }
+    // Inserting after the last field rather than before the closing brace keeps
+    // a trailing inline comment attached to the field it documents.
+    let (insert, separator) = match &entry.last_field {
+        Some(field) => (field.end, ","),
+        None => (entry.entry_range.end - 1, ""),
+    };
+    let indent = entry
+        .last_field
+        .as_ref()
+        .and_then(|field| line_indent(&source[entry.entry_range.start..field.start]));
+    let mut extended = String::with_capacity(source.len() + name.len() + value.len() + 8);
+    extended.push_str(&source[..insert]);
+    extended.push_str(separator);
+    if let Some(indent) = indent {
+        extended.push('\n');
+        extended.push_str(indent);
+    }
+    extended.push_str(name);
+    extended.push_str(" = {");
+    extended.push_str(value);
+    extended.push('}');
+    extended.push_str(&source[insert..]);
+    BibtexSnapshot::new(extended.clone())?;
+    Ok(extended)
+}
+
+/// Leading whitespace of the final line of `head`, or `None` when `head` is one line.
+fn line_indent(head: &str) -> Option<&str> {
+    let line = head.rsplit_once('\n')?.1;
+    Some(&line[..line.len() - line.trim_start().len()])
+}
+
+fn validate_field_name(name: &str) -> Result<(), Error> {
+    let mut bytes = name.bytes();
+    if !bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
+        || !bytes
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+'))
+    {
+        return Err(Error::InvalidBibtex(format!("unsafe field name `{name}`")));
+    }
+    Ok(())
+}
+
+fn validate_field_value(value: &str) -> Result<(), Error> {
+    // `%` starts a comment even inside braces once the value reaches LaTeX.
+    if value.is_empty()
+        || value
+            .chars()
+            .any(|c| matches!(c, '{' | '}' | '\\' | '%') || c.is_control())
+    {
+        return Err(Error::InvalidBibtex(format!(
+            "unsafe field value `{value}`"
+        )));
+    }
+    Ok(())
+}
+
 fn format_person(person: &biblatex::Person) -> String {
     let mut parts = [&person.given_name, &person.prefix, &person.name]
         .into_iter()
@@ -332,5 +447,69 @@ mod tests {
         let raw = "@misc{Old,title={Old}}";
         assert_eq!(rename_entry(raw, "New").unwrap(), "@misc{New,title={Old}}");
         assert!(rename_entry("% outside\n@misc{Old,title={Old}}", "New").is_err());
+    }
+
+    #[test]
+    fn inserting_a_field_follows_the_last_fields_layout() {
+        assert_eq!(
+            insert_field("@misc{A,\n  title = {T},\n  eprint = {1}\n}", "url", "u").unwrap(),
+            "@misc{A,\n  title = {T},\n  eprint = {1},\n  url = {u}\n}"
+        );
+        // An existing trailing comma terminates the inserted field instead of
+        // being duplicated, because the splice point sits before it.
+        assert_eq!(
+            insert_field("@misc{A,\n  title = {T},\n  eprint = {1},\n}", "url", "u").unwrap(),
+            "@misc{A,\n  title = {T},\n  eprint = {1},\n  url = {u},\n}"
+        );
+        // Indentation comes from the last field's name, not its value, so a
+        // wrapped value does not drag the new field out of alignment.
+        assert_eq!(
+            insert_field("@misc{A,\n  title = {Long\n    wrapped}\n}", "url", "u").unwrap(),
+            "@misc{A,\n  title = {Long\n    wrapped},\n  url = {u}\n}"
+        );
+    }
+
+    #[test]
+    fn inserting_a_field_keeps_a_single_line_entry_on_one_line() {
+        assert_eq!(
+            insert_field("@misc{A,title={A}}", "url", "u").unwrap(),
+            "@misc{A,title={A},url = {u}}"
+        );
+    }
+
+    #[test]
+    fn inserting_a_field_preserves_an_existing_value_case_insensitively() {
+        let raw = "@misc{A,title={T},URL={keep}}";
+        assert_eq!(insert_field(raw, "url", "derived").unwrap(), raw);
+        // Insertion is a fixed point, so repeated exports stay byte-stable.
+        let once = insert_field("@misc{A,title={T}}", "url", "u").unwrap();
+        assert_eq!(insert_field(&once, "url", "u").unwrap(), once);
+    }
+
+    #[test]
+    fn inserting_a_field_survives_a_trailing_inline_comment() {
+        // `biblatex` accepts a comment between the last value and the closing
+        // brace, so the field cannot simply be appended before that brace.
+        let raw = "@misc{A,\n  title = {T},\n  year = {2025}  % note\n}";
+        let extended = insert_field(raw, "url", "u").unwrap();
+        assert_eq!(
+            extended,
+            "@misc{A,\n  title = {T},\n  year = {2025},\n  url = {u}  % note\n}"
+        );
+        assert!(parse(&extended).is_ok(), "{extended}");
+    }
+
+    #[test]
+    fn field_insertion_rejects_unsafe_names_values_and_multiple_entries() {
+        let raw = "@misc{A,title={T}}";
+        assert!(insert_field(raw, "1bad", "u").is_err());
+        assert!(insert_field(raw, "url field", "u").is_err());
+        assert!(insert_field(raw, "url", "a{b}").is_err());
+        assert!(insert_field(raw, "url", "a%b").is_err());
+        assert!(insert_field(raw, "url", "a\\b").is_err());
+        assert!(insert_field(raw, "url", "").is_err());
+        assert!(insert_field(raw, "url", "a\nb").is_err());
+        assert!(insert_field("@misc{A,title={T}}\n\n@misc{B,title={T}}", "url", "u").is_err());
+        assert!(insert_field("% outside\n@misc{A,title={T}}", "url", "u").is_err());
     }
 }

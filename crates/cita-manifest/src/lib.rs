@@ -666,6 +666,20 @@ impl Manifest {
         render_bibliography(&self.references)
     }
 
+    /// Render a derived bibliography with this manifest's exact layout.
+    ///
+    /// Entries are ordered by local key and re-keyed exactly as
+    /// [`Manifest::render_bibliography`] does, joined by one blank line with a
+    /// single trailing newline. `transform` receives the local key, its
+    /// snapshot, and the re-keyed entry, and owns any field-level policy. This
+    /// renders a separate artifact and never touches `references.bib`.
+    pub fn render_derived<E: From<Error>>(
+        &self,
+        transform: impl FnMut(&str, &SourceSnapshot, String) -> Result<String, E>,
+    ) -> Result<String, E> {
+        render_entries(&self.references, transform)
+    }
+
     /// Verify that the generated bibliography exactly matches the manifest.
     pub fn verify_bibliography(&self) -> Result<(), Error> {
         let expected = self.render_bibliography()?;
@@ -821,15 +835,26 @@ fn record_identity(
     Ok(())
 }
 
-fn render_bibliography(references: &BTreeMap<String, SourceSnapshot>) -> Result<String, Error> {
+/// Render re-keyed entries in local-key order, applying `transform` to each.
+///
+/// Layout lives here so every rendered artifact shares one set of rules.
+fn render_entries<E: From<Error>>(
+    references: &BTreeMap<String, SourceSnapshot>,
+    mut transform: impl FnMut(&str, &SourceSnapshot, String) -> Result<String, E>,
+) -> Result<String, E> {
     if references.is_empty() {
         return Ok(String::new());
     }
     let mut entries = Vec::with_capacity(references.len());
     for (key, source) in references {
-        entries.push(rename_entry(source.raw_bibtex(), key)?.trim().to_owned());
+        let rekeyed = rename_entry(source.raw_bibtex(), key).map_err(Error::from)?;
+        entries.push(transform(key, source, rekeyed)?.trim().to_owned());
     }
     Ok(format!("{}\n", entries.join("\n\n")))
+}
+
+fn render_bibliography(references: &BTreeMap<String, SourceSnapshot>) -> Result<String, Error> {
+    render_entries(references, |_, _, entry| Ok(entry))
 }
 
 fn render_manifest(references: &BTreeMap<String, SourceSnapshot>) -> Result<String, Error> {
@@ -843,8 +868,14 @@ fn render_manifest(references: &BTreeMap<String, SourceSnapshot>) -> Result<Stri
     Ok(output)
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+/// Durably replace a file: write a sibling temporary, fsync it, then rename.
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    // `parent` of a bare relative file name is `Some("")`, which is not a
+    // usable directory, so an empty parent falls back alongside `None`.
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     let mut temporary = NamedTempFile::new_in(parent).map_err(|source| Error::Write {
         path: path.into(),
         source,
@@ -1571,5 +1602,54 @@ mod tests {
             manifest.replace_inspire(Vec::new()),
             Err(Error::RefreshRecordSet { message }) if message == "did not return records [2, 7, 10]"
         ));
+    }
+
+    #[test]
+    fn render_derived_matches_the_generated_bibliography_for_an_identity_transform() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        add(
+            &mut manifest,
+            vec![
+                imported("Zed", "Last", "eprint={2001.00001}"),
+                imported("Alpha", "First", ""),
+            ],
+        )
+        .unwrap();
+        add(&mut manifest, vec![inspire("Rec", "Prov:2026", 7)]).unwrap();
+        // The derived renderer owns layout for every artifact, so the identity
+        // transform must reproduce references.bib byte for byte.
+        assert_eq!(
+            manifest
+                .render_derived::<Error>(|_, _, entry| Ok(entry))
+                .unwrap(),
+            manifest.render_bibliography().unwrap()
+        );
+    }
+
+    #[test]
+    fn render_derived_propagates_a_failing_transform() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        add(&mut manifest, vec![imported("A", "A", "")]).unwrap();
+        assert!(matches!(
+            manifest.render_derived::<Error>(|key, _, _| Err(Error::InvalidSource {
+                key: key.into(),
+                message: "no".into()
+            })),
+            Err(Error::InvalidSource { .. })
+        ));
+    }
+
+    #[test]
+    fn render_derived_of_an_empty_manifest_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = Manifest::create(dir.path()).unwrap();
+        assert_eq!(
+            manifest
+                .render_derived::<Error>(|_, _, entry| Ok(entry))
+                .unwrap(),
+            ""
+        );
     }
 }

@@ -63,6 +63,13 @@ work as selectors.
   source-neutral projections.
 - `cita generate` repairs a missing or edited `references.bib` from the
   authoritative manifest.
+- `cita export [-o/--output <file>]` writes a derived BibTeX file for tools that
+  want a resolvable link, such as Zotero. It renders the same entries as
+  `references.bib` and adds `url = {https://arxiv.org/pdf/<id>}` to each entry
+  with an arXiv ID, leaving entries that already define a `url` untouched. The
+  default file is named for the project directory; a relative `--output` is
+  relative to the directory where cita was invoked. The export never overwrites
+  a managed file, and it refuses to run while `references.bib` has drifted.
 - `cita fetch [--force | --cache-only | --url] [--source] [--open] [--save]
   <selector>` returns an absolute cached PDF path by default, the arXiv PDF URL
   with `-u/--url`, or an absolute extracted source directory with `--source`.
@@ -82,12 +89,15 @@ work as selectors.
   existing standalone `references.bib`, or adopt an existing verified cita
   project. Initialization completes before registration, so a registry write
   failure leaves a usable standalone shelf for a safe retry.
-- `cita library shelf <name> <add|import|remove|list|generate|sync|fetch|commit>
-  ...` runs the corresponding command in that shelf. Import paths remain
-  relative to the directory where the user invoked cita, not to the shelf.
-- `cita library generate` and `cita library sync` process every shelf in name
-  order, continue after shelf-specific failures, print one result per shelf,
-  and exit unsuccessfully if any shelf failed.
+- `cita library shelf <name>
+  <add|import|remove|list|generate|export|sync|fetch|commit> ...` runs the
+  corresponding command in that shelf. Import and export paths remain relative
+  to the directory where the user invoked cita, not to the shelf.
+- `cita library generate`, `cita library export`, and `cita library sync`
+  process every shelf in name order, continue after shelf-specific failures,
+  print one result per shelf, and exit unsuccessfully if any shelf failed. A
+  shelf export is named for the stable registered shelf name, so importing each
+  file into Zotero yields one collection per shelf.
 - `cita completions <bash|elvish|fish|powershell|zsh>` prints a shell completion
   script to stdout, e.g. `cita completions zsh > ~/.zfunc/_cita`.
 
@@ -112,6 +122,12 @@ separated by one blank line, and end with one newline. Preserved field bytes are
 unchanged; only the citation-key token may be re-keyed. Every normal command
 checks its exact bytes against the manifest and reports drift. Use `cita
 generate` to repair it.
+
+The `cita export` output is a derived, one-way convenience artifact. It is never
+authoritative, is not tracked or verified, and is not read back by any command;
+regenerate it instead of editing it, and add it to `.gitignore` if you do not
+want it tracked. Re-importing an export into Zotero adds items again rather than
+updating the previous import.
 
 Mutations validate and render the complete candidate in memory, atomically
 persist `references.bib` first, and persist `cita.toml` as the commit point.
