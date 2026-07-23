@@ -195,11 +195,7 @@ impl Library {
             path: path.clone(),
             message: error.to_string(),
         })?;
-        let root = path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf();
-        reject_root_shelf(&root)?;
+        reject_root_shelf(root_of(&path))?;
         let shelves = data
             .shelves
             .into_iter()
@@ -229,7 +225,7 @@ impl Library {
 
     /// Return the library root.
     pub fn root(&self) -> &Path {
-        self.path.parent().unwrap_or_else(|| Path::new("."))
+        root_of(&self.path)
     }
 
     /// Return registered shelves in stable name order.
@@ -332,6 +328,16 @@ impl Library {
             rendered.push('\n');
         }
         atomic_write(&self.path, rendered.as_bytes())
+    }
+}
+
+/// Return `path`'s parent directory, treating a missing or empty parent
+/// (as returned for a bare relative file name like `cita-library.toml`) as
+/// the current directory.
+fn root_of(path: &Path) -> &Path {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
     }
 }
 
@@ -589,5 +595,14 @@ mod tests {
         let nested = directory.path().join("a/b");
         fs::create_dir_all(&nested).unwrap();
         assert_eq!(Library::discover(&nested).unwrap().root(), directory.path());
+    }
+
+    #[test]
+    fn root_of_treats_a_bare_relative_name_as_the_current_directory() {
+        assert_eq!(root_of(Path::new(LIBRARY_FILE)), Path::new("."));
+        assert_eq!(
+            root_of(Path::new("dir").join(LIBRARY_FILE).as_path()),
+            Path::new("dir")
+        );
     }
 }
