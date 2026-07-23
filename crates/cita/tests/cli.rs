@@ -268,6 +268,20 @@ fn init_defaults_to_the_current_directory_and_accepts_an_explicit_path() {
 }
 
 #[test]
+fn init_rejects_a_library_root_without_creating_shelf_artifacts() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["library", "init"]));
+
+    let error = failure(cita(directory.path(), &["init"]));
+    assert!(error.contains("library root"), "{error}");
+    assert!(!directory.path().join("cita.toml").exists());
+    assert!(!directory.path().join("references.bib").exists());
+    assert!(!directory.path().join(".cita").exists());
+
+    success(cita(directory.path(), &["library", "shelves"]));
+}
+
+#[test]
 fn library_and_shelf_initialization_cover_new_and_existing_projects() {
     let directory = tempfile::tempdir().unwrap();
     assert!(success(cita(directory.path(), &["library", "init"])).contains("cita-library.toml"));
