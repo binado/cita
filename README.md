@@ -25,6 +25,16 @@ cita sync
 cita fetch 1207.7214
 ```
 
+Several independent projects can also be registered as shelves in one library:
+
+```bash
+cita library init
+cita library shelf paper-one init --path papers/paper-one
+cita library shelf paper-one add 1207.7214
+cita library shelves
+cita library sync
+```
+
 Supported locators are bare arXiv IDs; explicit `arxiv:`, `doi:`, or `inspire:`
 locators; and canonical `https://arxiv.org`, `https://inspirehep.net`, or
 `https://doi.org` URLs. Selectors first match an exact local citation key, then
@@ -62,6 +72,22 @@ work as selectors.
 - `cita commit` is an optional Git helper. It validates consistency and commits
   only `cita.toml` and `references.bib`, leaving unrelated staged changes
   intact. It refuses to run if either managed file is already staged.
+- `cita library init [--path <directory>]` creates an idempotent
+  `cita-library.toml` registry in an existing directory. A library root cannot
+  itself be a cita project.
+- `cita library shelves` lists stable shelf names and their library-relative
+  paths in deterministic order.
+- `cita library shelf <name> init [--path <relative-directory>]` creates and
+  registers an independent shelf. It can create an empty project, import an
+  existing standalone `references.bib`, or adopt an existing verified cita
+  project. Initialization completes before registration, so a registry write
+  failure leaves a usable standalone shelf for a safe retry.
+- `cita library shelf <name> <add|import|remove|list|generate|sync|fetch|commit>
+  ...` runs the corresponding command in that shelf. Import paths remain
+  relative to the directory where the user invoked cita, not to the shelf.
+- `cita library generate` and `cita library sync` process every shelf in name
+  order, continue after shelf-specific failures, print one result per shelf,
+  and exit unsuccessfully if any shelf failed.
 - `cita completions <bash|elvish|fish|powershell|zsh>` prints a shell completion
   script to stdout, e.g. `cita completions zsh > ~/.zfunc/_cita`.
 
@@ -93,6 +119,12 @@ Downloaded PDFs and extracted source packages live under `.cita/files`;
 initialization adds
 `/.cita/files/` to the project root's `.gitignore` so the cache is not tracked.
 
+A library is only a sorted registry of shelf names and relative paths. Each
+shelf has its own `cita.toml`, `references.bib`, `.cita/files` cache, identities,
+and optional Git history. There is no aggregate bibliography, shared cache, or
+cross-shelf citation-key/identifier uniqueness. Registered paths cannot escape
+the library root, overlap or nest, or alias one another through symlinks.
+
 ## Workspace
 
 - `cita-core`: locators, neutral `Reference` vocabulary, and provider traits.
@@ -100,8 +132,8 @@ initialization adds
   preservation, re-keying, and `biblatex`-based generic rendering.
 - `cita-inspire-client`: typed INSPIRE JSON metadata, authoritative BibTeX
   snapshots, and stable-ID refreshes.
-- `cita-manifest`: schema-1 validation, identity indexes, deterministic TOML,
-  output verification, and coordinated writes.
+- `cita-manifest`: schema-1 shelf and library validation, identity indexes,
+  deterministic TOML, path safety, output verification, and coordinated writes.
 - `cita-documents`: validated arXiv PDF/source downloads, safe source
   extraction, and atomic caching.
 - `cita`: CLI wiring, discovery, selectors, and scoped Git commits.

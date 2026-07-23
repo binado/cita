@@ -3,18 +3,23 @@ mod fetch;
 mod generate;
 mod import;
 mod init;
+mod library;
 mod list;
 mod remove;
 mod sync;
 
 pub(crate) use add::add;
 pub(crate) use fetch::{FetchOptions, fetch};
-pub(crate) use generate::generate;
+pub(crate) use generate::{generate, generate_outcome};
 pub(crate) use import::import;
 pub(crate) use init::init;
+pub(crate) use library::{
+    batch_generate as library_generate, batch_sync as library_sync, init_library, init_shelf,
+    list_shelves, run_shelf_command,
+};
 pub(crate) use list::list;
 pub(crate) use remove::remove;
-pub(crate) use sync::sync;
+pub(crate) use sync::{sync, sync_outcome};
 
 use anyhow::{Context, Result, bail};
 use cita_inspire_client::{Client, RetryEvent};

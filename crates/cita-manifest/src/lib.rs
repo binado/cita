@@ -1,6 +1,10 @@
 //! Schema-1 source snapshot storage and generated-bibliography coordination.
 #![warn(missing_docs)]
 
+mod library;
+
+pub use library::{LIBRARY_FILE, Library, LibraryError, Shelf};
+
 use cita_bibliography::{
     BibtexSnapshot, parse as parse_bibtex, project_bibtex, rename_entry, validate_key,
 };
