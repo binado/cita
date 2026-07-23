@@ -225,10 +225,13 @@ impl DocumentStore {
             return Err(Error::SourceUnavailable(arxiv_id));
         }
 
-        let staging = TempDir::new_in(parent).map_err(|source| Error::ExtractSource {
-            path: destination.clone(),
-            source,
-        })?;
+        let staging = tempfile::Builder::new()
+            .prefix(".source-")
+            .tempdir_in(parent)
+            .map_err(|source| Error::ExtractSource {
+                path: destination.clone(),
+                source,
+            })?;
         extract_source_archive_with_limits(&bytes, staging.path(), &arxiv_id, self.source_limits)?;
         publish_source(staging, &destination)?;
         Ok(FetchOutcome::Downloaded(destination))
@@ -450,6 +453,11 @@ fn cache_entry_exists(path: &Path) -> Result<bool, Error> {
 }
 
 fn validate_cached_source(path: &Path) -> Result<(), Error> {
+    let root = fs::metadata(path).map_err(|_| Error::InvalidCachedSource(path.to_owned()))?;
+    if !root.is_dir() {
+        return Err(Error::InvalidCachedSource(path.to_owned()));
+    }
+
     fn inspect(path: &Path, found_file: &mut bool) -> Result<(), std::io::Error> {
         let metadata = fs::symlink_metadata(path)?;
         if metadata.is_file() {
@@ -466,7 +474,11 @@ fn validate_cached_source(path: &Path) -> Result<(), Error> {
     }
 
     let mut found_file = false;
-    inspect(path, &mut found_file).map_err(|_| Error::InvalidCachedSource(path.to_owned()))?;
+    for entry in fs::read_dir(path).map_err(|_| Error::InvalidCachedSource(path.to_owned()))? {
+        let entry = entry.map_err(|_| Error::InvalidCachedSource(path.to_owned()))?;
+        inspect(&entry.path(), &mut found_file)
+            .map_err(|_| Error::InvalidCachedSource(path.to_owned()))?;
+    }
     if !found_file {
         return Err(Error::InvalidCachedSource(path.to_owned()));
     }
@@ -649,41 +661,120 @@ fn invalid_source_archive(arxiv_id: &str, reason: impl fmt::Display) -> Error {
 }
 
 fn publish_source(staging: TempDir, destination: &Path) -> Result<(), Error> {
-    if !cache_entry_exists(destination)? {
-        return fs::rename(staging.path(), destination).map_err(|source| Error::PublishSource {
-            path: destination.to_owned(),
-            source,
-        });
-    }
-
     let parent = destination
         .parent()
         .expect("a source cache destination always has a parent");
-    let backup = TempDir::new_in(parent).map_err(|source| Error::PublishSource {
-        path: destination.to_owned(),
-        source,
-    })?;
-    let backup_path = backup.path().join("previous-source");
-    fs::rename(destination, &backup_path).map_err(|source| Error::PublishSource {
-        path: destination.to_owned(),
-        source,
-    })?;
-    if let Err(source) = fs::rename(staging.path(), destination) {
-        if let Err(restore_error) = fs::rename(&backup_path, destination) {
-            let _preserved_backup = backup.keep();
-            return Err(Error::PublishSource {
-                path: destination.to_owned(),
-                source: std::io::Error::other(format!(
-                    "{source}; restoring the previous cache also failed: {restore_error}"
-                )),
-            });
-        }
+    let durable = staging.keep();
+    if !durable.is_dir() {
+        let _ = fs::remove_dir_all(&durable);
         return Err(Error::PublishSource {
             path: destination.to_owned(),
-            source,
+            source: io::Error::new(
+                io::ErrorKind::NotFound,
+                "staging source directory is missing",
+            ),
         });
     }
-    Ok(())
+
+    let target_name = durable.file_name().ok_or_else(|| Error::PublishSource {
+        path: destination.to_owned(),
+        source: io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "staging source directory has no file name",
+        ),
+    })?;
+    let link_tmp = parent.join(format!(".link-{}", target_name.to_string_lossy()));
+
+    let publish_result = (|| {
+        symlink_dir(target_name, &link_tmp).map_err(|source| Error::PublishSource {
+            path: destination.to_owned(),
+            source,
+        })?;
+
+        if !cache_entry_exists(destination)? {
+            fs::rename(&link_tmp, destination).map_err(|source| Error::PublishSource {
+                path: destination.to_owned(),
+                source,
+            })?;
+            return Ok(None);
+        }
+
+        let metadata =
+            fs::symlink_metadata(destination).map_err(|source| Error::PublishSource {
+                path: destination.to_owned(),
+                source,
+            })?;
+        if metadata.file_type().is_symlink() {
+            let previous = read_symlink_target(parent, destination)?;
+            fs::rename(&link_tmp, destination).map_err(|source| Error::PublishSource {
+                path: destination.to_owned(),
+                source,
+            })?;
+            return Ok(previous);
+        }
+
+        // Legacy plain-directory caches: move aside, then install the symlink.
+        let backup = parent.join(format!(".source-backup-{}", target_name.to_string_lossy()));
+        fs::rename(destination, &backup).map_err(|source| Error::PublishSource {
+            path: destination.to_owned(),
+            source,
+        })?;
+        if let Err(source) = fs::rename(&link_tmp, destination) {
+            if let Err(restore_error) = fs::rename(&backup, destination) {
+                return Err(Error::PublishSource {
+                    path: destination.to_owned(),
+                    source: io::Error::other(format!(
+                        "{source}; restoring the previous cache also failed: {restore_error}"
+                    )),
+                });
+            }
+            return Err(Error::PublishSource {
+                path: destination.to_owned(),
+                source,
+            });
+        }
+        Ok(Some(backup))
+    })();
+
+    match publish_result {
+        Ok(previous) => {
+            if let Some(previous) = previous
+                && previous != durable
+            {
+                let _ = fs::remove_dir_all(previous);
+            }
+            Ok(())
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&link_tmp);
+            let _ = fs::remove_dir_all(&durable);
+            Err(error)
+        }
+    }
+}
+
+fn read_symlink_target(parent: &Path, link: &Path) -> Result<Option<PathBuf>, Error> {
+    let target = fs::read_link(link).map_err(|source| Error::PublishSource {
+        path: link.to_owned(),
+        source,
+    })?;
+    let resolved = if target.is_absolute() {
+        target
+    } else {
+        parent.join(target)
+    };
+    Ok(Some(resolved))
+}
+
+fn symlink_dir(original: impl AsRef<Path>, link: impl AsRef<Path>) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(original, link)
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_dir(original, link)
+    }
 }
 
 fn validate_cached_pdf(path: &Path) -> Result<(), Error> {
@@ -1292,6 +1383,94 @@ mod tests {
         fs::create_dir(&destination).unwrap();
         fs::write(destination.join("old.tex"), b"old").unwrap();
         let staging = TempDir::new_in(directory.path()).unwrap();
+        fs::write(staging.path().join("new.tex"), b"new").unwrap();
+        fs::remove_dir_all(staging.path()).unwrap();
+
+        assert!(matches!(
+            publish_source(staging, &destination),
+            Err(Error::PublishSource { .. })
+        ));
+        assert_eq!(fs::read(destination.join("old.tex")).unwrap(), b"old");
+    }
+
+    #[test]
+    fn publish_source_installs_and_replaces_through_a_symlink() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("source");
+
+        let staging = tempfile::Builder::new()
+            .prefix(".source-")
+            .tempdir_in(directory.path())
+            .unwrap();
+        fs::write(staging.path().join("first.tex"), b"first").unwrap();
+        publish_source(staging, &destination).unwrap();
+        assert!(
+            fs::symlink_metadata(&destination)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read(destination.join("first.tex")).unwrap(), b"first");
+        let first_target = fs::read_link(&destination).unwrap();
+
+        let staging = tempfile::Builder::new()
+            .prefix(".source-")
+            .tempdir_in(directory.path())
+            .unwrap();
+        fs::write(staging.path().join("second.tex"), b"second").unwrap();
+        publish_source(staging, &destination).unwrap();
+        assert!(
+            fs::symlink_metadata(&destination)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read(destination.join("second.tex")).unwrap(), b"second");
+        assert!(!destination.join("first.tex").exists());
+        let second_target = fs::read_link(&destination).unwrap();
+        assert_ne!(first_target, second_target);
+        assert!(!directory.path().join(&first_target).exists());
+    }
+
+    #[test]
+    fn publish_source_upgrades_a_legacy_directory_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("source");
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("old.tex"), b"old").unwrap();
+
+        let staging = tempfile::Builder::new()
+            .prefix(".source-")
+            .tempdir_in(directory.path())
+            .unwrap();
+        fs::write(staging.path().join("new.tex"), b"new").unwrap();
+        publish_source(staging, &destination).unwrap();
+
+        assert!(
+            fs::symlink_metadata(&destination)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read(destination.join("new.tex")).unwrap(), b"new");
+        assert!(!destination.join("old.tex").exists());
+    }
+
+    #[test]
+    fn failed_symlink_replace_keeps_the_previous_published_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("source");
+        let staging = tempfile::Builder::new()
+            .prefix(".source-")
+            .tempdir_in(directory.path())
+            .unwrap();
+        fs::write(staging.path().join("old.tex"), b"old").unwrap();
+        publish_source(staging, &destination).unwrap();
+
+        let staging = tempfile::Builder::new()
+            .prefix(".source-")
+            .tempdir_in(directory.path())
+            .unwrap();
         fs::write(staging.path().join("new.tex"), b"new").unwrap();
         fs::remove_dir_all(staging.path()).unwrap();
 
