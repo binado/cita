@@ -53,10 +53,12 @@ work as selectors.
   source-neutral projections.
 - `cita generate` repairs a missing or edited `references.bib` from the
   authoritative manifest.
-- `cita fetch [--force | --cache-only | --url] [--open] [--save] <selector>`
-  returns an absolute cached PDF path, or the arXiv PDF URL with `-u/--url`.
-  `--open` launches the returned target with the system default application.
-  Without `--save`, an unmatched locator uses INSPIRE JSON only.
+- `cita fetch [--force | --cache-only | --url] [--source] [--open] [--save]
+  <selector>` returns an absolute cached PDF path by default, the arXiv PDF URL
+  with `-u/--url`, or an absolute extracted source directory with `--source`.
+  `--source` and `--url` are mutually exclusive. `--open` launches the returned
+  target with the system default application. Without `--save`, an unmatched
+  locator uses INSPIRE JSON only.
 - `cita commit` is an optional Git helper. It validates consistency and commits
   only `cita.toml` and `references.bib`, leaving unrelated staged changes
   intact. It refuses to run if either managed file is already staged.
@@ -87,7 +89,8 @@ generate` to repair it.
 
 Mutations validate and render the complete candidate in memory, atomically
 persist `references.bib` first, and persist `cita.toml` as the commit point.
-Downloaded documents live under `.cita/files`; initialization adds
+Downloaded PDFs and extracted source packages live under `.cita/files`;
+initialization adds
 `/.cita/files/` to the project root's `.gitignore` so the cache is not tracked.
 
 ## Workspace
@@ -99,7 +102,8 @@ Downloaded documents live under `.cita/files`; initialization adds
   snapshots, and stable-ID refreshes.
 - `cita-manifest`: schema-1 validation, identity indexes, deterministic TOML,
   output verification, and coordinated writes.
-- `cita-documents`: validated arXiv PDF downloads and atomic caching.
+- `cita-documents`: validated arXiv PDF/source downloads, safe source
+  extraction, and atomic caching.
 - `cita`: CLI wiring, discovery, selectors, and scoped Git commits.
 
 ## Development

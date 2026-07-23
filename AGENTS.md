@@ -51,8 +51,8 @@ cita-bibliography ← cita-inspire-client   cita-documents
   selected JSON through `cita-bibliography`.
 - `cita-manifest`: schema-1 authority, identity indexes, deterministic TOML,
   generated bibliography verification, and coordinated writes.
-- `cita-documents`: accepts a validated arXiv ID and atomically caches PDFs
-  beneath `.cita/files/arxiv`.
+- `cita-documents`: accepts a validated arXiv ID and atomically caches PDFs and
+  safely extracts gzip-compressed TeX source packages beneath `.cita/files/arxiv`.
 - `cita`: CLI, parent discovery, sync reconciliation, and scoped Git commits.
 
 ## Key decisions
@@ -98,9 +98,10 @@ BibTeX snapshots cause no network request.
 Exact local key wins, then provider ID, normalized DOI, and normalized arXiv ID.
 Transient `fetch` resolves INSPIRE JSON only unless `--save` also fetches the
 authoritative BibTeX and stores the record. It returns either an absolute cached
-PDF path or, with `--url`, the arXiv PDF URL; `--open` launches that target.
-Documents use the projected arXiv ID; stored IDs are versionless and cache paths
-retain legacy arXiv archive directories.
+PDF path, an absolute extracted source directory with `--source`, or, with
+`--url`, the arXiv PDF URL; `--source` and `--url` are mutually exclusive;
+`--open` launches that target. Documents use the projected arXiv ID; stored IDs
+are versionless and cache paths retain legacy arXiv archive directories.
 
 ### Git
 

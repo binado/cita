@@ -8,7 +8,7 @@ mod remove;
 mod sync;
 
 pub(crate) use add::add;
-pub(crate) use fetch::fetch;
+pub(crate) use fetch::{FetchOptions, fetch};
 pub(crate) use generate::generate;
 pub(crate) use import::import;
 pub(crate) use init::init;

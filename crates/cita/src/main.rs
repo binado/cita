@@ -62,17 +62,20 @@ enum Command {
     },
     /// Regenerate a missing or edited references.bib
     Generate,
-    /// Fetch or resolve a reference's arXiv PDF
+    /// Fetch or resolve a reference's arXiv PDF or source package
     Fetch {
-        /// Download again even when a valid PDF is already cached
+        /// Download again even when a valid artifact is already cached
         #[arg(long, conflicts_with_all = ["cache_only", "url"])]
         force: bool,
-        /// Require an existing cached PDF without downloading
+        /// Require an existing cached artifact without downloading
         #[arg(long, conflicts_with = "url")]
         cache_only: bool,
         /// Return the arXiv PDF URL without downloading
         #[arg(short = 'u', long)]
         url: bool,
+        /// Download and extract the latest arXiv TeX source package
+        #[arg(long, conflicts_with = "url")]
+        source: bool,
         /// Open the returned path or URL with the system default application
         #[arg(long)]
         open: bool,
@@ -141,10 +144,25 @@ async fn run() -> Result<()> {
             force,
             cache_only,
             url,
+            source,
             open,
             save,
             selector,
-        }) => commands::fetch(&cwd, &selector, force, cache_only, url, open, save).await?,
+        }) => {
+            commands::fetch(
+                &cwd,
+                &selector,
+                commands::FetchOptions {
+                    force,
+                    cache_only,
+                    return_url: url,
+                    source,
+                    open,
+                    save,
+                },
+            )
+            .await?
+        }
         Some(Command::Commit) => git::commit(&commands::find_manifest(&cwd)?)?,
         Some(Command::Completions { shell }) => {
             let mut command = Cli::command();
@@ -176,6 +194,22 @@ mod tests {
             Cli::try_parse_from(["cita", "fetch", "--cache-only", "--open", "1207.7214"]).is_ok()
         );
         assert!(Cli::try_parse_from(["cita", "fetch", "--url", "--save", "1207.7214"]).is_ok());
+        assert!(Cli::try_parse_from(["cita", "fetch", "--source", "--url", "1207.7214"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "cita",
+                "fetch",
+                "--source",
+                "--force",
+                "--open",
+                "--save",
+                "1207.7214"
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from(["cita", "fetch", "--source", "--cache-only", "1207.7214"]).is_ok()
+        );
         assert!(Cli::try_parse_from(["cita", "open", "1207.7214"]).is_err());
         assert!(Cli::try_parse_from(["cita", "fetch", "--dry-run", "1207.7214"]).is_err());
     }
