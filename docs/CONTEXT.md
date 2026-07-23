@@ -1,5 +1,21 @@
 # Domain context
 
+## Library and shelf
+
+A library is a `cita-library.toml` registry that maps stable shelf names to
+library-root-relative paths. A shelf is a completely independent cita project
+with its own authoritative manifest, generated bibliography, document cache,
+identities, and Git commits. The registry routes commands; it does not aggregate
+or share bibliographic state.
+
+Shelf names are stable identifiers; the registered path is fixed at
+registration time, and registering an existing name under a different path is
+rejected. Paths must remain beneath the library root and cannot be equal,
+nested, or symlink aliases. Library discovery walks ancestors independently of
+nearest-project `cita.toml` discovery. Library-wide sync and generation are
+ordered collections of independent shelf mutations, not one crash-atomic
+transaction.
+
 ## Reference
 
 A `Reference` is Cita's provider-neutral semantic projection: title, authors,

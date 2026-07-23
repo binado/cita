@@ -1,6 +1,6 @@
 use super::ensure_cache_layout;
 use anyhow::{Result, bail};
-use cita_manifest::{BIBLIOGRAPHY_FILE, MANIFEST_FILE, Manifest};
+use cita_manifest::{BIBLIOGRAPHY_FILE, LIBRARY_FILE, MANIFEST_FILE, Manifest};
 use std::path::Path;
 
 pub(crate) fn init(cwd: &Path, path: Option<&Path>) -> Result<()> {
@@ -12,6 +12,12 @@ pub(crate) fn init(cwd: &Path, path: Option<&Path>) -> Result<()> {
     if !directory.is_dir() {
         bail!(
             "initialization path {} is not an existing directory",
+            directory.display()
+        );
+    }
+    if directory.join(LIBRARY_FILE).is_file() {
+        bail!(
+            "cannot initialize a project at library root {}; use `cita library shelf <name> init`",
             directory.display()
         );
     }

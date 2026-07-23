@@ -4,7 +4,9 @@
 
 cita is a Git-friendly bibliography CLI. Authoritative BibTeX (plus curated
 INSPIRE identifiers) lives in schema-1 `cita.toml`; `references.bib` is a
-deterministic, tracked generated artifact. Rust edition 2024, MSRV 1.88.
+deterministic, tracked generated artifact. A schema-1 `cita-library.toml` can
+register multiple independent shelf projects by stable name and safe relative
+path. Rust edition 2024, MSRV 1.88.
 
 ## Commands
 
@@ -18,6 +20,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p cita -- add 1207.7214
 cargo run -p cita -- import local.bib
 cargo run -p cita -- generate
+cargo run -p cita -- library shelves
 cargo test --test e2e -- --ignored  # live INSPIRE, network required
 ```
 
@@ -49,8 +52,9 @@ cita-bibliography ← cita-inspire-client   cita-documents
   record id, timestamp, and canonical arXiv/DOI), stable-record-ID refresh
   batches, bounded queries, and 429 retries; cross-checks its BibTeX against the
   selected JSON through `cita-bibliography`.
-- `cita-manifest`: schema-1 authority, identity indexes, deterministic TOML,
-  generated bibliography verification, and coordinated writes.
+- `cita-manifest`: schema-1 shelf authority, library registry/path validation,
+  identity indexes, deterministic TOML, generated bibliography verification,
+  and coordinated writes.
 - `cita-documents`: accepts a validated arXiv ID and atomically caches PDFs and
   safely extracts gzip-compressed TeX source packages beneath `.cita/files/arxiv`.
 - `cita`: CLI, parent discovery, sync reconciliation, and scoped Git commits.
@@ -80,6 +84,20 @@ Add, import, remove, and sync validate a complete candidate before writing.
 Persist and sync `references.bib` first, then persist and sync `cita.toml` as the
 commit point. The old manifest remains authoritative after an interrupted
 second write, and `cita generate` repairs detectable drift.
+
+Library registration is a separate atomic write. Shelf initialization completes
+before registration, so a failed registry write leaves a valid standalone shelf.
+Library-wide operations run shelves in name order and continue after failures;
+there is no crash-atomic transaction across shelves.
+
+### Libraries and shelves
+
+Each registered shelf is an independent cita project with its own manifest,
+bibliography, identities, cache, and Git commits. `cita-library.toml` only maps
+stable names to library-relative paths. Paths cannot escape the root, overlap,
+nest, or alias through symlinks. The library root cannot itself contain
+`cita.toml` or `references.bib`. There is no aggregate bibliography, shared
+cache, cross-shelf uniqueness, or library-wide commit.
 
 ### INSPIRE sync
 
