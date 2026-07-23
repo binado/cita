@@ -17,36 +17,47 @@ pub(crate) struct SyncOutcome {
 }
 
 impl SyncOutcome {
-    pub(crate) fn batch_message(self) -> String {
-        if self.changed {
+    fn synced_message(self, lead: &str, include_left: bool) -> String {
+        if include_left {
             format!(
-                "synced {} managed references; {} imported unchanged",
+                "{lead} {} managed references; left {} imported unchanged",
                 self.managed, self.imported
             )
         } else {
             format!(
-                "already in sync: {} managed, {} imported",
+                "{lead} {} managed references; {} imported unchanged",
                 self.managed, self.imported
             )
+        }
+    }
+
+    fn already_message(self, lead: &str) -> String {
+        format!(
+            "{lead}: {} managed, {} imported",
+            self.managed, self.imported
+        )
+    }
+
+    pub(crate) fn batch_message(self) -> String {
+        if self.changed {
+            self.synced_message("synced", false)
+        } else {
+            self.already_message("already in sync")
         }
     }
 }
 
 impl fmt::Display for SyncOutcome {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.changed {
-            write!(
-                formatter,
-                "Synced {} managed references; left {} imported unchanged",
-                self.managed, self.imported
-            )
-        } else {
-            write!(
-                formatter,
-                "Already in sync: {} managed, {} imported",
-                self.managed, self.imported
-            )
-        }
+        write!(
+            formatter,
+            "{}",
+            if self.changed {
+                self.synced_message("Synced", true)
+            } else {
+                self.already_message("Already in sync")
+            }
+        )
     }
 }
 

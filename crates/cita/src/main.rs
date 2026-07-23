@@ -117,6 +117,22 @@ struct FetchArgs {
     selector: String,
 }
 
+impl FetchArgs {
+    fn into_options(self) -> (String, commands::FetchOptions) {
+        (
+            self.selector,
+            commands::FetchOptions {
+                force: self.force,
+                cache_only: self.cache_only,
+                return_url: self.url,
+                source: self.source,
+                open: self.open,
+                save: self.save,
+            },
+        )
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum LibraryCommand {
     /// Initialize cita-library.toml in an existing directory
@@ -158,7 +174,7 @@ enum ShelfCommand {
     Generate,
     /// Fetch or resolve an arXiv document
     Fetch(FetchArgs),
-    /// Commit this shelf's managed files
+    /// Commit this shelf's managed files; refuses to run if either managed file is already staged
     Commit,
 }
 
@@ -217,28 +233,9 @@ async fn run() -> Result<RunOutcome> {
             no_wrap_title,
         })) => commands::list(&cwd, sort_by, order, !no_wrap_title)?,
         Some(Command::Generate) => commands::generate(&cwd)?,
-        Some(Command::Fetch(FetchArgs {
-            force,
-            cache_only,
-            url,
-            source,
-            open,
-            save,
-            selector,
-        })) => {
-            commands::fetch(
-                &cwd,
-                &selector,
-                commands::FetchOptions {
-                    force,
-                    cache_only,
-                    return_url: url,
-                    source,
-                    open,
-                    save,
-                },
-            )
-            .await?
+        Some(Command::Fetch(args)) => {
+            let (selector, options) = args.into_options();
+            commands::fetch(&cwd, &selector, options).await?
         }
         Some(Command::Commit) => git::commit(&commands::find_manifest(&cwd)?)?,
         Some(Command::Library { command }) => {
@@ -251,16 +248,26 @@ async fn run() -> Result<RunOutcome> {
                     commands::list_shelves(&cwd)?;
                     Ok(false)
                 }
-                LibraryCommand::Shelf { name, command } => match command {
-                    ShelfCommand::Init { path } => {
-                        commands::init_shelf(&cwd, &name, path.as_deref())?;
-                        Ok(false)
+                LibraryCommand::Shelf { name, command } => {
+                    let action = match command {
+                        ShelfCommand::Init { path } => {
+                            commands::init_shelf(&cwd, &name, path.as_deref())?;
+                            None
+                        }
+                        ShelfCommand::Import(args) => Some(commands::ShelfAction::Import(args)),
+                        ShelfCommand::Add(args) => Some(commands::ShelfAction::Add(args)),
+                        ShelfCommand::Sync => Some(commands::ShelfAction::Sync),
+                        ShelfCommand::Remove(args) => Some(commands::ShelfAction::Remove(args)),
+                        ShelfCommand::List(args) => Some(commands::ShelfAction::List(args)),
+                        ShelfCommand::Generate => Some(commands::ShelfAction::Generate),
+                        ShelfCommand::Fetch(args) => Some(commands::ShelfAction::Fetch(args)),
+                        ShelfCommand::Commit => Some(commands::ShelfAction::Commit),
+                    };
+                    if let Some(action) = action {
+                        commands::run_shelf_command(&cwd, &name, action).await?;
                     }
-                    command => {
-                        commands::run_shelf_command(&cwd, &name, command).await?;
-                        Ok(false)
-                    }
-                },
+                    Ok(false)
+                }
                 LibraryCommand::Generate => commands::library_generate(&cwd),
                 LibraryCommand::Sync => commands::library_sync(&cwd).await,
             }?;

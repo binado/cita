@@ -1,8 +1,21 @@
 use super::{generate, init, sync_outcome};
-use crate::{FetchArgs, ShelfCommand};
+use crate::{AddArgs, FetchArgs, ImportArgs, ListArgs, RemoveArgs};
 use anyhow::{Context, Result, bail};
 use cita_manifest::{Library, MANIFEST_FILE};
 use std::{fs, path::Path};
+
+/// A routable shelf command: every `ShelfCommand` variant except `Init`,
+/// which `main.rs` handles before routing here.
+pub(crate) enum ShelfAction {
+    Import(ImportArgs),
+    Add(AddArgs),
+    Sync,
+    Remove(RemoveArgs),
+    List(ListArgs),
+    Generate,
+    Fetch(FetchArgs),
+    Commit,
+}
 
 pub(crate) fn init_library(cwd: &Path, path: Option<&Path>) -> Result<()> {
     let directory = resolve_from_caller(cwd, path);
@@ -69,14 +82,13 @@ pub(crate) fn init_shelf(cwd: &Path, name: &str, path: Option<&Path>) -> Result<
     Ok(())
 }
 
-pub(crate) async fn run_shelf_command(cwd: &Path, name: &str, command: ShelfCommand) -> Result<()> {
+pub(crate) async fn run_shelf_command(cwd: &Path, name: &str, action: ShelfAction) -> Result<()> {
     let library = Library::discover(cwd)?;
     let directory = library.shelf_directory(name)?;
     ensure_direct_shelf(&directory)?;
-    match command {
-        ShelfCommand::Init { .. } => unreachable!("shelf init is handled before routing"),
-        ShelfCommand::Import(args) => super::import(&directory, &args.path, args.overwrite),
-        ShelfCommand::Add(args) => {
+    match action {
+        ShelfAction::Import(args) => super::import(&directory, &args.path, args.overwrite),
+        ShelfAction::Add(args) => {
             super::add(
                 &directory,
                 args.key.as_deref(),
@@ -85,36 +97,17 @@ pub(crate) async fn run_shelf_command(cwd: &Path, name: &str, command: ShelfComm
             )
             .await
         }
-        ShelfCommand::Sync => super::sync(&directory).await,
-        ShelfCommand::Remove(args) => super::remove(&directory, &args.selectors),
-        ShelfCommand::List(args) => {
+        ShelfAction::Sync => super::sync(&directory).await,
+        ShelfAction::Remove(args) => super::remove(&directory, &args.selectors),
+        ShelfAction::List(args) => {
             super::list(&directory, args.sort_by, args.order, !args.no_wrap_title)
         }
-        ShelfCommand::Generate => generate(&directory),
-        ShelfCommand::Fetch(FetchArgs {
-            force,
-            cache_only,
-            url,
-            source,
-            open,
-            save,
-            selector,
-        }) => {
-            super::fetch(
-                &directory,
-                &selector,
-                super::FetchOptions {
-                    force,
-                    cache_only,
-                    return_url: url,
-                    source,
-                    open,
-                    save,
-                },
-            )
-            .await
+        ShelfAction::Generate => generate(&directory),
+        ShelfAction::Fetch(args) => {
+            let (selector, options) = args.into_options();
+            super::fetch(&directory, &selector, options).await
         }
-        ShelfCommand::Commit => crate::git::commit(&directory.join(MANIFEST_FILE)),
+        ShelfAction::Commit => crate::git::commit(&directory.join(MANIFEST_FILE)),
     }
 }
 
@@ -129,7 +122,7 @@ pub(crate) fn batch_generate(cwd: &Path) -> Result<bool> {
             Ok(path) => println!("Shelf {name}: generated {}", path.display()),
             Err(error) => {
                 failed = true;
-                println!("Shelf {name}: failed: {}", one_line(&error));
+                print_batch_failure(name, &error);
             }
         }
     }
@@ -149,7 +142,7 @@ pub(crate) async fn batch_sync(cwd: &Path) -> Result<bool> {
             Ok(outcome) => println!("Shelf {name}: {}", outcome.batch_message()),
             Err(error) => {
                 failed = true;
-                println!("Shelf {name}: failed: {}", one_line(&error));
+                print_batch_failure(name, &error);
             }
         }
     }
@@ -164,12 +157,18 @@ fn resolve_from_caller(cwd: &Path, path: Option<&Path>) -> std::path::PathBuf {
     }
 }
 
-fn one_line(error: &anyhow::Error) -> String {
-    format!("{error:#}").replace(['\n', '\r'], " ")
+fn print_batch_failure(name: &str, error: &anyhow::Error) {
+    println!("Shelf {name}: failed:");
+    for line in format!("{error:#}").lines() {
+        println!("  {line}");
+    }
 }
 
 fn ensure_direct_shelf(directory: &Path) -> Result<()> {
     let manifest = directory.join(MANIFEST_FILE);
+    // Follows symlinks intentionally: nothing else in the manifest crate
+    // rejects a symlinked cita.toml, so this would be an inconsistent place
+    // to start.
     if !manifest.is_file() {
         bail!(
             "registered shelf directory {} does not contain cita.toml",

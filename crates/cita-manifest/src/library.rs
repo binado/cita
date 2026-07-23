@@ -32,7 +32,6 @@ impl Shelf {
 #[derive(Clone, Debug)]
 pub struct Library {
     path: PathBuf,
-    root: PathBuf,
     shelves: BTreeMap<String, Shelf>,
 }
 
@@ -92,7 +91,8 @@ pub enum LibraryError {
     /// A shelf name is malformed.
     #[error("invalid shelf name `{0}`; names must match [A-Za-z0-9][A-Za-z0-9._-]*")]
     InvalidName(String),
-    /// A shelf path is malformed, unsafe, missing, or overlaps another shelf.
+    /// A shelf path is malformed, unsafe, missing, escapes the library root,
+    /// or overlaps another shelf.
     #[error("invalid path for shelf `{name}`: {message}")]
     InvalidPath {
         /// Shelf whose path is invalid.
@@ -110,6 +110,15 @@ pub enum LibraryError {
         name: String,
         /// Existing relative path.
         path: PathBuf,
+    },
+    /// A loaded registry's shelves failed validation.
+    #[error("invalid library {path}: {source}")]
+    InvalidShelf {
+        /// Invalid registry path.
+        path: PathBuf,
+        /// The specific validation failure.
+        #[source]
+        source: Box<LibraryError>,
     },
     /// The registry could not be serialized.
     #[error("could not serialize library: {0}")]
@@ -138,7 +147,6 @@ impl Library {
         }
         let library = Self {
             path,
-            root: root.to_path_buf(),
             shelves: BTreeMap::new(),
         };
         library.persist(&library.shelves)?;
@@ -204,16 +212,12 @@ impl Library {
                 )
             })
             .collect();
-        let library = Self {
-            path,
-            root,
-            shelves,
-        };
+        let library = Self { path, shelves };
         library
             .validate_shelves(false)
-            .map_err(|error| LibraryError::Invalid {
+            .map_err(|error| LibraryError::InvalidShelf {
                 path: library.path.clone(),
-                message: error.to_string(),
+                source: Box::new(error),
             })?;
         Ok(library)
     }
@@ -225,7 +229,7 @@ impl Library {
 
     /// Return the library root.
     pub fn root(&self) -> &Path {
-        &self.root
+        self.path.parent().unwrap_or_else(|| Path::new("."))
     }
 
     /// Return registered shelves in stable name order.
@@ -242,7 +246,7 @@ impl Library {
 
     /// Resolve a registered shelf to its library-root-relative directory.
     pub fn shelf_directory(&self, name: &str) -> Result<PathBuf, LibraryError> {
-        Ok(self.root.join(self.shelf(name)?.path()))
+        Ok(self.root().join(self.shelf(name)?.path()))
     }
 
     /// Validate a proposed registration before creating its directory.
@@ -252,9 +256,40 @@ impl Library {
         path: impl AsRef<Path>,
     ) -> Result<(), LibraryError> {
         validate_name(name)?;
+        match self.candidate_shelves(name, path)? {
+            Some(candidate) => validate_shelf_set(self.root(), &candidate, false),
+            None => Ok(()),
+        }
+    }
+
+    /// Atomically register an initialized shelf.
+    pub fn register(
+        &mut self,
+        name: impl Into<String>,
+        path: impl AsRef<Path>,
+    ) -> Result<(), LibraryError> {
+        let name = name.into();
+        match self.candidate_shelves(&name, path)? {
+            Some(candidate) => {
+                validate_shelf_set(self.root(), &candidate, true)?;
+                self.persist(&candidate)?;
+                self.shelves = candidate;
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// Return the shelf map with `name`/`path` inserted, or `None` if that
+    /// exact name/path pair is already registered (a no-op registration).
+    fn candidate_shelves(
+        &self,
+        name: &str,
+        path: impl AsRef<Path>,
+    ) -> Result<Option<BTreeMap<String, Shelf>>, LibraryError> {
         if let Some(existing) = self.shelves.get(name) {
             if existing.path == path.as_ref() {
-                return Ok(());
+                return Ok(None);
             }
             return Err(LibraryError::AlreadyRegistered {
                 name: name.into(),
@@ -268,40 +303,11 @@ impl Library {
                 path: path.as_ref().to_path_buf(),
             },
         );
-        validate_shelf_set(&self.root, &candidate, false)
-    }
-
-    /// Atomically register an initialized shelf.
-    pub fn register(
-        &mut self,
-        name: impl Into<String>,
-        path: impl AsRef<Path>,
-    ) -> Result<(), LibraryError> {
-        let name = name.into();
-        if let Some(existing) = self.shelves.get(&name) {
-            if existing.path == path.as_ref() {
-                return Ok(());
-            }
-            return Err(LibraryError::AlreadyRegistered {
-                name,
-                path: existing.path.clone(),
-            });
-        }
-        let mut candidate = self.shelves.clone();
-        candidate.insert(
-            name,
-            Shelf {
-                path: path.as_ref().to_path_buf(),
-            },
-        );
-        validate_shelf_set(&self.root, &candidate, true)?;
-        self.persist(&candidate)?;
-        self.shelves = candidate;
-        Ok(())
+        Ok(Some(candidate))
     }
 
     fn validate_shelves(&self, require_exists: bool) -> Result<(), LibraryError> {
-        validate_shelf_set(&self.root, &self.shelves, require_exists)
+        validate_shelf_set(self.root(), &self.shelves, require_exists)
     }
 
     fn persist(&self, shelves: &BTreeMap<String, Shelf>) -> Result<(), LibraryError> {

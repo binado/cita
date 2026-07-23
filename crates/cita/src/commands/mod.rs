@@ -14,8 +14,8 @@ pub(crate) use generate::{generate, generate_outcome};
 pub(crate) use import::import;
 pub(crate) use init::init;
 pub(crate) use library::{
-    batch_generate as library_generate, batch_sync as library_sync, init_library, init_shelf,
-    list_shelves, run_shelf_command,
+    ShelfAction, batch_generate as library_generate, batch_sync as library_sync, init_library,
+    init_shelf, list_shelves, run_shelf_command,
 };
 pub(crate) use list::list;
 pub(crate) use remove::remove;

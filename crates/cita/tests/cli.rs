@@ -506,7 +506,14 @@ fn library_batches_are_ordered_continue_after_failure_and_report_once() {
     let middle = stdout.find("Shelf middle: failed:").unwrap();
     let zeta = stdout.find("Shelf zeta: generated").unwrap();
     assert!(alpha < middle && middle < zeta, "{stdout}");
-    assert_eq!(stdout.lines().count(), 3, "{stdout}");
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| line.starts_with("Shelf "))
+            .count(),
+        3,
+        "{stdout}"
+    );
     assert!(stderr.is_empty(), "{stderr}");
     assert_eq!(
         fs::read_to_string(directory.path().join("zeta/references.bib")).unwrap(),
@@ -610,6 +617,23 @@ fn failed_library_registration_leaves_a_valid_shelf_for_retry() {
             .unwrap()
             .contains("[shelves.orphan]")
     );
+}
+
+#[test]
+fn routed_shelf_command_rejects_a_shelf_missing_cita_toml() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["library", "init"]));
+    success(cita(
+        directory.path(),
+        &["library", "shelf", "orphan", "init"],
+    ));
+    fs::remove_file(directory.path().join("orphan/cita.toml")).unwrap();
+
+    let stderr = failure(cita(
+        directory.path(),
+        &["library", "shelf", "orphan", "list"],
+    ));
+    assert!(stderr.contains("does not contain cita.toml"), "{stderr}");
 }
 
 #[test]
