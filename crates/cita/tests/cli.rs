@@ -1175,6 +1175,20 @@ fn fetch_source_cache_miss_has_guidance_and_creates_no_cache_state() {
 }
 
 #[test]
+fn fetch_source_cache_only_suggests_force_for_an_invalid_cached_source() {
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    fs::create_dir_all(directory.path().join(".cita/files/arxiv/2001.00001/source")).unwrap();
+
+    let error = failure(cita(
+        directory.path(),
+        &["fetch", "--source", "--cache-only", "Zed"],
+    ));
+    assert!(error.contains("cached source directory"), "{error}");
+    assert!(error.contains("retry with --force"), "{error}");
+}
+
+#[test]
 fn fetch_source_conflicts_with_url_and_still_checks_for_arxiv_ids() {
     let directory = tempfile::tempdir().unwrap();
     arxiv_library(directory.path());

@@ -319,7 +319,8 @@ pub enum Error {
     /// A source package could not be extracted into its temporary directory.
     #[error("could not extract source package for {path}: {source}")]
     ExtractSource {
-        /// Intended final source cache path.
+        /// Path being written during extraction (a staging path, or the final
+        /// cache path when staging setup fails).
         path: PathBuf,
         /// Underlying filesystem error.
         source: std::io::Error,
