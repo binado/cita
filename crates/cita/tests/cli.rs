@@ -537,6 +537,19 @@ fn library_rejects_unknown_shelves_and_a_root_that_is_also_a_shelf() {
     success(cita(directory.path(), &["library", "init"]));
     let error = failure(cita(directory.path(), &["list", "-s", "missing"]));
     assert!(error.contains("unknown shelf `missing`"), "{error}");
+    assert!(error.contains("no shelves are registered"), "{error}");
+    // `--shelf` selects; it never registers, so the miss points at the verb
+    // that does.
+    assert!(
+        error.contains("create it with `cita library new missing`"),
+        "{error}"
+    );
+
+    success(cita(directory.path(), &["library", "new", "alpha"]));
+    success(cita(directory.path(), &["library", "new", "zeta"]));
+    let error = failure(cita(directory.path(), &["add", "-s", "alpah", "1207.7214"]));
+    assert!(error.contains("unknown shelf `alpah`"), "{error}");
+    assert!(error.contains("registered: alpha, zeta"), "{error}");
 
     fs::write(directory.path().join("cita.toml"), "schema = 1\n").unwrap();
     fs::write(directory.path().join("references.bib"), "").unwrap();

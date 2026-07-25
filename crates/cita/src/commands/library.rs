@@ -1,6 +1,6 @@
 use super::{init, sync_outcome};
-use anyhow::{Context, Result, bail};
-use cita_manifest::{Library, MANIFEST_FILE};
+use anyhow::{Context, Result, anyhow, bail};
+use cita_manifest::{Library, LibraryError, MANIFEST_FILE};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -37,12 +37,38 @@ pub(crate) fn resolve_target(cwd: &Path, shelf: Option<&str>) -> Result<Target> 
         });
     };
     let library = Library::discover(cwd)?;
-    let directory = library.shelf_directory(name)?;
+    let directory = library
+        .shelf_directory(name)
+        .map_err(|error| explain_lookup_failure(error, &library))?;
     ensure_direct_shelf(&directory)?;
     Ok(Target {
         directory,
         name: Some(name.to_owned()),
     })
+}
+
+/// Name the alternatives when a shelf lookup misses.
+///
+/// A mistyped `--shelf` is the common failure, and the answer is already in the
+/// registry that was just loaded, so listing the registered names beats sending
+/// the user to `cita library list`. The hint also names the creating verb,
+/// because `--shelf` only ever selects an existing shelf; it never registers
+/// one, so a typo cannot silently produce a half-populated shelf.
+fn explain_lookup_failure(error: LibraryError, library: &Library) -> anyhow::Error {
+    let LibraryError::UnknownShelf(name) = &error else {
+        return error.into();
+    };
+    let registered = library
+        .shelves()
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let known = if registered.is_empty() {
+        "no shelves are registered".to_owned()
+    } else {
+        format!("registered: {}", registered.join(", "))
+    };
+    anyhow!("{error}; {known}; create it with `cita library new {name}`")
 }
 
 pub(crate) fn init_library(cwd: &Path, path: Option<&Path>) -> Result<()> {
