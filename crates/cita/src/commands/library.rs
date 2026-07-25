@@ -1,24 +1,74 @@
-use super::{generate, init, sync_outcome};
-use crate::{AddArgs, ExportArgs, FetchArgs, ImportArgs, ListArgs, RemoveArgs};
-use anyhow::{Context, Result, bail};
-use cita_manifest::{Library, MANIFEST_FILE};
+use super::{init, sync_outcome};
+use anyhow::{Context, Result, anyhow, bail};
+use cita_manifest::{Library, LibraryError, MANIFEST_FILE};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
 
-/// A routable shelf command: every `ShelfCommand` variant except `Init`,
-/// which `main.rs` handles before routing here.
-pub(crate) enum ShelfAction {
-    Import(ImportArgs),
-    Add(AddArgs),
-    Sync,
-    Remove(RemoveArgs),
-    List(ListArgs),
-    Generate,
-    Export(ExportArgs),
-    Fetch(FetchArgs),
-    Commit,
+/// A resolved operation target: the directory to work in, plus the stable
+/// registered name when that directory is a shelf.
+///
+/// The name is not decoration. A shelf's export is named for its registered
+/// name, which can differ from the directory it is registered at, so the name
+/// has to survive scope resolution.
+pub(crate) struct Target {
+    pub(crate) directory: PathBuf,
+    name: Option<String>,
+}
+
+impl Target {
+    /// The default export path for a shelf, or `None` for an ordinary project,
+    /// which derives its export name from its own directory instead.
+    pub(crate) fn export_path(&self) -> Option<PathBuf> {
+        self.name
+            .as_deref()
+            .map(|name| shelf_export_path(&self.directory, name))
+    }
+}
+
+/// Resolve `--shelf`, or fall back to the caller's directory so ordinary
+/// commands keep discovering their project by walking up from the cwd.
+pub(crate) fn resolve_target(cwd: &Path, shelf: Option<&str>) -> Result<Target> {
+    let Some(name) = shelf else {
+        return Ok(Target {
+            directory: cwd.to_path_buf(),
+            name: None,
+        });
+    };
+    let library = Library::discover(cwd)?;
+    let directory = library
+        .shelf_directory(name)
+        .map_err(|error| explain_lookup_failure(error, &library))?;
+    ensure_direct_shelf(&directory)?;
+    Ok(Target {
+        directory,
+        name: Some(name.to_owned()),
+    })
+}
+
+/// Name the alternatives when a shelf lookup misses.
+///
+/// A mistyped `--shelf` is the common failure, and the answer is already in the
+/// registry that was just loaded, so listing the registered names beats sending
+/// the user to `cita library list`. The hint also names the creating verb,
+/// because `--shelf` only ever selects an existing shelf; it never registers
+/// one, so a typo cannot silently produce a half-populated shelf.
+fn explain_lookup_failure(error: LibraryError, library: &Library) -> anyhow::Error {
+    let LibraryError::UnknownShelf(name) = &error else {
+        return error.into();
+    };
+    let registered = library
+        .shelves()
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let known = if registered.is_empty() {
+        "no shelves are registered".to_owned()
+    } else {
+        format!("registered: {}", registered.join(", "))
+    };
+    anyhow!("{error}; {known}; create it with `cita library new {name}`")
 }
 
 pub(crate) fn init_library(cwd: &Path, path: Option<&Path>) -> Result<()> {
@@ -86,94 +136,36 @@ pub(crate) fn init_shelf(cwd: &Path, name: &str, path: Option<&Path>) -> Result<
     Ok(())
 }
 
-pub(crate) async fn run_shelf_command(cwd: &Path, name: &str, action: ShelfAction) -> Result<()> {
-    let library = Library::discover(cwd)?;
-    let directory = library.shelf_directory(name)?;
-    ensure_direct_shelf(&directory)?;
-    match action {
-        ShelfAction::Import(args) => super::import(&directory, &args.path, args.overwrite),
-        ShelfAction::Add(args) => {
-            super::add(
-                &directory,
-                args.key.as_deref(),
-                &args.locators,
-                args.overwrite,
-            )
-            .await
-        }
-        ShelfAction::Sync => super::sync(&directory).await,
-        ShelfAction::Remove(args) => super::remove(&directory, &args.selectors),
-        ShelfAction::List(args) => {
-            super::list(&directory, args.sort_by, args.order, !args.no_wrap_title)
-        }
-        ShelfAction::Generate => generate(&directory),
-        ShelfAction::Export(args) => {
-            let default = shelf_export_path(&directory, name);
-            let output = args.output.as_deref().unwrap_or(&default);
-            super::export(&directory, cwd, Some(output))
-        }
-        ShelfAction::Fetch(args) => {
-            let (selector, options) = args.into_options();
-            super::fetch(&directory, &selector, options).await
-        }
-        ShelfAction::Commit => crate::git::commit(&directory.join(MANIFEST_FILE)),
-    }
-}
-
-pub(crate) fn batch_generate(cwd: &Path) -> Result<bool> {
-    let library = Library::discover(cwd)?;
-    let mut failed = false;
-    for (name, shelf) in library.shelves() {
-        let directory = library.root().join(shelf.path());
-        let outcome =
-            ensure_direct_shelf(&directory).and_then(|()| super::generate_outcome(&directory));
-        match outcome {
-            Ok(path) => println!("Shelf {name}: generated {}", path.display()),
-            Err(error) => {
-                failed = true;
-                print_batch_failure(name, &error);
-            }
-        }
-    }
-    Ok(failed)
-}
-
-pub(crate) fn batch_export(cwd: &Path) -> Result<bool> {
-    let library = Library::discover(cwd)?;
-    let mut failed = false;
-    for (name, shelf) in library.shelves() {
-        let directory = library.root().join(shelf.path());
-        let target = shelf_export_path(&directory, name);
-        let outcome = ensure_direct_shelf(&directory)
-            .and_then(|()| super::export_outcome(&directory, &directory, Some(&target)));
-        match outcome {
-            Ok(path) => println!("Shelf {name}: exported {}", path.display()),
-            Err(error) => {
-                failed = true;
-                print_batch_failure(name, &error);
-            }
-        }
-    }
-    Ok(failed)
-}
-
 /// A shelf export is named for its stable registered name, which can differ
 /// from the directory the shelf is registered at.
 fn shelf_export_path(directory: &Path, name: &str) -> PathBuf {
     directory.join(format!("{name}.bib"))
 }
 
-pub(crate) async fn batch_sync(cwd: &Path) -> Result<bool> {
+/// Run one operation in every registered shelf, in name order.
+///
+/// A shelf failure is reported and the run continues, so one broken shelf never
+/// hides the rest; the returned flag says whether any shelf failed, which the
+/// caller turns into the exit status. Library-wide operations are ordered
+/// collections of independent shelf mutations, not one crash-atomic transaction,
+/// so nothing is rolled back here.
+async fn run_batch<F>(cwd: &Path, mut op: F) -> Result<bool>
+where
+    F: AsyncFnMut(&Target) -> Result<String>,
+{
     let library = Library::discover(cwd)?;
     let mut failed = false;
     for (name, shelf) in library.shelves() {
-        let directory = library.root().join(shelf.path());
-        let outcome = match ensure_direct_shelf(&directory) {
-            Ok(()) => sync_outcome(&directory).await,
+        let target = Target {
+            directory: library.root().join(shelf.path()),
+            name: Some(name.clone()),
+        };
+        let outcome = match ensure_direct_shelf(&target.directory) {
+            Ok(()) => op(&target).await,
             Err(error) => Err(error),
         };
         match outcome {
-            Ok(outcome) => println!("Shelf {name}: {}", outcome.batch_message()),
+            Ok(message) => println!("Shelf {name}: {message}"),
             Err(error) => {
                 failed = true;
                 print_batch_failure(name, &error);
@@ -181,6 +173,32 @@ pub(crate) async fn batch_sync(cwd: &Path) -> Result<bool> {
         }
     }
     Ok(failed)
+}
+
+pub(crate) async fn batch_generate(cwd: &Path) -> Result<bool> {
+    run_batch(cwd, async |target| {
+        let path = super::generate_outcome(&target.directory)?;
+        Ok(format!("generated {}", path.display()))
+    })
+    .await
+}
+
+pub(crate) async fn batch_export(cwd: &Path) -> Result<bool> {
+    run_batch(cwd, async |target| {
+        // A batch export takes no --output, so it always lands on the shelf's
+        // own default path and relative resolution never reaches the caller.
+        let default = target.export_path();
+        let path = super::export_outcome(&target.directory, &target.directory, default.as_deref())?;
+        Ok(format!("exported {}", path.display()))
+    })
+    .await
+}
+
+pub(crate) async fn batch_sync(cwd: &Path) -> Result<bool> {
+    run_batch(cwd, async |target| {
+        Ok(sync_outcome(&target.directory).await?.batch_message())
+    })
+    .await
 }
 
 fn resolve_from_caller(cwd: &Path, path: Option<&Path>) -> std::path::PathBuf {

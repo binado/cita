@@ -29,10 +29,10 @@ Several independent projects can also be registered as shelves in one library:
 
 ```bash
 cita library init
-cita library shelf paper-one init --path papers/paper-one
-cita library shelf paper-one add 1207.7214
-cita library shelves
-cita library sync
+cita library new paper-one --path papers/paper-one
+cita add 1207.7214 --shelf paper-one
+cita library list
+cita sync --all-shelves
 ```
 
 Supported locators are bare arXiv IDs; explicit `arxiv:`, `doi:`, or `inspire:`
@@ -84,21 +84,26 @@ work as selectors.
 - `cita library init [--path <directory>]` creates an idempotent
   `cita-library.toml` registry in an existing directory. A library root cannot
   itself be a cita project.
-- `cita library shelves` lists stable shelf names and their library-relative
-  paths in deterministic order.
-- `cita library shelf <name> init [--path <relative-directory>]` creates and
-  registers an independent shelf. It can create an empty project, import an
-  existing standalone `references.bib`, or adopt an existing verified cita
-  project. Initialization completes before registration, so a registry write
-  failure leaves a usable standalone shelf for a safe retry.
-- `cita library shelf <name> <add|import|remove|list|generate|export|sync|fetch|commit> ...` runs the
-  corresponding command in that shelf. Import and export paths remain relative
-  to the directory where the user invoked cita, not to the shelf.
-- `cita library generate`, `cita library export`, and `cita library sync`
-  process every shelf in name order, continue after shelf-specific failures,
-  print one result per shelf, and exit unsuccessfully if any shelf failed. A
-  shelf export is named for the stable registered shelf name, so importing each
-  file into Zotero yields one collection per shelf.
+- `cita library list` (alias `ls`) lists stable shelf names and their
+  library-relative paths in deterministic order.
+- `cita library new <name> [--path <relative-directory>]` (alias `create`)
+  creates and registers an independent shelf. It can create an empty project,
+  import an existing standalone `references.bib`, or adopt an existing verified
+  cita project. Initialization completes before registration, so a registry
+  write failure leaves a usable standalone shelf for a safe retry.
+- `-s/--shelf <name>` runs any of `add`, `import`, `remove`, `list`, `generate`,
+  `export`, `sync`, `fetch`, and `commit` in that registered shelf instead of
+  the project discovered from the current directory. Import and export paths
+  remain relative to the directory where the user invoked cita, not to the
+  shelf. A shelf export is named for the stable registered shelf name rather
+  than the shelf directory, so importing each file into Zotero yields one
+  collection per shelf.
+- `--all-shelves` runs `generate`, `export`, or `sync` in every shelf in name
+  order, continuing after shelf-specific failures, printing one result per
+  shelf, and exiting unsuccessfully if any shelf failed. It is mutually
+  exclusive with `--shelf`, and with `export --output`, which cannot name a file
+  for each shelf. The remaining commands are deliberately excluded: there is no
+  library-wide commit, and mutations stay per-shelf.
 - `cita completions <bash|elvish|fish|powershell|zsh>` prints a shell completion
   script to stdout, e.g. `cita completions zsh > ~/.zfunc/_cita`.
 
