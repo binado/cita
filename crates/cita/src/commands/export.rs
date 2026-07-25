@@ -88,16 +88,23 @@ fn ensure_not_managed(path: &Path, manifest: &Manifest) -> Result<()> {
     Ok(())
 }
 
-/// An absolute path whose parent is canonicalized, so `..` segments and
-/// symlinked directories cannot alias a managed file. The target need not exist.
+/// An absolute, canonical path for comparing against managed files.
+///
+/// An existing target is canonicalized outright, so a case-insensitive
+/// filesystem reports the on-disk name and `References.bib` cannot alias
+/// `references.bib`. A target that does not exist yet cannot alias an existing
+/// managed file, so only its parent is canonicalized, which still collapses
+/// `..` segments and symlinked directories.
 fn resolved(path: &Path) -> Result<PathBuf> {
     let absolute = std::path::absolute(path)
         .with_context(|| format!("could not resolve {}", path.display()))?;
-    match (
-        absolute.parent().map(fs::canonicalize),
-        absolute.file_name(),
-    ) {
-        (Some(Ok(parent)), Some(file)) => Ok(parent.join(file)),
-        _ => Ok(absolute),
+    if let Ok(canonical) = fs::canonicalize(&absolute) {
+        return Ok(canonical);
     }
+    let (Some(parent), Some(file)) = (absolute.parent(), absolute.file_name()) else {
+        bail!("could not resolve {}", absolute.display());
+    };
+    let parent = fs::canonicalize(parent)
+        .with_context(|| format!("could not resolve the directory {}", parent.display()))?;
+    Ok(parent.join(file))
 }

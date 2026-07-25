@@ -184,6 +184,16 @@ fn key_positions(output: &str, keys: [&str; 3]) -> [usize; 3] {
     })
 }
 
+/// Whether `directory` is on a case-insensitive filesystem, probed so the
+/// regression test means something on both macOS and Linux CI.
+fn case_insensitive(directory: &Path) -> bool {
+    let probe = directory.join("case-probe");
+    fs::write(&probe, b"probe").unwrap();
+    let insensitive = directory.join("CASE-PROBE").exists();
+    fs::remove_file(&probe).unwrap();
+    insensitive
+}
+
 fn arxiv_library(directory: &Path) {
     success(cita(directory, &["init"]));
     let input = format!(
@@ -1818,6 +1828,31 @@ fn export_injects_arxiv_urls_and_leaves_the_generated_bibliography_untouched() {
 }
 
 #[test]
+fn export_derives_the_url_from_an_inspire_records_curated_arxiv_id() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+
+    let json = json_record(42, "Provider:42", "Provider", "2401.00042");
+    let bib = entry("Provider:42", "Provider", "eprint={2401.00042},");
+    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bib)]);
+    success(cita_with_server(
+        directory.path(),
+        &["add", "inspire:42"],
+        &base,
+    ));
+    handle.join().unwrap();
+
+    let stdout = success(cita(directory.path(), &["export"]));
+    assert!(stdout.starts_with("Exported "), "{stdout}");
+    let name = directory.path().file_name().unwrap().to_str().unwrap();
+    let exported = fs::read_to_string(directory.path().join(format!("{name}.bib"))).unwrap();
+    assert!(
+        exported.contains("url = {https://arxiv.org/pdf/2401.00042}"),
+        "{exported}"
+    );
+}
+
+#[test]
 fn export_honors_output_and_resolves_it_against_the_caller() {
     let directory = tempfile::tempdir().unwrap();
     arxiv_library(directory.path());
@@ -1844,6 +1879,51 @@ fn export_refuses_to_overwrite_the_managed_files() {
         let stderr = failure(cita(directory.path(), &["export", "-o", target]));
         assert!(stderr.contains("managed file"), "{stderr}");
     }
+    #[cfg(unix)]
+    {
+        // A symlinked directory must not let the export alias a managed file
+        // through a different path.
+        std::os::unix::fs::symlink(".", directory.path().join("alias")).unwrap();
+        let stderr = failure(cita(
+            directory.path(),
+            &["export", "-o", "alias/references.bib"],
+        ));
+        assert!(stderr.contains("managed file"), "{stderr}");
+    }
+    assert_eq!(
+        fs::read(directory.path().join("references.bib")).unwrap(),
+        generated
+    );
+    assert_eq!(
+        fs::read(directory.path().join("cita.toml")).unwrap(),
+        manifest
+    );
+}
+
+#[test]
+fn export_refuses_a_case_alias_of_a_managed_file_on_a_case_insensitive_filesystem() {
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    let insensitive = case_insensitive(directory.path());
+    let generated = fs::read(directory.path().join("references.bib")).unwrap();
+    let manifest = fs::read(directory.path().join("cita.toml")).unwrap();
+
+    for target in ["References.bib", "CITA.toml"] {
+        let output = cita(directory.path(), &["export", "-o", target]);
+        if insensitive {
+            // On this filesystem `target` names the same inode as the managed
+            // file, so it already exists; the assertion below on the managed
+            // files' bytes is what proves the export did not touch it.
+            let stderr = failure(output);
+            assert!(stderr.contains("managed file"), "{stderr}");
+        } else {
+            success(output);
+            assert!(directory.path().join(target).is_file());
+            fs::remove_file(directory.path().join(target)).unwrap();
+        }
+    }
+
+    // Either branch must leave both managed files byte-identical.
     assert_eq!(
         fs::read(directory.path().join("references.bib")).unwrap(),
         generated

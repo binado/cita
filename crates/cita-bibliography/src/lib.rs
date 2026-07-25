@@ -310,7 +310,9 @@ pub fn rename_entry(source: &str, new_key: &str) -> Result<String, Error> {
 /// a comma and indented like that field; an entry written on one line stays on
 /// one line. An entry that already defines `name` is returned unchanged, so an
 /// authored value is never replaced and repeated calls are idempotent. Field
-/// names are compared case-insensitively, as BibTeX does.
+/// names are compared case-insensitively, as BibTeX does. If the last field
+/// carries a trailing inline comment, that comment ends up trailing the
+/// inserted field instead.
 ///
 /// The value is written verbatim inside braces, so it must be non-empty and
 /// must not contain `{`, `}`, `\`, `%`, or a control character.
@@ -330,8 +332,10 @@ pub fn insert_field(source: &str, name: &str, value: &str) -> Result<String, Err
     {
         return Ok(source.to_owned());
     }
-    // Inserting after the last field rather than before the closing brace keeps
-    // a trailing inline comment attached to the field it documents.
+    // The splice point is the end of the last field's value, before any trailing
+    // whitespace or inline comment, so the existing comma placement is exact and
+    // the new field can never land inside a `%` comment's line scope. A trailing
+    // comment therefore ends up documenting the inserted field, as the test shows.
     let (insert, separator) = match &entry.last_field {
         Some(field) => (field.end, ","),
         None => (entry.entry_range.end - 1, ""),

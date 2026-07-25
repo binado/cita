@@ -97,7 +97,7 @@ struct ListArgs {
 
 #[derive(Debug, Args)]
 struct ExportArgs {
-    /// Write the export here instead of `<project>.bib`; relative paths use the caller's directory
+    /// Write the export here instead of the default `<name>.bib`; relative paths use the caller's directory
     #[arg(short = 'o', long)]
     output: Option<PathBuf>,
 }

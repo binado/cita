@@ -86,10 +86,10 @@ content, malformed or duplicate entries, missing titles, texkeys outside
 Layout stays in `cita-manifest::Manifest::render_derived`, so every rendered
 bibliography shares one set of rules; only field-level policy lives in the CLI.
 Fields are added through `cita-bibliography::insert_field`, which splices after
-an entry's last field using scanner-owned spans — inserting before the closing
-brace would break entries carrying a trailing inline comment. An entry that
-already defines the field is returned unchanged, which keeps authored values and
-makes repeated exports byte-stable.
+an entry's last field value using scanner-owned spans, before any trailing
+whitespace or inline comment, so comma placement is exact and the field cannot
+be swallowed by a comment. An entry that already defines the field is returned
+unchanged, which keeps authored values and makes repeated exports byte-stable.
 
 Exports are pure functions of `cita.toml`: no network, no cache probing, no
 machine-specific paths. They are untracked, unverified, never read back, and
