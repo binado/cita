@@ -3,7 +3,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use cita_bibliography::insert_field;
 use cita_core::ReferenceSource;
 use cita_documents::arxiv_pdf_url;
-use cita_manifest::{Manifest, SourceSnapshot, atomic_write};
+use cita_manifest::{
+    BIBLIOGRAPHY_FILE, LIBRARY_FILE, MANIFEST_FILE, Manifest, SourceSnapshot, atomic_write,
+};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -74,7 +76,11 @@ fn default_export_path(directory: &Path) -> Result<PathBuf> {
     Ok(directory.join(file))
 }
 
-/// Refuse to write over `cita.toml` or the generated bibliography.
+/// Refuse to write over a managed file.
+///
+/// The identity check covers this project's own files. `--output` is the only
+/// path in the CLI that can leave the discovered project, so it also has to
+/// answer for every other project's files, which the ownership check below does.
 fn ensure_not_managed(path: &Path, manifest: &Manifest) -> Result<()> {
     let target = resolved(path)?;
     for managed in [manifest.bibliography_path(), manifest.path()] {
@@ -84,6 +90,30 @@ fn ensure_not_managed(path: &Path, manifest: &Manifest) -> Result<()> {
                 managed.display()
             );
         }
+    }
+    ensure_not_owned_elsewhere(&target)
+}
+
+/// Refuse a target that some other project or library manages.
+///
+/// A managed name is only managed inside the directory that owns it, so a
+/// `references.bib` in a plain LaTeX directory remains a legal export target;
+/// the same name beside a `cita.toml` does not.
+fn ensure_not_owned_elsewhere(target: &Path) -> Result<()> {
+    let (Some(name), Some(parent)) = (target.file_name(), target.parent()) else {
+        return Ok(());
+    };
+    let (owner, kind) = match name.to_str() {
+        Some(MANIFEST_FILE | BIBLIOGRAPHY_FILE) => (MANIFEST_FILE, "project"),
+        Some(LIBRARY_FILE) => (LIBRARY_FILE, "library"),
+        _ => return Ok(()),
+    };
+    if parent.join(owner).is_file() {
+        bail!(
+            "refusing to write the export over the managed file {}, which belongs to the {kind} at {}",
+            target.display(),
+            parent.display()
+        );
     }
     Ok(())
 }

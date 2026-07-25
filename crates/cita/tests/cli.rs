@@ -1901,6 +1901,69 @@ fn export_refuses_to_overwrite_the_managed_files() {
 }
 
 #[test]
+fn export_refuses_to_overwrite_another_projects_managed_files() {
+    let root = tempfile::tempdir().unwrap();
+    let one = root.path().join("one");
+    let two = root.path().join("two");
+    fs::create_dir(&one).unwrap();
+    fs::create_dir(&two).unwrap();
+    arxiv_library(&one);
+    arxiv_library(&two);
+    let bibliography = fs::read(two.join("references.bib")).unwrap();
+    let manifest = fs::read(two.join("cita.toml")).unwrap();
+
+    // --output is the only path in the CLI that can leave the discovered
+    // project, so the guard has to know about every project, not just this one.
+    for target in ["../two/references.bib", "../two/cita.toml"] {
+        let stderr = failure(cita(&one, &["export", "-o", target]));
+        assert!(stderr.contains("managed file"), "{stderr}");
+    }
+    assert_eq!(fs::read(two.join("references.bib")).unwrap(), bibliography);
+    assert_eq!(fs::read(two.join("cita.toml")).unwrap(), manifest);
+
+    // A managed name is only managed where a project owns it, so the same file
+    // name in a plain directory stays a legal target.
+    fs::create_dir(root.path().join("plain")).unwrap();
+    success(cita(&one, &["export", "-o", "../plain/references.bib"]));
+    assert!(root.path().join("plain/references.bib").is_file());
+}
+
+#[test]
+fn export_refuses_to_overwrite_a_library_registry() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["library", "init"]));
+    success(cita(
+        directory.path(),
+        &["library", "shelf", "paper", "init"],
+    ));
+    success(cita_stdin(
+        directory.path(),
+        &["library", "shelf", "paper", "import", "-"],
+        &entry("Zed", "Shelved", "eprint={2001.00001},"),
+    ));
+    let registry = fs::read(directory.path().join("cita-library.toml")).unwrap();
+
+    // The registry is not derivable from any shelf, so clobbering it would be
+    // the one unrecoverable export.
+    let stderr = failure(cita(
+        directory.path(),
+        &[
+            "library",
+            "shelf",
+            "paper",
+            "export",
+            "-o",
+            "cita-library.toml",
+        ],
+    ));
+    assert!(stderr.contains("managed file"), "{stderr}");
+    assert_eq!(
+        fs::read(directory.path().join("cita-library.toml")).unwrap(),
+        registry
+    );
+}
+
+#[test]
 fn export_refuses_a_case_alias_of_a_managed_file_on_a_case_insensitive_filesystem() {
     let directory = tempfile::tempdir().unwrap();
     arxiv_library(directory.path());

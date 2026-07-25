@@ -93,8 +93,11 @@ unchanged, which keeps authored values and makes repeated exports byte-stable.
 
 Exports are pure functions of `cita.toml`: no network, no cache probing, no
 machine-specific paths. They are untracked, unverified, never read back, and
-refuse to run against bibliography drift or to overwrite a managed file. Shelf
-exports are named for the registered shelf name, not the shelf directory.
+refuse to run against bibliography drift. `--output` is the only CLI path that
+can leave the discovered project, so it refuses both this project's managed
+files and any managed file a *different* project or library owns; a managed name
+only counts inside the directory that owns it. Shelf exports are named for the
+registered shelf name, not the shelf directory.
 
 ### Atomic mutations
 

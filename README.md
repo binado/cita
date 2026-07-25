@@ -69,7 +69,9 @@ work as selectors.
   with an arXiv ID, leaving entries that already define a `url` untouched. The
   default file is named for the project directory; a relative `--output` is
   relative to the directory where cita was invoked. The export never overwrites
-  a managed file, and it refuses to run while `references.bib` has drifted.
+  a managed file — not this project's, and not a `cita.toml`, `references.bib`,
+  or `cita-library.toml` belonging to any other project or library — and it
+  refuses to run while `references.bib` has drifted.
 - `cita fetch [--force | --cache-only | --url] [--source] [--open] [--save]
   <selector>` returns an absolute cached PDF path by default, the arXiv PDF URL
   with `-u/--url`, or an absolute extracted source directory with `--source`.
