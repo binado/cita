@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/binado/cita/compare/cita-v0.3.2...cita-v0.4.0) - 2026-07-25
+
+### Added
+
+- [**breaking**] select shelves with --shelf instead of a nested command tree ([#36](https://github.com/binado/cita/pull/36))
+
 ## [0.3.2](https://github.com/binado/cita/compare/cita-v0.3.1...cita-v0.3.2) - 2026-07-25
 
 ### Added
