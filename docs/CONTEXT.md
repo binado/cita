@@ -59,6 +59,14 @@ bytes are completely derived from the manifest: local-key order, preserved raw
 entry fields, one blank line between entries, and a final newline. Drift is an
 error; `cita generate` repairs it.
 
+## Derived export
+
+The `cita export` output is a derived artifact, not a generated one. It shares
+the generated bibliography's layout and ordering but adds resolvable `url`
+fields for downstream reference managers. Unlike `references.bib` it is not
+tracked, not verified, never read back, and never authoritative — it is written
+for other tools to consume and regenerated rather than edited.
+
 ## Managed and imported references
 
 INSPIRE snapshots are managed: `cita sync` refreshes them by stable record ID.

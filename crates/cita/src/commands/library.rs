@@ -1,8 +1,11 @@
 use super::{generate, init, sync_outcome};
-use crate::{AddArgs, FetchArgs, ImportArgs, ListArgs, RemoveArgs};
+use crate::{AddArgs, ExportArgs, FetchArgs, ImportArgs, ListArgs, RemoveArgs};
 use anyhow::{Context, Result, bail};
 use cita_manifest::{Library, MANIFEST_FILE};
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 /// A routable shelf command: every `ShelfCommand` variant except `Init`,
 /// which `main.rs` handles before routing here.
@@ -13,6 +16,7 @@ pub(crate) enum ShelfAction {
     Remove(RemoveArgs),
     List(ListArgs),
     Generate,
+    Export(ExportArgs),
     Fetch(FetchArgs),
     Commit,
 }
@@ -103,6 +107,11 @@ pub(crate) async fn run_shelf_command(cwd: &Path, name: &str, action: ShelfActio
             super::list(&directory, args.sort_by, args.order, !args.no_wrap_title)
         }
         ShelfAction::Generate => generate(&directory),
+        ShelfAction::Export(args) => {
+            let default = shelf_export_path(&directory, name);
+            let output = args.output.as_deref().unwrap_or(&default);
+            super::export(&directory, cwd, Some(output))
+        }
         ShelfAction::Fetch(args) => {
             let (selector, options) = args.into_options();
             super::fetch(&directory, &selector, options).await
@@ -127,6 +136,31 @@ pub(crate) fn batch_generate(cwd: &Path) -> Result<bool> {
         }
     }
     Ok(failed)
+}
+
+pub(crate) fn batch_export(cwd: &Path) -> Result<bool> {
+    let library = Library::discover(cwd)?;
+    let mut failed = false;
+    for (name, shelf) in library.shelves() {
+        let directory = library.root().join(shelf.path());
+        let target = shelf_export_path(&directory, name);
+        let outcome = ensure_direct_shelf(&directory)
+            .and_then(|()| super::export_outcome(&directory, &directory, Some(&target)));
+        match outcome {
+            Ok(path) => println!("Shelf {name}: exported {}", path.display()),
+            Err(error) => {
+                failed = true;
+                print_batch_failure(name, &error);
+            }
+        }
+    }
+    Ok(failed)
+}
+
+/// A shelf export is named for its stable registered name, which can differ
+/// from the directory the shelf is registered at.
+fn shelf_export_path(directory: &Path, name: &str) -> PathBuf {
+    directory.join(format!("{name}.bib"))
 }
 
 pub(crate) async fn batch_sync(cwd: &Path) -> Result<bool> {

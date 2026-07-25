@@ -20,6 +20,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p cita -- add 1207.7214
 cargo run -p cita -- import local.bib
 cargo run -p cita -- generate
+cargo run -p cita -- export
 cargo run -p cita -- library shelves
 cargo test --test e2e -- --ignored  # live INSPIRE, network required
 ```
@@ -47,7 +48,7 @@ cita-bibliography ← cita-inspire-client   cita-documents
 
 - `cita-core`: `Reference`, provider traits, locators, and normalization.
 - `cita-bibliography`: strict standalone BibTeX snapshots, projections,
-  and raw-entry re-keying.
+  and raw-entry re-keying and field insertion.
 - `cita-inspire-client`: lean `InspireRecord`s (authoritative BibTeX plus
   record id, timestamp, and canonical arXiv/DOI), stable-record-ID refresh
   batches, bounded queries, and 429 retries; cross-checks its BibTeX against the
@@ -57,7 +58,8 @@ cita-bibliography ← cita-inspire-client   cita-documents
   and coordinated writes.
 - `cita-documents`: accepts a validated arXiv ID and atomically caches PDFs and
   safely extracts gzip-compressed TeX source packages beneath `.cita/files/arxiv`.
-- `cita`: CLI, parent discovery, sync reconciliation, and scoped Git commits.
+- `cita`: CLI, parent discovery, sync reconciliation, derived-export policy, and
+  scoped Git commits.
 
 ## Key decisions
 
@@ -77,6 +79,25 @@ newline. Do not add a handwritten writer.
 Only entries and whitespace are allowed. Reject directives, comments/non-entry
 content, malformed or duplicate entries, missing titles, texkeys outside
 `[A-Za-z0-9._:+-]+`, and duplicate normalized DOI/eprint identities.
+
+### Derived exports
+
+`cita export` writes a separate artifact and never touches `references.bib`.
+Layout stays in `cita-manifest::Manifest::render_derived`, so every rendered
+bibliography shares one set of rules; only field-level policy lives in the CLI.
+Fields are added through `cita-bibliography::insert_field`, which splices after
+an entry's last field value using scanner-owned spans, before any trailing
+whitespace or inline comment, so comma placement is exact and the field cannot
+be swallowed by a comment. An entry that already defines the field is returned
+unchanged, which keeps authored values and makes repeated exports byte-stable.
+
+Exports are pure functions of `cita.toml`: no network, no cache probing, no
+machine-specific paths. They are untracked, unverified, never read back, and
+refuse to run against bibliography drift. `--output` is the only CLI path that
+can leave the discovered project, so it refuses both this project's managed
+files and any managed file a *different* project or library owns; a managed name
+only counts inside the directory that owns it. Shelf exports are named for the
+registered shelf name, not the shelf directory.
 
 ### Atomic mutations
 
