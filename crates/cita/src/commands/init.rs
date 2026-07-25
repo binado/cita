@@ -17,7 +17,7 @@ pub(crate) fn init(cwd: &Path, path: Option<&Path>) -> Result<()> {
     }
     if directory.join(LIBRARY_FILE).is_file() {
         bail!(
-            "cannot initialize a project at library root {}; use `cita library shelf <name> init`",
+            "cannot initialize a project at library root {}; use `cita library new <name>`",
             directory.display()
         );
     }

@@ -21,7 +21,9 @@ cargo run -p cita -- add 1207.7214
 cargo run -p cita -- import local.bib
 cargo run -p cita -- generate
 cargo run -p cita -- export
-cargo run -p cita -- library shelves
+cargo run -p cita -- library list
+cargo run -p cita -- sync --shelf paper   # one registered shelf
+cargo run -p cita -- sync --all-shelves   # every registered shelf
 cargo test --test e2e -- --ignored  # live INSPIRE, network required
 ```
 
@@ -119,6 +121,17 @@ stable names to library-relative paths. Paths cannot escape the root, overlap,
 nest, or alias through symlinks. The library root cannot itself contain
 `cita.toml` or `references.bib`. There is no aggregate bibliography, shared
 cache, cross-shelf uniqueness, or library-wide commit.
+
+Scope is an argument, not a command level. `cita library` covers shelf lifecycle
+only (`init`, `list`, `new`); every operation *inside* a shelf is the ordinary
+command with `-s/--shelf`, and `--all-shelves` on `generate`, `export`, and
+`sync` is the batch form. So there is no second command list to keep in step
+with the first, and new commands are shelf-aware by construction. `--all-shelves`
+is confined to those three because they are idempotent and derive their result
+from each shelf's own manifest. Scope resolves to a `commands::library::Target`
+before dispatch, so every command stays a function of a directory; a `Target`
+carries the registered shelf name too, because a shelf export is named for that
+name rather than its directory.
 
 ### INSPIRE sync
 

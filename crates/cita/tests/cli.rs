@@ -288,7 +288,7 @@ fn init_rejects_a_library_root_without_creating_shelf_artifacts() {
     assert!(!directory.path().join("references.bib").exists());
     assert!(!directory.path().join(".cita").exists());
 
-    success(cita(directory.path(), &["library", "shelves"]));
+    success(cita(directory.path(), &["library", "list"]));
 }
 
 #[test]
@@ -297,10 +297,7 @@ fn library_and_shelf_initialization_cover_new_and_existing_projects() {
     assert!(success(cita(directory.path(), &["library", "init"])).contains("cita-library.toml"));
     assert!(success(cita(directory.path(), &["library", "init"])).contains("Already initialized"));
 
-    success(cita(
-        directory.path(),
-        &["library", "shelf", "paper-one", "init"],
-    ));
+    success(cita(directory.path(), &["library", "new", "paper-one"]));
     assert!(directory.path().join("paper-one/cita.toml").is_file());
 
     let bibliography = directory.path().join("incoming/references.bib");
@@ -312,14 +309,7 @@ fn library_and_shelf_initialization_cover_new_and_existing_projects() {
     .unwrap();
     success(cita(
         directory.path(),
-        &[
-            "library",
-            "shelf",
-            "paper-two",
-            "init",
-            "--path",
-            "incoming",
-        ],
+        &["library", "new", "paper-two", "--path", "incoming"],
     ));
     assert!(
         fs::read_to_string(directory.path().join("incoming/cita.toml"))
@@ -334,9 +324,8 @@ fn library_and_shelf_initialization_cover_new_and_existing_projects() {
         directory.path(),
         &[
             "library",
-            "shelf",
+            "new",
             "paper-three",
-            "init",
             "--path",
             "existing/project",
         ],
@@ -344,7 +333,7 @@ fn library_and_shelf_initialization_cover_new_and_existing_projects() {
 
     let nested = directory.path().join("incoming/notes");
     fs::create_dir(&nested).unwrap();
-    let shelves = success(cita(&nested, &["library", "shelves"]));
+    let shelves = success(cita(&nested, &["library", "list"]));
     let one = shelves.find("paper-one").unwrap();
     let two = shelves.find("paper-two").unwrap();
     let three = shelves.find("paper-three").unwrap();
@@ -352,11 +341,11 @@ fn library_and_shelf_initialization_cover_new_and_existing_projects() {
 }
 
 #[test]
-fn routed_shelf_commands_are_isolated_and_import_paths_use_the_caller() {
+fn shelf_scoped_commands_are_isolated_and_import_paths_use_the_caller() {
     let directory = tempfile::tempdir().unwrap();
     success(cita(directory.path(), &["library", "init"]));
     for name in ["one", "two"] {
-        success(cita(directory.path(), &["library", "shelf", name, "init"]));
+        success(cita(directory.path(), &["library", "new", name]));
     }
     fs::write(
         directory.path().join("shared.bib"),
@@ -370,19 +359,13 @@ fn routed_shelf_commands_are_isolated_and_import_paths_use_the_caller() {
         assert_eq!(
             success(cita(
                 directory.path(),
-                &["library", "shelf", name, "import", "shared.bib"],
+                &["import", "-s", name, "shared.bib"],
             )),
             "added SameKey\n"
         );
     }
-    assert!(
-        success(cita(directory.path(), &["library", "shelf", "one", "list"],))
-            .contains("Same identity")
-    );
-    success(cita(
-        directory.path(),
-        &["library", "shelf", "one", "remove", "SameKey"],
-    ));
+    assert!(success(cita(directory.path(), &["list", "-s", "one"],)).contains("Same identity"));
+    success(cita(directory.path(), &["remove", "-s", "one", "SameKey"]));
     assert!(
         !fs::read_to_string(directory.path().join("one/cita.toml"))
             .unwrap()
@@ -395,10 +378,7 @@ fn routed_shelf_commands_are_isolated_and_import_paths_use_the_caller() {
     );
 
     fs::write(directory.path().join("two/references.bib"), "drift\n").unwrap();
-    success(cita(
-        directory.path(),
-        &["library", "shelf", "two", "generate"],
-    ));
+    success(cita(directory.path(), &["generate", "-s", "two"]));
     assert!(
         fs::read_to_string(directory.path().join("two/references.bib"))
             .unwrap()
@@ -407,7 +387,7 @@ fn routed_shelf_commands_are_isolated_and_import_paths_use_the_caller() {
     assert_eq!(
         success(cita_with_server(
             directory.path(),
-            &["library", "shelf", "two", "sync"],
+            &["sync", "-s", "two"],
             "http://127.0.0.1:1/",
         )),
         "Already in sync: 0 managed, 1 imported\n"
@@ -415,29 +395,18 @@ fn routed_shelf_commands_are_isolated_and_import_paths_use_the_caller() {
 }
 
 #[test]
-fn routed_shelf_add_fetch_and_commit_use_the_shelf_context() {
+fn shelf_scoped_add_fetch_and_commit_use_the_shelf_context() {
     let directory = tempfile::tempdir().unwrap();
     init_git(directory.path());
     success(cita(directory.path(), &["library", "init"]));
-    success(cita(
-        directory.path(),
-        &["library", "shelf", "paper", "init"],
-    ));
+    success(cita(directory.path(), &["library", "new", "paper"]));
     let json = json_record(42, "Provider:42", "Provider", "2401.00042");
     let bib = entry("Provider:42", "Provider", "eprint={2401.00042},");
     let (base, handle) = server(vec![("200 OK", json), ("200 OK", bib)]);
     assert_eq!(
         success(cita_with_server(
             directory.path(),
-            &[
-                "library",
-                "shelf",
-                "paper",
-                "add",
-                "--key",
-                "Local",
-                "2401.00042",
-            ],
+            &["add", "-s", "paper", "--key", "Local", "2401.00042"],
             &base,
         )),
         "added Local\n"
@@ -451,7 +420,7 @@ fn routed_shelf_add_fetch_and_commit_use_the_shelf_context() {
     assert!(
         success(cita_with_server(
             directory.path(),
-            &["library", "shelf", "paper", "sync"],
+            &["sync", "-s", "paper"],
             &base,
         ))
         .contains("Synced 1 managed references")
@@ -470,23 +439,13 @@ fn routed_shelf_add_fetch_and_commit_use_the_shelf_context() {
     );
     let fetched = success(cita(
         directory.path(),
-        &[
-            "library",
-            "shelf",
-            "paper",
-            "fetch",
-            "--cache-only",
-            "Local",
-        ],
+        &["fetch", "-s", "paper", "--cache-only", "Local"],
     ));
     assert!(fetched.contains("paper/.cita/files/arxiv/2401.00042.pdf"));
 
     assert!(
-        success(cita(
-            directory.path(),
-            &["library", "shelf", "paper", "commit"],
-        ))
-        .contains("references: initialize cita")
+        success(cita(directory.path(), &["commit", "-s", "paper"],))
+            .contains("references: initialize cita")
     );
     let committed = git_success(directory.path(), &["show", "--name-only", "--format="]);
     assert!(committed.contains("paper/cita.toml"), "{committed}");
@@ -499,7 +458,7 @@ fn library_batches_are_ordered_continue_after_failure_and_report_once() {
     let directory = tempfile::tempdir().unwrap();
     success(cita(directory.path(), &["library", "init"]));
     for name in ["zeta", "alpha", "middle"] {
-        success(cita(directory.path(), &["library", "shelf", name, "init"]));
+        success(cita(directory.path(), &["library", "new", name]));
     }
     fs::write(
         directory.path().join("middle/cita.toml"),
@@ -508,7 +467,7 @@ fn library_batches_are_ordered_continue_after_failure_and_report_once() {
     .unwrap();
     fs::write(directory.path().join("zeta/references.bib"), "drift\n").unwrap();
 
-    let output = cita(directory.path(), &["library", "generate"]);
+    let output = cita(directory.path(), &["generate", "--all-shelves"]);
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
@@ -533,7 +492,7 @@ fn library_batches_are_ordered_continue_after_failure_and_report_once() {
     fs::write(directory.path().join("middle/cita.toml"), "schema = 1\n").unwrap();
     let output = success(cita_with_server(
         directory.path(),
-        &["library", "sync"],
+        &["sync", "--all-shelves"],
         "http://127.0.0.1:1/",
     ));
     assert_eq!(
@@ -548,7 +507,7 @@ fn library_batches_are_ordered_continue_after_failure_and_report_once() {
     fs::write(directory.path().join("middle/references.bib"), "drift\n").unwrap();
     let output = cita_with_server(
         directory.path(),
-        &["library", "sync"],
+        &["sync", "--all-shelves"],
         "http://127.0.0.1:1/",
     );
     assert!(!output.status.success());
@@ -557,18 +516,15 @@ fn library_batches_are_ordered_continue_after_failure_and_report_once() {
     let middle = stdout.find("Shelf middle: failed:").unwrap();
     let zeta = stdout.find("Shelf zeta: already in sync").unwrap();
     assert!(alpha < middle && middle < zeta, "{stdout}");
-    success(cita(
-        directory.path(),
-        &["library", "shelf", "middle", "generate"],
-    ));
+    success(cita(directory.path(), &["generate", "-s", "middle"]));
 
     fs::rename(
         directory.path().join("alpha"),
         directory.path().join("alpha-missing"),
     )
     .unwrap();
-    assert!(success(cita(directory.path(), &["library", "shelves"])).contains("alpha"));
-    let output = cita(directory.path(), &["library", "generate"]);
+    assert!(success(cita(directory.path(), &["library", "list"])).contains("alpha"));
+    let output = cita(directory.path(), &["generate", "--all-shelves"]);
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(!output.status.success());
     assert!(stdout.contains("Shelf alpha: failed:"), "{stdout}");
@@ -579,15 +535,12 @@ fn library_batches_are_ordered_continue_after_failure_and_report_once() {
 fn library_rejects_unknown_shelves_and_a_root_that_is_also_a_shelf() {
     let directory = tempfile::tempdir().unwrap();
     success(cita(directory.path(), &["library", "init"]));
-    let error = failure(cita(
-        directory.path(),
-        &["library", "shelf", "missing", "list"],
-    ));
+    let error = failure(cita(directory.path(), &["list", "-s", "missing"]));
     assert!(error.contains("unknown shelf `missing`"), "{error}");
 
     fs::write(directory.path().join("cita.toml"), "schema = 1\n").unwrap();
     fs::write(directory.path().join("references.bib"), "").unwrap();
-    let error = failure(cita(directory.path(), &["library", "shelves"]));
+    let error = failure(cita(directory.path(), &["library", "list"]));
     assert!(error.contains("library root cannot contain"), "{error}");
 }
 
@@ -604,7 +557,7 @@ fn failed_library_registration_leaves_a_valid_shelf_for_retry() {
     let mut locked = fs::metadata(directory.path()).unwrap().permissions();
     locked.set_mode(0o555);
     fs::set_permissions(directory.path(), locked).unwrap();
-    let output = cita(directory.path(), &["library", "shelf", "orphan", "init"]);
+    let output = cita(directory.path(), &["library", "new", "orphan"]);
     let mut restored = fs::metadata(directory.path()).unwrap().permissions();
     restored.set_mode(original_mode);
     fs::set_permissions(directory.path(), restored).unwrap();
@@ -618,10 +571,7 @@ fn failed_library_registration_leaves_a_valid_shelf_for_retry() {
             .contains("orphan")
     );
 
-    success(cita(
-        directory.path(),
-        &["library", "shelf", "orphan", "init"],
-    ));
+    success(cita(directory.path(), &["library", "new", "orphan"]));
     assert!(
         fs::read_to_string(directory.path().join("cita-library.toml"))
             .unwrap()
@@ -630,19 +580,13 @@ fn failed_library_registration_leaves_a_valid_shelf_for_retry() {
 }
 
 #[test]
-fn routed_shelf_command_rejects_a_shelf_missing_cita_toml() {
+fn shelf_scope_rejects_a_shelf_missing_cita_toml() {
     let directory = tempfile::tempdir().unwrap();
     success(cita(directory.path(), &["library", "init"]));
-    success(cita(
-        directory.path(),
-        &["library", "shelf", "orphan", "init"],
-    ));
+    success(cita(directory.path(), &["library", "new", "orphan"]));
     fs::remove_file(directory.path().join("orphan/cita.toml")).unwrap();
 
-    let stderr = failure(cita(
-        directory.path(),
-        &["library", "shelf", "orphan", "list"],
-    ));
+    let stderr = failure(cita(directory.path(), &["list", "-s", "orphan"]));
     assert!(stderr.contains("does not contain cita.toml"), "{stderr}");
 }
 
@@ -1932,13 +1876,10 @@ fn export_refuses_to_overwrite_another_projects_managed_files() {
 fn export_refuses_to_overwrite_a_library_registry() {
     let directory = tempfile::tempdir().unwrap();
     success(cita(directory.path(), &["library", "init"]));
-    success(cita(
-        directory.path(),
-        &["library", "shelf", "paper", "init"],
-    ));
+    success(cita(directory.path(), &["library", "new", "paper"]));
     success(cita_stdin(
         directory.path(),
-        &["library", "shelf", "paper", "import", "-"],
+        &["import", "-s", "paper", "-"],
         &entry("Zed", "Shelved", "eprint={2001.00001},"),
     ));
     let registry = fs::read(directory.path().join("cita-library.toml")).unwrap();
@@ -1947,14 +1888,7 @@ fn export_refuses_to_overwrite_a_library_registry() {
     // the one unrecoverable export.
     let stderr = failure(cita(
         directory.path(),
-        &[
-            "library",
-            "shelf",
-            "paper",
-            "export",
-            "-o",
-            "cita-library.toml",
-        ],
+        &["export", "-s", "paper", "-o", "cita-library.toml"],
     ));
     assert!(stderr.contains("managed file"), "{stderr}");
     assert_eq!(
@@ -2043,18 +1977,15 @@ fn shelf_export_is_named_for_the_shelf_not_its_directory() {
     success(cita(directory.path(), &["library", "init"]));
     success(cita(
         directory.path(),
-        &["library", "shelf", "paper", "init", "--path", "papers/one"],
+        &["library", "new", "paper", "--path", "papers/one"],
     ));
     success(cita_stdin(
         directory.path(),
-        &["library", "shelf", "paper", "import", "-"],
+        &["import", "-s", "paper", "-"],
         &entry("Zed", "Shelved", "eprint={2001.00001},"),
     ));
 
-    success(cita(
-        directory.path(),
-        &["library", "shelf", "paper", "export"],
-    ));
+    success(cita(directory.path(), &["export", "-s", "paper"]));
     let exported = fs::read_to_string(directory.path().join("papers/one/paper.bib")).unwrap();
     assert!(
         exported.contains("url = {https://arxiv.org/pdf/2001.00001}"),
@@ -2065,7 +1996,7 @@ fn shelf_export_is_named_for_the_shelf_not_its_directory() {
     // An explicit --output still wins, resolved against the caller.
     success(cita(
         directory.path(),
-        &["library", "shelf", "paper", "export", "-o", "out.bib"],
+        &["export", "-s", "paper", "-o", "out.bib"],
     ));
     assert!(directory.path().join("out.bib").is_file());
 }
@@ -2075,10 +2006,10 @@ fn library_export_is_ordered_continues_after_failure_and_reports_once() {
     let directory = tempfile::tempdir().unwrap();
     success(cita(directory.path(), &["library", "init"]));
     for name in ["zeta", "alpha", "middle"] {
-        success(cita(directory.path(), &["library", "shelf", name, "init"]));
+        success(cita(directory.path(), &["library", "new", name]));
         success(cita_stdin(
             directory.path(),
-            &["library", "shelf", name, "import", "-"],
+            &["import", "-s", name, "-"],
             &entry("Zed", "Shelved", "eprint={2001.00001},"),
         ));
     }
@@ -2088,7 +2019,7 @@ fn library_export_is_ordered_continues_after_failure_and_reports_once() {
     )
     .unwrap();
 
-    let output = cita(directory.path(), &["library", "export"]);
+    let output = cita(directory.path(), &["export", "--all-shelves"]);
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
