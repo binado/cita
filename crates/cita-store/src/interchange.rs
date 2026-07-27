@@ -1,8 +1,10 @@
 use crate::{
     DEFAULT_SHELF, Library, LibraryError, ShelfName, SourceSnapshot,
-    library::{insert_reference, shelf_id, source_identities},
+    library::{
+        clear_library, insert_membership, insert_reference, insert_shelf, shelf_id,
+        source_identities,
+    },
 };
-use rusqlite::{TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -269,41 +271,40 @@ impl Library {
     pub fn replace_from_interchange(&self, value: &Interchange) -> Result<(), LibraryError> {
         value.validate()?;
         let mut connection = self.connection()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute("DELETE FROM shelf_references", [])?;
-        transaction.execute("DELETE FROM shelves", [])?;
-        transaction.execute("DELETE FROM bibliography_references", [])?;
+        connection.immediate_transaction(|connection| {
+            clear_library(connection)?;
 
-        let mut shelves = value.shelves.clone();
-        if !shelves.iter().any(|shelf| shelf.name == DEFAULT_SHELF) {
-            shelves.push(ExportShelf {
-                name: DEFAULT_SHELF.into(),
-                entries: Vec::new(),
-            });
-        }
-        shelves.sort_by(|left, right| left.name.cmp(&right.name));
-        for shelf in &shelves {
-            transaction.execute("INSERT INTO shelves(name) VALUES (?1)", [&shelf.name])?;
-        }
-
-        let mut ids = BTreeMap::new();
-        for reference in &value.references {
-            let id = insert_reference(&transaction, &reference.source)?;
-            ids.insert(reference.handle.as_str(), id);
-        }
-        for shelf in &value.shelves {
-            let name = ShelfName::try_from(shelf.name.as_str())?;
-            let shelf_id = shelf_id(&transaction, &name)?;
-            for entry in &shelf.entries {
-                transaction.execute(
-                    "INSERT INTO shelf_references(shelf_id, reference_id, citation_key)
-                     VALUES (?1, ?2, ?3)",
-                    params![shelf_id, ids[entry.reference.as_str()], entry.key],
-                )?;
+            let mut shelves = value.shelves.clone();
+            if !shelves.iter().any(|shelf| shelf.name == DEFAULT_SHELF) {
+                shelves.push(ExportShelf {
+                    name: DEFAULT_SHELF.into(),
+                    entries: Vec::new(),
+                });
             }
-        }
-        transaction.commit()?;
-        Ok(())
+            shelves.sort_by(|left, right| left.name.cmp(&right.name));
+            for shelf in &shelves {
+                insert_shelf(connection, &shelf.name)?;
+            }
+
+            let mut ids = BTreeMap::new();
+            for reference in &value.references {
+                let id = insert_reference(connection, &reference.source)?;
+                ids.insert(reference.handle.as_str(), id);
+            }
+            for shelf in &value.shelves {
+                let name = ShelfName::try_from(shelf.name.as_str())?;
+                let shelf_id = shelf_id(connection, &name)?;
+                for entry in &shelf.entries {
+                    insert_membership(
+                        connection,
+                        shelf_id,
+                        ids[entry.reference.as_str()],
+                        &entry.key,
+                    )?;
+                }
+            }
+            Ok(())
+        })
     }
 }
 
