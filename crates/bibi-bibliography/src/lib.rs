@@ -154,19 +154,52 @@ struct RawEntry {
     key: String,
     entry_range: Range<usize>,
     key_range: Range<usize>,
-    /// Field names in source order, for case-insensitive presence checks.
-    field_names: Vec<String>,
-    /// From the start of the last field's name to just past its value with
-    /// trailing whitespace removed; `None` when the entry declares no fields.
-    last_field: Option<Range<usize>>,
+    /// Fields in source order.
+    fields: Vec<RawField>,
+}
+
+#[derive(Debug)]
+struct RawField {
+    name: String,
+    /// From the start of the field's name to just past its value with trailing
+    /// whitespace removed.
+    span: Range<usize>,
+}
+
+impl RawEntry {
+    fn field_names(&self) -> impl Iterator<Item = &str> {
+        self.fields.iter().map(|field| field.name.as_str())
+    }
+
+    fn declares(&self, name: &str) -> bool {
+        self.field_names()
+            .any(|field| field.eq_ignore_ascii_case(name))
+    }
+}
+
+/// Whether a source may carry bytes other than complete entries and whitespace.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Leniency {
+    /// Reject directives, comments, and any other non-entry content. Standalone
+    /// snapshots are rendered from scratch, so anything unmodelled would be lost.
+    Strict,
+    /// Ignore whatever sits between entries. A caller that only ever splices
+    /// entry spans copies those bytes through untouched, so it can afford to
+    /// leave them unmodelled.
+    IgnoreNonEntryContent,
 }
 
 /// Locate and validate complete raw entries without applying BibTeX semantics.
 /// This is the sole authority for all raw source and span invariants.
 fn scan_raw_entries(source: &str) -> Result<Vec<RawEntry>, Error> {
+    scan(source, Leniency::Strict)
+}
+
+fn scan(source: &str, leniency: Leniency) -> Result<Vec<RawEntry>, Error> {
     let raw =
         RawBibliography::parse(source).map_err(|error| Error::InvalidBibtex(error.to_string()))?;
-    if !raw.preamble.is_empty() || !raw.abbreviations.is_empty() {
+    let strict = leniency == Leniency::Strict;
+    if strict && (!raw.preamble.is_empty() || !raw.abbreviations.is_empty()) {
         return Err(Error::UnsupportedContent(
             "directives are not supported".into(),
         ));
@@ -182,9 +215,10 @@ fn scan_raw_entries(source: &str) -> Result<Vec<RawEntry>, Error> {
             .checked_add(1)
             .filter(|end| start <= *end && *end <= source.len())
             .ok_or_else(|| Error::InvalidBibtex("entry has an invalid source range".into()))?;
-        if source
-            .get(cursor..start)
-            .is_none_or(|gap| !gap.trim().is_empty())
+        if strict
+            && source
+                .get(cursor..start)
+                .is_none_or(|gap| !gap.trim().is_empty())
         {
             return Err(Error::UnsupportedContent(
                 "only complete BibTeX entries and whitespace are allowed".into(),
@@ -210,43 +244,37 @@ fn scan_raw_entries(source: &str) -> Result<Vec<RawEntry>, Error> {
         if !keys.insert(key.clone()) {
             return Err(Error::KeyConflict(key));
         }
-        let field_names = item
-            .v
-            .fields
-            .iter()
-            .map(|pair| pair.key.v.to_owned())
-            .collect::<Vec<_>>();
-        let last_field = match item.v.fields.last() {
-            None => None,
-            Some(pair) => {
-                let field_start = pair.key.span.start;
-                // `abbr_field` eats trailing whitespace before returning, so the
-                // value span runs past the field itself.
-                let head = source.get(..pair.value.span.end).ok_or_else(|| {
-                    Error::InvalidBibtex("field value has an invalid source range".into())
-                })?;
-                let field_end = head.trim_end().len();
-                if !(start..end).contains(&field_start) || !(field_start..end).contains(&field_end)
-                {
-                    return Err(Error::InvalidBibtex(
-                        "entry field has an invalid source range".into(),
-                    ));
-                }
-                Some(field_start..field_end)
+        let mut fields = Vec::with_capacity(item.v.fields.len());
+        for pair in &item.v.fields {
+            let field_start = pair.key.span.start;
+            // `abbr_field` eats trailing whitespace before returning, so the
+            // value span runs past the field itself.
+            let head = source.get(..pair.value.span.end).ok_or_else(|| {
+                Error::InvalidBibtex("field value has an invalid source range".into())
+            })?;
+            let field_end = head.trim_end().len();
+            if !(start..end).contains(&field_start) || !(field_start..end).contains(&field_end) {
+                return Err(Error::InvalidBibtex(
+                    "entry field has an invalid source range".into(),
+                ));
             }
-        };
+            fields.push(RawField {
+                name: pair.key.v.to_owned(),
+                span: field_start..field_end,
+            });
+        }
         entries.push(RawEntry {
             key,
             entry_range: start..end,
             key_range,
-            field_names,
-            last_field,
+            fields,
         });
         cursor = end;
     }
-    if source
-        .get(cursor..)
-        .is_none_or(|gap| !gap.trim().is_empty())
+    if strict
+        && source
+            .get(cursor..)
+            .is_none_or(|gap| !gap.trim().is_empty())
     {
         return Err(Error::UnsupportedContent(
             "comments, directives, and non-entry content are not supported".into(),
@@ -325,25 +353,20 @@ pub fn insert_field(source: &str, name: &str, value: &str) -> Result<String, Err
             "expected exactly one entry to extend".into(),
         ));
     };
-    if entry
-        .field_names
-        .iter()
-        .any(|field| field.eq_ignore_ascii_case(name))
-    {
+    if entry.declares(name) {
         return Ok(source.to_owned());
     }
     // The splice point is the end of the last field's value, before any trailing
     // whitespace or inline comment, so the existing comma placement is exact and
     // the new field can never land inside a `%` comment's line scope. A trailing
     // comment therefore ends up documenting the inserted field, as the test shows.
-    let (insert, separator) = match &entry.last_field {
-        Some(field) => (field.end, ","),
+    let last = entry.fields.last();
+    let (insert, separator) = match last {
+        Some(field) => (field.span.end, ","),
         None => (entry.entry_range.end - 1, ""),
     };
-    let indent = entry
-        .last_field
-        .as_ref()
-        .and_then(|field| line_indent(&source[entry.entry_range.start..field.start]));
+    let indent =
+        last.and_then(|field| line_indent(&source[entry.entry_range.start..field.span.start]));
     let mut extended = String::with_capacity(source.len() + name.len() + value.len() + 8);
     extended.push_str(&source[..insert]);
     extended.push_str(separator);
@@ -358,6 +381,150 @@ pub fn insert_field(source: &str, name: &str, value: &str) -> Result<String, Err
     extended.push_str(&source[insert..]);
     BibtexSnapshot::new(extended.clone())?;
     Ok(extended)
+}
+
+/// One complete entry located within a multi-entry source.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EntrySpan {
+    /// The entry's citation key.
+    pub key: String,
+    /// Byte range of the complete `@type{...}` entry.
+    pub span: Range<usize>,
+    /// Field names in source order.
+    pub field_names: Vec<String>,
+}
+
+impl EntrySpan {
+    /// Whether the entry declares `name`, compared case-insensitively as BibTeX does.
+    pub fn declares(&self, name: &str) -> bool {
+        self.field_names
+            .iter()
+            .any(|field| field.eq_ignore_ascii_case(name))
+    }
+}
+
+/// Locate every complete entry in a source, ignoring the bytes between them.
+///
+/// Unlike [`parse`], comments and directives are tolerated: a caller that only
+/// ever replaces whole entry spans copies everything else through untouched, so
+/// unmodelled bytes survive a rewrite rather than being lost by it. Citation
+/// keys are still validated and duplicates still rejected, because those are
+/// properties of the entries themselves.
+pub fn scan_entries(source: &str) -> Result<Vec<EntrySpan>, Error> {
+    Ok(scan(source, Leniency::IgnoreNonEntryContent)?
+        .into_iter()
+        .map(|entry| EntrySpan {
+            key: entry.key,
+            span: entry.entry_range,
+            field_names: entry.fields.into_iter().map(|field| field.name).collect(),
+        })
+        .collect())
+}
+
+/// Read one field's value from a complete raw entry.
+///
+/// The name is matched case-insensitively and the value is returned with its
+/// delimiters removed, so `x-bibi-inspire-id = {1229104}` yields `1229104`.
+/// A field the entry does not declare, or one whose value is blank, is `None`.
+pub fn field(source: &str, name: &str) -> Result<Option<String>, Error> {
+    let raw = scan_raw_entries(source)?;
+    let [entry] = raw.as_slice() else {
+        return Err(Error::InvalidBibtex(
+            "expected exactly one entry to read".into(),
+        ));
+    };
+    if !entry.declares(name) {
+        return Ok(None);
+    }
+    let semantic =
+        Bibliography::parse(source).map_err(|error| Error::InvalidBibtex(error.to_string()))?;
+    let parsed = semantic
+        .get(&entry.key)
+        .ok_or_else(|| Error::InvalidBibtex(format!("could not parse entry `{}`", entry.key)))?;
+    // `biblatex` lowercases field keys while parsing, so the semantic lookup
+    // has to be lowercased even though the raw name matched case-insensitively.
+    Ok(chunks(parsed, &name.to_ascii_lowercase()))
+}
+
+/// Remove one field from a complete raw entry without changing its other bytes.
+///
+/// An entry that does not declare `name` is returned unchanged, so repeated
+/// calls are idempotent. The removal takes the field's separating comma with
+/// it: a field with a predecessor is cut from the end of that predecessor's
+/// value, and a leading field is cut through to the start of its successor, so
+/// the surviving fields keep exact comma placement either way.
+pub fn remove_field(source: &str, name: &str) -> Result<String, Error> {
+    remove_fields(source, |field| field.eq_ignore_ascii_case(name))
+}
+
+/// Remove every field whose name begins with `prefix` from each entry.
+///
+/// The prefix is matched case-insensitively. This is the exact inverse of
+/// [`insert_field`] over a whole bibliography, so a stripped export of a file
+/// this crate wrote is byte-identical to the same file before the fields were
+/// added.
+pub fn strip_fields_with_prefix(source: &str, prefix: &str) -> Result<String, Error> {
+    let prefix = prefix.to_ascii_lowercase();
+    let mut output = String::with_capacity(source.len());
+    let mut cursor = 0;
+    for entry in scan(source, Leniency::IgnoreNonEntryContent)? {
+        let has_prefixed = entry
+            .field_names()
+            .any(|field| field.to_ascii_lowercase().starts_with(&prefix));
+        if !has_prefixed {
+            continue;
+        }
+        let text = &source[entry.entry_range.clone()];
+        let stripped = remove_fields(text, |field| {
+            field.to_ascii_lowercase().starts_with(&prefix)
+        })?;
+        output.push_str(&source[cursor..entry.entry_range.start]);
+        output.push_str(&stripped);
+        cursor = entry.entry_range.end;
+    }
+    if cursor == 0 {
+        return Ok(source.to_owned());
+    }
+    output.push_str(&source[cursor..]);
+    Ok(output)
+}
+
+/// Cut every field matching `discard` out of one complete raw entry.
+///
+/// Cuts run back to front so each span stays valid while earlier ones are still
+/// pending, and the result is revalidated as a standalone entry so a cut that
+/// produced something unparseable is reported rather than written.
+fn remove_fields(source: &str, discard: impl Fn(&str) -> bool) -> Result<String, Error> {
+    let raw = scan_raw_entries(source)?;
+    let [entry] = raw.as_slice() else {
+        return Err(Error::InvalidBibtex(
+            "expected exactly one entry to trim".into(),
+        ));
+    };
+    let doomed = entry
+        .fields
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| discard(&field.name))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if doomed.is_empty() {
+        return Ok(source.to_owned());
+    }
+    let mut trimmed = source.to_owned();
+    for index in doomed.into_iter().rev() {
+        let field = &entry.fields[index];
+        // Take the comma that joins this field to its neighbour: the one before
+        // it when there is a predecessor, otherwise the one after it.
+        let cut = match (index.checked_sub(1), entry.fields.get(index + 1)) {
+            (Some(previous), _) => entry.fields[previous].span.end..field.span.end,
+            (None, Some(next)) => field.span.start..next.span.start,
+            (None, None) => field.span.start..field.span.end,
+        };
+        trimmed.replace_range(cut, "");
+    }
+    BibtexSnapshot::new(trimmed.clone())?;
+    Ok(trimmed)
 }
 
 /// Leading whitespace of the final line of `head`, or `None` when `head` is one line.
@@ -515,5 +682,118 @@ mod tests {
         assert!(insert_field(raw, "url", "a\nb").is_err());
         assert!(insert_field("@misc{A,title={T}}\n\n@misc{B,title={T}}", "url", "u").is_err());
         assert!(insert_field("% outside\n@misc{A,title={T}}", "url", "u").is_err());
+    }
+
+    /// The lenient scanner exists so a user-owned file survives a rewrite; the
+    /// strict path still refuses everything it refused before.
+    #[test]
+    fn scanning_tolerates_the_non_entry_bytes_that_parsing_rejects() {
+        let source =
+            "% a note\n@string{j = {Journal}}\n\n@misc{A,\n  title = {T},\n}\n\n% trailing\n";
+        let spans = scan_entries(source).unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].key, "A");
+        assert_eq!(
+            &source[spans[0].span.clone()],
+            "@misc{A,\n  title = {T},\n}"
+        );
+        assert_eq!(spans[0].field_names, ["title"]);
+
+        assert!(parse(source).is_err());
+        assert!(scan_raw_entries(source).is_err());
+    }
+
+    #[test]
+    fn scanning_still_rejects_broken_entries_and_duplicate_keys() {
+        assert!(scan_entries("@misc{A,title={T}").is_err());
+        assert!(scan_entries("@misc{A,title={T}}\n@misc{A,title={U}}").is_err());
+        assert!(scan_entries("@misc{bad key,title={T}}").is_err());
+    }
+
+    #[test]
+    fn field_reads_values_case_insensitively() {
+        let raw = "@misc{A,\n  title = {T},\n  x-bibi-inspire-id = {1229104},\n}";
+        assert_eq!(
+            field(raw, "x-bibi-inspire-id").unwrap().as_deref(),
+            Some("1229104")
+        );
+        assert_eq!(
+            field(raw, "X-BIBI-INSPIRE-ID").unwrap().as_deref(),
+            Some("1229104")
+        );
+        assert_eq!(field(raw, "x-bibi-doi").unwrap(), None);
+        assert!(field("@misc{A,title={T}}\n\n@misc{B,title={T}}", "title").is_err());
+    }
+
+    /// Removal has to answer for the comma whichever neighbour owns it.
+    #[test]
+    fn removal_takes_the_separating_comma_from_any_position() {
+        let leading = "@misc{A,\n  x = {1},\n  title = {T},\n}";
+        assert_eq!(
+            remove_field(leading, "x").unwrap(),
+            "@misc{A,\n  title = {T},\n}"
+        );
+
+        let middle = "@misc{A,\n  title = {T},\n  x = {1},\n  year = {2020},\n}";
+        assert_eq!(
+            remove_field(middle, "x").unwrap(),
+            "@misc{A,\n  title = {T},\n  year = {2020},\n}"
+        );
+
+        let trailing = "@misc{A,\n  title = {T},\n  x = {1},\n}";
+        assert_eq!(
+            remove_field(trailing, "x").unwrap(),
+            "@misc{A,\n  title = {T},\n}"
+        );
+
+        let no_trailing_comma = "@misc{A,\n  title = {T},\n  x = {1}\n}";
+        assert_eq!(
+            remove_field(no_trailing_comma, "x").unwrap(),
+            "@misc{A,\n  title = {T}\n}"
+        );
+    }
+
+    #[test]
+    fn removing_an_absent_field_is_a_no_op_and_removal_is_idempotent() {
+        let raw = "@misc{A,\n  title = {T},\n  x = {1},\n}";
+        assert_eq!(remove_field(raw, "x-bibi-doi").unwrap(), raw);
+        let once = remove_field(raw, "x").unwrap();
+        assert_eq!(remove_field(&once, "x").unwrap(), once);
+    }
+
+    /// A cut that would leave an entry unparseable is reported, not written.
+    #[test]
+    fn removal_refuses_to_produce_an_invalid_entry() {
+        assert!(remove_field("@misc{A,\n  title = {T},\n}", "title").is_err());
+    }
+
+    /// The governing property: stripping undoes insertion exactly, so a file
+    /// this crate annotated returns to its original bytes.
+    #[test]
+    fn stripping_inverts_insertion_byte_for_byte() {
+        for original in [
+            "@misc{A,\n  title = {T},\n}",
+            "@misc{A, title = {T}}",
+            "@misc{A,\n  title = {T},\n  year = {2020}\n}",
+        ] {
+            let mut annotated = insert_field(original, "x-bibi-arxiv", "1207.7214").unwrap();
+            annotated = insert_field(&annotated, "x-bibi-doi", "10.1/x").unwrap();
+            assert_ne!(annotated, original);
+            assert_eq!(
+                strip_fields_with_prefix(&annotated, "x-bibi-").unwrap(),
+                original
+            );
+        }
+    }
+
+    #[test]
+    fn stripping_spans_a_whole_file_and_preserves_everything_else() {
+        let source = "% keep me\n@misc{A,\n  title = {T},\n  x-bibi-doi = {10.1/x},\n}\n\n@misc{B,\n  title = {U},\n}\n";
+        assert_eq!(
+            strip_fields_with_prefix(source, "X-BIBI-").unwrap(),
+            "% keep me\n@misc{A,\n  title = {T},\n}\n\n@misc{B,\n  title = {U},\n}\n"
+        );
+        // Nothing to strip leaves the source untouched, including its comments.
+        assert_eq!(strip_fields_with_prefix(source, "z-").unwrap(), source);
     }
 }
