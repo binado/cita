@@ -323,6 +323,43 @@ fn batch_export_uses_an_existing_directory_and_continues_after_failures() {
 }
 
 #[test]
+fn batch_ops_continue_when_a_registered_shelf_directory_is_missing() {
+    let harness = Harness::new();
+    for name in ["alpha", "zeta"] {
+        success(harness.cita(&["shelf", "new", name]));
+        success(harness.cita_stdin(&["import", "-s", name, "-"], &entry("Key", name, "")));
+    }
+    fs::remove_dir_all(harness.home.join("shelves/main")).unwrap();
+
+    let export = harness.cita(&["export", "--all-shelves"]);
+    assert!(!export.status.success());
+    let export_out = String::from_utf8(export.stdout).unwrap();
+    assert!(
+        export_out.find("Shelf alpha: exported").unwrap()
+            < export_out.find("Shelf main: failed").unwrap()
+    );
+    assert!(
+        export_out.find("Shelf main: failed").unwrap()
+            < export_out.find("Shelf zeta: exported").unwrap()
+    );
+    assert!(harness.work.join("alpha.bib").is_file());
+    assert!(harness.work.join("zeta.bib").is_file());
+    assert!(!harness.work.join("main.bib").exists());
+
+    let sync = harness.cita(&["sync", "--all-shelves"]);
+    assert!(!sync.status.success());
+    let sync_out = String::from_utf8(sync.stdout).unwrap();
+    assert!(
+        sync_out.find("Shelf alpha: already in sync").unwrap()
+            < sync_out.find("Shelf main: failed").unwrap()
+    );
+    assert!(
+        sync_out.find("Shelf main: failed").unwrap()
+            < sync_out.find("Shelf zeta: already in sync").unwrap()
+    );
+}
+
+#[test]
 fn imported_shelves_sync_without_network_and_batch_in_name_order() {
     let harness = Harness::new();
     success(harness.cita(&["shelf", "new", "paper"]));

@@ -202,7 +202,11 @@ impl Library {
         Ok(library)
     }
 
-    /// Load and validate an existing global library.
+    /// Load an existing global library registry.
+    ///
+    /// Registry shape and shelf names are validated here. Per-shelf directory and
+    /// `shelf.toml` checks happen in [`Self::shelf_manifest`], so one damaged shelf
+    /// does not prevent loading the name list for batch operations.
     pub fn load(root: impl AsRef<Path>) -> Result<Self, LibraryError> {
         let root = root.as_ref().to_path_buf();
         if !root.is_absolute() {
@@ -260,9 +264,7 @@ impl Library {
         }
         for name in &data.shelves {
             validate_shelf_name(name)?;
-            validate_shelf_manifest(&root, name)?;
         }
-        validate_unique_shelf_paths(&root, &data.shelves)?;
         Ok(Self {
             root,
             shelves: data.shelves,
@@ -624,6 +626,38 @@ mod tests {
             Library::load(&path),
             Err(LibraryError::Invalid { .. })
         ));
+    }
+
+    #[test]
+    fn load_keeps_registry_names_when_a_shelf_is_damaged() {
+        let directory = root();
+        let path = directory.path().join("home");
+        let mut library = Library::open_or_create(&path).unwrap();
+        library.create_shelf("paper").unwrap();
+        fs::remove_dir_all(path.join("shelves/paper")).unwrap();
+
+        let loaded = Library::load(&path).unwrap();
+        assert_eq!(
+            loaded
+                .shelves()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["main", "paper"]
+        );
+        assert!(matches!(
+            loaded.shelf_manifest("paper"),
+            Err(LibraryError::Read { .. } | LibraryError::InvalidShelf { .. })
+        ));
+        assert!(loaded.shelf_manifest("main").is_ok());
+
+        fs::write(path.join("shelves/paper"), b"not-a-directory").unwrap();
+        let loaded = Library::open_or_create(&path).unwrap();
+        assert!(matches!(
+            loaded.shelf_manifest("paper"),
+            Err(LibraryError::InvalidShelf { .. })
+        ));
+        assert!(loaded.shelf_manifest("main").is_ok());
     }
 
     #[test]

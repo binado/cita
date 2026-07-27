@@ -12,7 +12,7 @@ pub(crate) use export::{batch_export, export};
 pub(crate) use fetch::{FetchOptions, fetch};
 pub(crate) use import::import;
 pub(crate) use library::{
-    Target, batch_sync, init_global, list_shelves, new_shelf, resolve_target,
+    Target, batch_sync, init_global, list_shelves, new_shelf, resolve_target, target_in,
 };
 pub(crate) use list::list;
 pub(crate) use remove::remove;

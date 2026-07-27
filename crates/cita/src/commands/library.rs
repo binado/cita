@@ -1,8 +1,6 @@
 use super::{global_root, sync_outcome};
 use anyhow::{Result, anyhow};
-use cita_manifest::{
-    DEFAULT_SHELF, LIBRARY_FILE, Library, LibraryError, MANIFEST_FILE, Manifest, ShelfLock,
-};
+use cita_manifest::{DEFAULT_SHELF, LIBRARY_FILE, Library, LibraryError, Manifest, ShelfLock};
 use std::path::{Path, PathBuf};
 
 /// One resolved global shelf.
@@ -46,13 +44,14 @@ pub(crate) fn init_global() -> Result<()> {
 pub(crate) fn resolve_target(shelf: Option<&str>) -> Result<Target> {
     let library = Library::open_or_create(global_root()?)?;
     let name = shelf.unwrap_or(DEFAULT_SHELF);
-    let manifest_path = library
-        .shelf_manifest(name)
-        .map_err(|error| explain_lookup_failure(error, &library))?;
+    target_in(&library, name).map_err(|error| explain_lookup_failure(error, &library))
+}
+
+pub(crate) fn target_in(library: &Library, name: &str) -> Result<Target, LibraryError> {
     Ok(Target {
-        library,
+        manifest_path: library.shelf_manifest(name)?,
+        library: library.clone(),
         name: name.into(),
-        manifest_path,
     })
 }
 
@@ -101,16 +100,11 @@ where
     let library = Library::open_or_create(global_root()?)?;
     let mut failed = false;
     for name in library.shelves() {
-        let target = Target {
-            manifest_path: library
-                .root()
-                .join("shelves")
-                .join(name)
-                .join(MANIFEST_FILE),
-            library: library.clone(),
-            name: name.clone(),
+        let outcome = match target_in(&library, name) {
+            Ok(target) => op(&target).await,
+            Err(error) => Err(error.into()),
         };
-        match op(&target).await {
+        match outcome {
             Ok(message) => println!("Shelf {name}: {message}"),
             Err(error) => {
                 failed = true;

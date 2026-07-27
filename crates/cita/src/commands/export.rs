@@ -1,4 +1,4 @@
-use super::{Target, global_root, resolve_target};
+use super::{Target, global_root, target_in};
 use anyhow::{Context, Result, bail};
 use cita_bibliography::insert_field;
 use cita_core::ReferenceSource;
@@ -47,10 +47,12 @@ pub(crate) fn batch_export(caller: &Path, output: Option<&Path>) -> Result<bool>
     }
     let mut failed = false;
     for name in library.shelves() {
-        let outcome = resolve_target(Some(name)).and_then(|target| {
-            let output = directory.join(format!("{name}.bib"));
-            export_outcome(&target, caller, Some(&output))
-        });
+        let outcome = target_in(&library, name)
+            .map_err(Into::into)
+            .and_then(|target| {
+                let output = directory.join(format!("{name}.bib"));
+                export_outcome(&target, caller, Some(&output))
+            });
         match outcome {
             Ok(path) => println!("Shelf {name}: exported {}", path.display()),
             Err(error) => {
