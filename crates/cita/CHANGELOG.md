@@ -14,6 +14,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add deterministic positional and all-shelf BibTeX exports
 - add advisory locks that prevent concurrent shelf mutations from losing data
 
+### Changed
+
+- **breaking**: `cita export` takes its destination as a positional argument;
+  the `-o`/`--output` flag was removed
+- **breaking**: `cita init` no longer accepts `--path`; the store location is
+  set with `CITA_HOME`
+- batch `export` and `sync` report per-shelf failures and an aggregate summary on
+  stderr instead of stdout, so redirecting stdout no longer hides why the command
+  exited non-zero
+- `cita init` reports whether it created, repaired, or found the store intact
+- `cita shelf list` pads its columns so they stay aligned for longer shelf names
+
+### Fixed
+
+- recreate a deleted `main` shelf when opening the store; previously `cita init`
+  reported success while repairing nothing and every command failed with no way
+  to recover
+- allow `cita shelf new` to succeed when an unrelated registered shelf is damaged,
+  and stop leaving an unregistered shelf directory behind when creation is
+  rejected
+- give a shelf named `library` its own lock instead of reusing the registry's, so
+  it can no longer block every other command
+- report the cause of a filesystem error once rather than twice, and describe a
+  registered-but-missing shelf as such instead of as a bare `No such file or
+  directory`
+
 ### Removed
 
 - remove local project discovery, generated `references.bib`, `generate`,

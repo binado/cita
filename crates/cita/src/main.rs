@@ -54,6 +54,10 @@ enum ShelfCommand {
     },
 }
 
+/// Shelf selection for commands that act on exactly one shelf.
+///
+/// Flattened per-command rather than declared once as a global argument so it
+/// never appears in the help for commands that cannot honor it.
 #[derive(Debug, Args)]
 struct ShelfArg {
     /// Use this global shelf instead of `main`
@@ -61,6 +65,15 @@ struct ShelfArg {
     shelf: Option<String>,
 }
 
+/// Shelf selection for commands that can also run across every shelf.
+///
+/// Only commands that are idempotent and derive their result from each shelf's own
+/// manifest get `--all-shelves`; `add`, `import`, and `remove` take an input that
+/// belongs to one shelf, so a batch form would be meaningless for them.
+///
+/// `conflicts_with` is a stringly-typed reference to the field name below, which no
+/// compiler checks — `only_idempotent_derived_commands_run_across_every_shelf`
+/// covers it.
 #[derive(Debug, Args)]
 struct ScopeArgs {
     /// Use this global shelf instead of `main`
@@ -207,6 +220,9 @@ enum RunOutcome {
 async fn run() -> Result<RunOutcome> {
     let cli = Cli::parse();
     let cwd = env::current_dir().context("could not determine current directory")?;
+    // Set only by the batch forms, which report their own per-shelf failures and
+    // continue rather than returning an error. `RunOutcome::ReportedFailure` then
+    // exits non-zero without printing anything further.
     let mut batch_failed = false;
     match cli.command {
         None => {
@@ -215,11 +231,14 @@ async fn run() -> Result<RunOutcome> {
         }
         Some(Command::Init) => commands::init_global()?,
         Some(Command::Shelf { command }) => match command {
-            ShelfCommand::List => commands::list_shelves()?,
-            ShelfCommand::New { name } => commands::new_shelf(&name)?,
+            ShelfCommand::List => commands::list_shelves(&commands::open_library()?)?,
+            ShelfCommand::New { name } => {
+                commands::new_shelf(&mut commands::open_library()?, &name)?
+            }
         },
         Some(Command::Import(args)) => {
-            let target = commands::resolve_target(args.scope.shelf.as_deref())?;
+            let library = commands::open_library()?;
+            let target = commands::resolve_target(&library, args.scope.shelf.as_deref())?;
             commands::import(&target, &cwd, &args.path, args.overwrite)?
         }
         Some(Command::Add(AddArgs {
@@ -228,19 +247,22 @@ async fn run() -> Result<RunOutcome> {
             scope,
             locators,
         })) => {
-            let target = commands::resolve_target(scope.shelf.as_deref())?;
+            let library = commands::open_library()?;
+            let target = commands::resolve_target(&library, scope.shelf.as_deref())?;
             commands::add(&target, key.as_deref(), &locators, overwrite).await?
         }
         Some(Command::Sync(scope)) => {
+            let library = commands::open_library()?;
             if scope.all_shelves {
-                batch_failed = commands::batch_sync().await?;
+                batch_failed = commands::batch_sync(&library).await?;
             } else {
-                let target = commands::resolve_target(scope.shelf.as_deref())?;
+                let target = commands::resolve_target(&library, scope.shelf.as_deref())?;
                 commands::sync(&target).await?;
             }
         }
         Some(Command::Remove(args)) => {
-            let target = commands::resolve_target(args.scope.shelf.as_deref())?;
+            let library = commands::open_library()?;
+            let target = commands::resolve_target(&library, args.scope.shelf.as_deref())?;
             commands::remove(&target, &args.selectors)?
         }
         Some(Command::List(ListArgs {
@@ -249,19 +271,22 @@ async fn run() -> Result<RunOutcome> {
             no_wrap_title,
             scope,
         })) => {
-            let target = commands::resolve_target(scope.shelf.as_deref())?;
+            let library = commands::open_library()?;
+            let target = commands::resolve_target(&library, scope.shelf.as_deref())?;
             commands::list(&target, sort_by, order, !no_wrap_title)?
         }
         Some(Command::Export(args)) => {
+            let library = commands::open_library()?;
             if args.scope.all_shelves {
-                batch_failed = commands::batch_export(&cwd, args.output.as_deref())?;
+                batch_failed = commands::batch_export(&library, &cwd, args.output.as_deref())?;
             } else {
-                let target = commands::resolve_target(args.scope.shelf.as_deref())?;
+                let target = commands::resolve_target(&library, args.scope.shelf.as_deref())?;
                 commands::export(&target, &cwd, args.output.as_deref())?;
             }
         }
         Some(Command::Fetch(args)) => {
-            let target = commands::resolve_target(args.scope.shelf.as_deref())?;
+            let library = commands::open_library()?;
+            let target = commands::resolve_target(&library, args.scope.shelf.as_deref())?;
             let (selector, options) = args.into_options();
             commands::fetch(&target, &selector, options).await?
         }

@@ -8,7 +8,12 @@ use std::{
     path::Path,
 };
 
-pub(crate) fn import(target: &Target, caller: &Path, input: &str, overwrite: bool) -> Result<()> {
+pub(crate) fn import(
+    target: &Target<'_>,
+    caller: &Path,
+    input: &str,
+    overwrite: bool,
+) -> Result<()> {
     let mut source = String::new();
     if input == "-" {
         io::stdin()
@@ -31,8 +36,8 @@ pub(crate) fn import(target: &Target, caller: &Path, input: &str, overwrite: boo
     } else {
         ConflictPolicy::Skip
     };
-    let _lock = target.lock()?;
-    let mut manifest = target.load()?;
+    let lock = target.lock()?;
+    let mut manifest = lock.manifest()?;
     let outcomes = manifest.add_batch(pending, policy)?;
     print_add_outcomes(&outcomes);
     Ok(())

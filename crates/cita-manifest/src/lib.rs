@@ -4,8 +4,8 @@
 mod library;
 
 pub use library::{
-    DEFAULT_SHELF, LIBRARY_FILE, Library, LibraryError, ShelfLock, global_library_root,
-    validate_shelf_name,
+    DEFAULT_SHELF, LIBRARY_FILE, Library, LibraryError, LibraryLock, ShelfLock, ShelfName,
+    global_library_root,
 };
 
 use cita_bibliography::{BibtexSnapshot, project_bibtex, rename_entry, validate_key};
@@ -230,10 +230,10 @@ struct ManifestData {
 /// Error produced by manifest loading, validation, mutation, or persistence.
 pub enum Error {
     /// Initialization found an existing managed artifact.
-    #[error("project already contains {0}")]
+    #[error("shelf already contains {0}")]
     AlreadyExists(PathBuf),
     /// A managed file could not be read.
-    #[error("could not read {path}: {source}")]
+    #[error("could not read {path}")]
     Read {
         /// File that could not be read.
         path: PathBuf,
@@ -257,7 +257,7 @@ pub enum Error {
         found: i64,
     },
     /// A managed file could not be written atomically.
-    #[error("could not write {path}: {source}")]
+    #[error("could not write {path}")]
     Write {
         /// File that could not be written.
         path: PathBuf,
@@ -309,15 +309,19 @@ pub enum Error {
 
 impl Manifest {
     /// Create an empty schema-1 shelf manifest at `path`.
+    ///
+    /// `path` is the manifest file itself, not the directory holding it; join
+    /// [`MANIFEST_FILE`] yourself when you have a shelf directory. Fails with
+    /// [`Error::AlreadyExists`] when anything is already at `path`.
     pub fn create(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let requested = path.as_ref();
-        let path = if requested.is_dir() {
-            requested.join(MANIFEST_FILE)
-        } else {
-            requested.to_path_buf()
-        };
-        if path.exists() {
-            return Err(Error::AlreadyExists(path));
+        let path = path.as_ref().to_path_buf();
+        // `symlink_metadata` rather than `exists()`: the latter collapses every io
+        // error to "absent", so a permission failure would skip this guard and then
+        // fail later with a message describing the wrong problem.
+        match fs::symlink_metadata(&path) {
+            Ok(_) => return Err(Error::AlreadyExists(path)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => return Err(Error::Read { path, source }),
         }
         let manifest = Self {
             path,
@@ -619,8 +623,8 @@ impl Manifest {
     /// Entries are ordered by local key and re-keyed exactly as
     /// [`Manifest::render_bibliography`] does, joined by one blank line with a
     /// single trailing newline. `transform` receives the local key, its
-    /// snapshot, and the re-keyed entry, and owns any field-level policy. This
-    /// renders a separate artifact and never writes a managed bibliography.
+    /// snapshot, and the re-keyed entry, and owns any field-level policy. Returns
+    /// a string; writes nothing.
     pub fn render_derived<E: From<Error>>(
         &self,
         transform: impl FnMut(&str, &SourceSnapshot, String) -> Result<String, E>,
@@ -866,7 +870,7 @@ mod tests {
     #[test]
     fn schema_round_trips_and_bibliography_renders() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         add(
             &mut manifest,
             vec![imported("Zed", "Last", ""), imported("Alpha", "First", "")],
@@ -912,7 +916,7 @@ mod tests {
     #[test]
     fn cross_source_identity_conflicts_skip_by_default_and_rekey_on_overwrite() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         add(&mut manifest, vec![imported("A", "A", "doi={10.1/X}")]).unwrap();
         let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
 
@@ -950,7 +954,7 @@ mod tests {
     #[test]
     fn suggested_inspire_additions_are_idempotent_by_record_id() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         add(&mut manifest, vec![inspire("Local", "Provider:Old", 42)]).unwrap();
         let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
 
@@ -976,7 +980,7 @@ mod tests {
     #[test]
     fn exact_inspire_additions_cannot_rename_an_existing_record() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         add(
             &mut manifest,
             vec![exact(inspire("Local", "Provider:Old", 42))],
@@ -1023,7 +1027,7 @@ mod tests {
     #[test]
     fn occupied_keys_from_different_records_skip_then_overwrite_in_place() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         add(&mut manifest, vec![inspire("Local", "Provider:One", 1)]).unwrap();
         let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
 
@@ -1065,7 +1069,7 @@ mod tests {
     #[test]
     fn mixed_existing_new_and_skipped_batches_preserve_order() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         add(&mut manifest, vec![inspire("Local", "Provider:Old", 1)]).unwrap();
 
         assert_eq!(
@@ -1116,7 +1120,7 @@ mod tests {
     #[test]
     fn intra_batch_duplicates_resolve_first_wins_then_later_overwrites() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
 
         // Two entries in one batch sharing a DOI: the first wins, the later one
         // skips against the running candidate.
@@ -1142,7 +1146,7 @@ mod tests {
 
         // Under overwrite the later entry rekeys the earlier one it collides with.
         let other = tempfile::tempdir().unwrap();
-        let mut fresh = Manifest::create(other.path()).unwrap();
+        let mut fresh = Manifest::create(other.path().join(MANIFEST_FILE)).unwrap();
         assert_eq!(
             fresh
                 .add_batch(
@@ -1168,7 +1172,7 @@ mod tests {
     #[test]
     fn overwrite_reports_and_removes_every_identity_collision() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         add(
             &mut manifest,
             vec![
@@ -1203,7 +1207,7 @@ mod tests {
     #[test]
     fn exact_inspire_overwrite_cleans_all_collisions_from_the_running_index() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         add(
             &mut manifest,
             vec![
@@ -1256,7 +1260,7 @@ mod tests {
     #[test]
     fn manifest_read_failures_are_reported() {
         let dir = tempfile::tempdir().unwrap();
-        Manifest::create(dir.path()).unwrap();
+        Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         let path = dir.path().join(MANIFEST_FILE);
         fs::remove_file(&path).unwrap();
         assert!(matches!(Manifest::load(&path), Err(Error::Read { .. })));
@@ -1282,7 +1286,7 @@ mod tests {
     #[test]
     fn nested_shape_and_unknown_fields_are_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         add(&mut manifest, vec![imported("Alpha", "First", "")]).unwrap();
         let path = dir.path().join(MANIFEST_FILE);
         let flat = fs::read_to_string(&path).unwrap();
@@ -1299,7 +1303,7 @@ mod tests {
     #[test]
     fn curated_identifiers_override_bibtex_derived_identity() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         let record = InspireSnapshot {
             record_id: 99,
             updated: "2026-01-01".into(),
@@ -1334,7 +1338,7 @@ mod tests {
     #[test]
     fn curated_identifier_partial_override_falls_through_for_the_other_field() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         let record = InspireSnapshot {
             record_id: 100,
             updated: "2026-01-01".into(),
@@ -1364,7 +1368,7 @@ mod tests {
     #[test]
     fn zero_record_id_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         assert!(matches!(
             add(&mut manifest, vec![inspire("Local", "Key", 0)]),
             Err(Error::InvalidSource { .. })
@@ -1390,7 +1394,7 @@ mod tests {
     #[test]
     fn curated_arxiv_id_absent_from_stored_bibtex_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         let mismatched = PendingReference {
             key: KeyRequest::Suggested("Local".into()),
             source: SourceSnapshot::Inspire(InspireEntry {
@@ -1412,7 +1416,7 @@ mod tests {
     #[test]
     fn refresh_reconciles_out_of_order_ids_without_changing_local_keys() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         add(
             &mut manifest,
             vec![
@@ -1452,7 +1456,7 @@ mod tests {
     #[test]
     fn invalid_refresh_record_sets_leave_the_manifest_unchanged() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         add(
             &mut manifest,
             vec![
@@ -1484,7 +1488,7 @@ mod tests {
     #[test]
     fn missing_refresh_record_ids_are_sorted() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         add(
             &mut manifest,
             vec![
@@ -1504,7 +1508,7 @@ mod tests {
     #[test]
     fn render_derived_matches_plain_bibliography_for_an_identity_transform() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         add(
             &mut manifest,
             vec![
@@ -1527,7 +1531,7 @@ mod tests {
     #[test]
     fn render_derived_propagates_a_failing_transform() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manifest = Manifest::create(dir.path()).unwrap();
+        let mut manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         add(&mut manifest, vec![imported("A", "A", "")]).unwrap();
         assert!(matches!(
             manifest.render_derived::<Error>(|key, _, _| Err(Error::InvalidSource {
@@ -1541,7 +1545,7 @@ mod tests {
     #[test]
     fn render_derived_of_an_empty_manifest_is_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let manifest = Manifest::create(dir.path()).unwrap();
+        let manifest = Manifest::create(dir.path().join(MANIFEST_FILE)).unwrap();
         assert_eq!(
             manifest
                 .render_derived::<Error>(|_, _, entry| Ok(entry))

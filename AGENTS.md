@@ -68,16 +68,29 @@ There is one library at `$CITA_HOME`, defaulting to `$HOME/.cita`.
 paths are computed as `shelves/<name>/shelf.toml`; there are no configurable
 paths, project manifests, or ancestor discovery.
 
-Every data command opens or lazily creates the library and `main`. `cita init`
-is an optional idempotent eager initializer. An explicit unknown shelf is an
-error and is never created by selection. `cita shelf new` initializes the shelf
-before atomically registering it, allowing a safe retry after registry-write
-failure.
+Every data command opens or lazily creates the library and `main`, recreating a
+deleted `main` directory or manifest on every open. An existing manifest is never
+parsed during that repair, so a corrupt `main` cannot fail unrelated commands.
+`cita init` is an optional idempotent eager initializer that reports whether it
+created, repaired, or found the store intact. An explicit unknown shelf is an
+error and is never created by selection.
 
-The registry is protected by a library lock. Add, import, remove, sync, and
-`fetch --save` hold an exclusive per-shelf advisory lock across load and atomic
-manifest replacement. Batch sync and export run shelves in name order, continue
-after failures, and return failure if any shelf failed.
+`cita shelf new` validates the whole candidate — including the case-alias check,
+scoped to the new name only — before creating anything, so a rejection leaves no
+orphan directory and a damaged unrelated shelf never blocks creation.
+
+Shelf names are a validated `ShelfName` newtype; the leading-alphanumeric rule is
+what makes `shelves/<name>` traversal-safe, and every path built from a name
+depends on it.
+
+The registry is protected by `locks/registry.lock`. Add, import, remove, sync,
+and `fetch --save` hold an exclusive `locks/shelf-<name>.lock` across load and
+atomic manifest replacement; the `shelf-` prefix keeps the two namespaces
+disjoint, so no shelf name is reserved. Load manifests through
+`ShelfLock::manifest` so each mutation is paired with the lock covering it. Locks
+use `flock` and are not reentrant. Batch sync and export run shelves in name
+order, continue after failures, report successes on stdout and failures plus an
+aggregate summary on stderr, and return failure if any shelf failed.
 
 ### Source snapshots and raw entries
 

@@ -78,6 +78,8 @@ $HOME/.cita/
 │   └── <name>/shelf.toml
 ├── files/
 └── locks/
+    ├── registry.lock
+    └── shelf-<name>.lock
 ```
 
 Each `shelf.toml` is the sole authority for that shelf. Its sorted local keys
@@ -91,9 +93,14 @@ adds an arXiv PDF `url` when an entry has an arXiv identifier and no authored
 URL. Exports are never read back or verified.
 
 Shelf mutations validate complete candidates and atomically replace only
-`shelf.toml`. Cross-process advisory locks prevent lost updates. PDFs and source
-packages use the shared `files/` cache, so the same arXiv artifact is reused
-across shelves.
+`shelf.toml`. Cross-process advisory locks prevent lost updates; they are
+advisory, so they exclude other cita processes but not an editor writing
+`shelf.toml` directly. PDFs and source packages use the shared `files/` cache, so
+the same arXiv artifact is reused across shelves.
+
+Batch commands report each shelf's success on stdout and each failure on stderr,
+then exit non-zero if any shelf failed, so redirecting the data stream still
+surfaces the errors.
 
 ### Migrating pre-global projects
 

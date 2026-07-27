@@ -308,7 +308,7 @@ pub enum Error {
     #[error("invalid arXiv base URL: {0}")]
     InvalidBaseUrl(String),
     /// A cache directory could not be created.
-    #[error("could not create document cache directory {path}: {source}")]
+    #[error("could not create document cache directory {path}")]
     CreateCacheDirectory {
         /// Directory that could not be created.
         path: PathBuf,
@@ -316,7 +316,7 @@ pub enum Error {
         source: std::io::Error,
     },
     /// An existing cached file could not be inspected.
-    #[error("could not inspect cached PDF {path}: {source}")]
+    #[error("could not inspect cached PDF {path}")]
     InspectCachedPdf {
         /// Cached file that could not be inspected.
         path: PathBuf,
@@ -347,7 +347,7 @@ pub enum Error {
     #[error("source is not cached at {0}")]
     SourceNotCached(PathBuf),
     /// A source package could not be extracted into its temporary directory.
-    #[error("could not extract source package for {path}: {source}")]
+    #[error("could not extract source package for {path}")]
     ExtractSource {
         /// Path being written during extraction (a staging path, or the final
         /// cache path when staging setup fails).
@@ -356,7 +356,7 @@ pub enum Error {
         source: std::io::Error,
     },
     /// A complete extracted source tree could not be published to the cache.
-    #[error("could not publish source cache directory {path}: {source}")]
+    #[error("could not publish source cache directory {path}")]
     PublishSource {
         /// Intended final source cache path.
         path: PathBuf,
@@ -378,7 +378,7 @@ pub enum Error {
     #[error("arXiv returned non-PDF content for `{0}`")]
     InvalidDownloadedPdf(String),
     /// A temporary or final cache file could not be written.
-    #[error("could not write PDF cache file {path}: {source}")]
+    #[error("could not write PDF cache file {path}")]
     Write {
         /// Intended final cache path.
         path: PathBuf,

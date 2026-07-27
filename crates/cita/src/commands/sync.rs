@@ -3,7 +3,7 @@ use anyhow::Result;
 use cita_core::MetadataProvider;
 use std::fmt;
 
-pub(crate) async fn sync(target: &Target) -> Result<()> {
+pub(crate) async fn sync(target: &Target<'_>) -> Result<()> {
     println!("{}", sync_outcome(target).await?);
     Ok(())
 }
@@ -60,9 +60,9 @@ impl fmt::Display for SyncOutcome {
     }
 }
 
-pub(crate) async fn sync_outcome(target: &Target) -> Result<SyncOutcome> {
-    let _lock = target.lock()?;
-    let mut manifest = target.load()?;
+pub(crate) async fn sync_outcome(target: &Target<'_>) -> Result<SyncOutcome> {
+    let lock = target.lock()?;
+    let mut manifest = lock.manifest()?;
     let ids = manifest.inspire_record_ids();
     let managed = ids.len();
     let imported = manifest.references().len() - managed;

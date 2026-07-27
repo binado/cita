@@ -12,7 +12,8 @@ pub(crate) use export::{batch_export, export};
 pub(crate) use fetch::{FetchOptions, fetch};
 pub(crate) use import::import;
 pub(crate) use library::{
-    Target, batch_sync, init_global, list_shelves, new_shelf, resolve_target, target_in,
+    Target, batch_sync, init_global, list_shelves, new_shelf, open_library, report_shelf_failure,
+    resolve_target, summarize_batch, target_in,
 };
 pub(crate) use list::list;
 pub(crate) use remove::remove;
@@ -44,6 +45,8 @@ pub(crate) fn inspire_client() -> Result<Client> {
 }
 
 /// Bold-cyan identifier style, or None when the target stream should stay plain.
+///
+/// Matches the header styling in `list::print_rows` and honors `NO_COLOR`.
 pub(crate) fn highlight_style(stream_is_terminal: bool) -> Option<anstyle::Style> {
     (stream_is_terminal && env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())).then(|| {
         anstyle::Style::new()

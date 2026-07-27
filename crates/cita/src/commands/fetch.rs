@@ -19,9 +19,14 @@ struct Selected {
     save_outcome: Option<AddOutcome>,
 }
 
-async fn select(target: &Target, selector: &str, save: bool) -> Result<Selected> {
-    let _lock = save.then(|| target.lock()).transpose()?;
-    let mut manifest = target.load()?;
+async fn select(target: &Target<'_>, selector: &str, save: bool) -> Result<Selected> {
+    // Only `--save` mutates, so only `--save` locks; the lock must outlive the
+    // `add_batch` below, which is why it is bound here rather than inside the branch.
+    let lock = save.then(|| target.lock()).transpose()?;
+    let mut manifest = match &lock {
+        Some(lock) => lock.manifest()?,
+        None => target.load()?,
+    };
     if let Some(item) = manifest.find(selector)? {
         let save_outcome = save.then(|| AddOutcome::Existing(item.key.clone()));
         return Ok(Selected {
@@ -82,7 +87,11 @@ pub(crate) struct FetchOptions {
     pub(crate) save: bool,
 }
 
-pub(crate) async fn fetch(target: &Target, selector: &str, options: FetchOptions) -> Result<()> {
+pub(crate) async fn fetch(
+    target: &Target<'_>,
+    selector: &str,
+    options: FetchOptions,
+) -> Result<()> {
     let policy = if options.force {
         FetchPolicy::Force
     } else if options.cache_only {
@@ -109,7 +118,7 @@ pub(crate) async fn fetch(target: &Target, selector: &str, options: FetchOptions
         .first()
         .ok_or_else(|| anyhow::anyhow!("reference `{}` has no arXiv eprint", selected.key))?;
     let url = arxiv_pdf_url(arxiv)?.to_string();
-    let target = if options.return_url {
+    let result = if options.return_url {
         FetchTarget::Url(url)
     } else {
         let outcome = fetch_selected(&selected.files_root, arxiv, kind, policy).await?;
@@ -117,10 +126,10 @@ pub(crate) async fn fetch(target: &Target, selector: &str, options: FetchOptions
         FetchTarget::Path(outcome.path().to_owned())
     };
     if options.open {
-        open_target(&target)?;
-        eprintln!("Opened {target}");
+        open_target(&result)?;
+        eprintln!("Opened {result}");
     }
-    println!("{target}");
+    println!("{result}");
     Ok(())
 }
 

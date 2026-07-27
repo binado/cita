@@ -164,6 +164,7 @@ dependencies = [
  "cita-manifest",
  "clap",
  "clap_complete",
+ "fs2",
  "opener",
  "tempfile",
  "terminal_size",

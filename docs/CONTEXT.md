@@ -7,11 +7,33 @@ default. `library.toml` contains a sorted set of stable shelf names and records
 the fixed `main` default. Shelf locations are deterministic:
 `shelves/<name>/shelf.toml`. Commands never discover local project files.
 
-Every data command lazily initializes the library and `main`. An explicit shelf
-must already exist; selection never creates. Shelf mutations are independent,
-atomically replace one manifest, and hold a per-shelf advisory lock across the
-read-modify-write operation. Batch sync and export run in shelf-name order and
-continue after failures.
+Every data command lazily initializes the library and `main`, and recreates the
+`main` shelf if it has been deleted, so a partially removed store heals rather
+than wedging. An explicit shelf must already exist; selection never creates.
+Shelf mutations are independent, atomically replace one manifest, and hold a
+per-shelf advisory lock across the read-modify-write operation. Batch sync and
+export run in shelf-name order and continue after failures, reporting successes
+on stdout and failures on stderr.
+
+A registered shelf whose directory is missing is a tolerated state, not a fatal
+one: the registry still lists it, batch operations report it and continue, and
+only operations on that specific shelf fail.
+
+## Reference
+
+A `Reference` is Cita's provider-neutral view of one bibliographic record:
+authors, title, publication metadata, and a set of normalized identifiers. It is
+always *projected* from a source snapshot rather than stored directly, so the
+snapshot's BibTeX remains the single authority and the projection can be
+recomputed.
+
+## Provider identity
+
+A provider identity is a namespaced key pairing a provider with its stable record
+identifier, written `<provider>:<id>` — for example `inspire:1124337`. It is
+distinct from the local citation key and from DOI or arXiv identities. Selectors
+resolve against it, and it participates in the per-shelf uniqueness check that
+rejects the same record being added twice under different keys.
 
 ## Source snapshot
 

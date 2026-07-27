@@ -11,7 +11,12 @@ struct Row {
     year: String,
 }
 
-pub(crate) fn list(target: &Target, sort_by: SortBy, order: Order, wrap_title: bool) -> Result<()> {
+pub(crate) fn list(
+    target: &Target<'_>,
+    sort_by: SortBy,
+    order: Order,
+    wrap_title: bool,
+) -> Result<()> {
     let manifest = target.load()?;
     let mut rows = manifest
         .projected()?

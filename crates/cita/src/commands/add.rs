@@ -4,7 +4,7 @@ use cita_core::{Locator, MetadataProvider};
 use cita_manifest::{ConflictPolicy, KeyRequest, PendingReference, SourceSnapshot};
 
 pub(crate) async fn add(
-    target: &Target,
+    target: &Target<'_>,
     explicit_key: Option<&str>,
     values: &[String],
     overwrite: bool,
@@ -34,8 +34,8 @@ pub(crate) async fn add(
     } else {
         ConflictPolicy::Skip
     };
-    let _lock = target.lock()?;
-    let mut manifest = target.load()?;
+    let lock = target.lock()?;
+    let mut manifest = lock.manifest()?;
     let outcomes = manifest.add_batch(pending, policy)?;
     print_add_outcomes(&outcomes);
     Ok(())

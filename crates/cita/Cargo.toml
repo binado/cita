@@ -29,3 +29,8 @@ opener.workspace = true
 tempfile.workspace = true
 terminal_size.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+# Lets the CLI tests take a store lock directly, so lock contention can be
+# observed rather than raced for.
+fs2.workspace = true
