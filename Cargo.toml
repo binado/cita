@@ -22,7 +22,7 @@ authors = ["Bernardo Veronese"]
 anstyle = "1"
 anyhow = "1.0.94"
 biblatex = "0.12"
-clap = { version = "4.5.23", features = ["derive"] }
+clap = { version = "4.5.23", features = ["derive", "env"] }
 clap_complete = "4"
 bibi-bibfile = { path = "crates/bibi-bibfile", version = "0.4.0" }
 bibi-bibliography = { path = "crates/bibi-bibliography", version = "0.4.0" }

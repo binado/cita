@@ -91,4 +91,25 @@ pub enum Error {
     /// A local key is already taken by a different reference.
     #[error("local key `{0}` is already in use")]
     KeyInUse(String),
+    /// Two entries claim the same INSPIRE record.
+    #[error("`{key}` and `{other}` both claim INSPIRE record {record_id}")]
+    DuplicateRecord {
+        /// One local key claiming the record.
+        key: String,
+        /// The other local key claiming it.
+        other: String,
+        /// The contested record id.
+        record_id: u64,
+    },
+    /// A managed entry got no record back from the provider.
+    #[error("INSPIRE returned no record {record_id} for `{key}`")]
+    MissingRecord {
+        /// Local key that asked for the record.
+        key: String,
+        /// Record id that went unanswered.
+        record_id: u64,
+    },
+    /// The provider returned a record nothing asked for.
+    #[error("INSPIRE returned record {0}, which no entry requested")]
+    UnexpectedRecord(u64),
 }

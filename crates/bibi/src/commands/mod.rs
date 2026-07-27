@@ -1,43 +1,55 @@
 mod add;
+mod check;
 mod export;
 mod fetch;
 mod import;
 mod list;
+mod rekey;
 mod remove;
 mod sync;
 
 pub(crate) use add::add;
+pub(crate) use check::check;
 pub(crate) use export::export;
 pub(crate) use fetch::{FetchOptions, fetch};
 pub(crate) use import::import;
 pub(crate) use list::list;
+pub(crate) use rekey::rekey;
 pub(crate) use remove::remove;
 pub(crate) use sync::sync;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
+use bibi_bibfile::{AddOutcome, Bibfile};
 use bibi_inspire_client::{Client, RetryEvent};
-use bibi_manifest::{AddOutcome, MANIFEST_FILE};
 use std::{
     env, fs,
     fs::OpenOptions,
     io::{self, IsTerminal, Write},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 const CACHE_IGNORE_COMMENT: &str = "# bibi document cache";
 const CACHE_IGNORE_RULE: &str = "/.bibi/files/";
 
-pub(crate) fn find_manifest(start: &Path) -> Result<PathBuf> {
-    for directory in start.ancestors() {
-        let candidate = directory.join(MANIFEST_FILE);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-    bail!(
-        "no cita.toml found in {} or its parents; run `bibi init`",
-        start.display()
-    )
+/// Load the bibliography a command was pointed at.
+pub(crate) fn open(path: &Path) -> Result<Bibfile> {
+    Ok(Bibfile::load(path)?)
+}
+
+/// Write a mutated bibliography and report which file changed.
+///
+/// Saying so matters more than it used to: without a walk up the tree there is
+/// no single legal target, so a mutation that stayed quiet about where it wrote
+/// would be a trap in any directory holding more than one bibliography.
+pub(crate) fn persist(file: &Bibfile) -> Result<()> {
+    file.write()?;
+    eprintln!("Wrote {}", file.path().display());
+    Ok(())
+}
+
+/// The directory whose `.bibi/files` cache serves this bibliography.
+pub(crate) fn cache_root(file: &Bibfile) -> &Path {
+    file.path().parent().unwrap_or(Path::new("."))
 }
 
 pub(crate) fn ensure_cache_layout(directory: &Path) -> Result<()> {
@@ -151,4 +163,14 @@ pub(crate) fn print_add_outcomes(outcomes: &[AddOutcome]) {
     for outcome in outcomes {
         println!("{}", add_message(outcome, style));
     }
+}
+
+/// Whether any outcome actually changed the file.
+pub(crate) fn changed(outcomes: &[AddOutcome]) -> bool {
+    outcomes.iter().any(|outcome| {
+        matches!(
+            outcome,
+            AddOutcome::Added(_) | AddOutcome::Overwritten { .. }
+        )
+    })
 }

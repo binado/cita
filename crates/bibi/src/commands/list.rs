@@ -1,7 +1,6 @@
-use super::{find_manifest, highlight_style};
+use super::{highlight_style, open};
 use crate::{Order, SortBy};
 use anyhow::Result;
-use bibi_manifest::Manifest;
 use std::{
     io::{self, IsTerminal},
     path::Path,
@@ -15,9 +14,9 @@ struct Row {
     year: String,
 }
 
-pub(crate) fn list(cwd: &Path, sort_by: SortBy, order: Order, wrap_title: bool) -> Result<()> {
-    let manifest = Manifest::load_verified(find_manifest(cwd)?)?;
-    let mut rows = manifest
+pub(crate) fn list(path: &Path, sort_by: SortBy, order: Order, wrap_title: bool) -> Result<()> {
+    let file = open(path)?;
+    let mut rows = file
         .projected()?
         .into_iter()
         .map(|item| {

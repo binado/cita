@@ -1,29 +1,47 @@
 mod commands;
 
 use anyhow::{Context, Result};
+use bibi_bibfile::Bibfile;
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use std::{env, path::PathBuf};
 
 #[derive(Debug, Parser)]
-#[command(name = "bibi", version, about = "A Git-friendly bibliography database")]
+#[command(name = "bibi", version, about = "A Git-friendly bibliography CLI")]
 struct Cli {
+    /// Bibliography to operate on; a directory uses its `references.bib`
+    ///
+    /// Resolution is explicit and never walks up the tree, because a `.bib` is
+    /// not a project marker and quietly adopting a parent directory's
+    /// bibliography would be worse than asking.
+    #[arg(
+        short = 'p',
+        long,
+        global = true,
+        value_name = "FILE",
+        env = bibi_bibfile::PATH_ENV
+    )]
+    path: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Import standalone BibTeX entries from a path or stdin (`-`)
+    /// Fold entries from other BibTeX files, or stdin (`-`), into this one
     Import(ImportArgs),
     /// Resolve and add one or more references through INSPIRE
     Add(AddArgs),
-    /// Refresh every INSPIRE-managed source snapshot by stable record id
+    /// Refresh every INSPIRE-managed entry by stable record id
     Sync,
     /// Remove references by local key or provider/DOI/arXiv identity
     Remove(RemoveArgs),
+    /// Change one reference's local citation key
+    Rekey(RekeyArgs),
     /// List stored references
     List(ListArgs),
-    /// Write a derived BibTeX export with arXiv PDF URLs, for tools like Zotero
+    /// Validate the bibliography and report every problem at once
+    Check,
+    /// Write a shareable BibTeX export without bibi's own fields
     Export(ExportArgs),
     /// Fetch or resolve a reference's arXiv PDF or source package
     Fetch(FetchArgs),
@@ -39,8 +57,17 @@ struct ImportArgs {
     /// Replace colliding existing entries instead of skipping them
     #[arg(long)]
     overwrite: bool,
-    /// BibTeX file to import, or `-` to read from standard input
-    path: String,
+    /// BibTeX files to import, or `-` to read from standard input
+    #[arg(required = true)]
+    sources: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct RekeyArgs {
+    /// Local key, provider ID, DOI, arXiv ID, or canonical URL to rename
+    selector: String,
+    /// New local citation key
+    new_key: String,
 }
 
 #[derive(Debug, Args)]
@@ -78,9 +105,12 @@ struct ListArgs {
 
 #[derive(Debug, Args)]
 struct ExportArgs {
-    /// Write the export here instead of the default `<name>.bib`; relative paths use the caller's directory
+    /// Write here instead of the default `<directory>.bib`; `-` writes to stdout
     #[arg(short = 'o', long)]
     output: Option<PathBuf>,
+    /// Keep bibi's own `x-bibi-*` fields in the export
+    #[arg(long)]
+    keep_metadata: bool,
 }
 
 #[derive(Debug, Args)]
@@ -149,28 +179,33 @@ async fn main() {
 async fn run() -> Result<()> {
     let cli = Cli::parse();
     let cwd = env::current_dir().context("could not determine current directory")?;
+    let path = Bibfile::resolve(cli.path.as_deref(), &cwd);
     match cli.command {
         None => {
             Cli::command().print_help()?;
             println!();
         }
-        Some(Command::Import(args)) => commands::import(&cwd, &args.path, args.overwrite)?,
+        Some(Command::Import(args)) => commands::import(&path, &args.sources, args.overwrite)?,
         Some(Command::Add(AddArgs {
             key,
             overwrite,
             locators,
-        })) => commands::add(&cwd, key.as_deref(), &locators, overwrite).await?,
-        Some(Command::Sync) => commands::sync(&cwd).await?,
-        Some(Command::Remove(args)) => commands::remove(&cwd, &args.selectors)?,
+        })) => commands::add(&path, key.as_deref(), &locators, overwrite).await?,
+        Some(Command::Sync) => commands::sync(&path).await?,
+        Some(Command::Remove(args)) => commands::remove(&path, &args.selectors)?,
+        Some(Command::Rekey(args)) => commands::rekey(&path, &args.selector, &args.new_key)?,
         Some(Command::List(ListArgs {
             sort_by,
             order,
             no_wrap_title,
-        })) => commands::list(&cwd, sort_by, order, !no_wrap_title)?,
-        Some(Command::Export(args)) => commands::export(&cwd, &cwd, args.output.as_deref())?,
+        })) => commands::list(&path, sort_by, order, !no_wrap_title)?,
+        Some(Command::Check) => commands::check(&path)?,
+        Some(Command::Export(args)) => {
+            commands::export(&path, args.output.as_deref(), &cwd, args.keep_metadata)?
+        }
         Some(Command::Fetch(args)) => {
             let (selector, options) = args.into_options();
-            commands::fetch(&cwd, &selector, options).await?
+            commands::fetch(&path, &selector, options).await?
         }
         Some(Command::Completions { shell }) => {
             let mut command = Cli::command();

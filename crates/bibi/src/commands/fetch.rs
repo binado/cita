@@ -1,11 +1,12 @@
-use super::{add_message, ensure_cache_layout, find_manifest, highlight_style, inspire_client};
+use super::{
+    add_message, cache_root, changed, ensure_cache_layout, highlight_style, inspire_client, open,
+    persist,
+};
 use anyhow::{Context, Result};
+use bibi_bibfile::{AddOutcome, ConflictPolicy, Entry, KeyRequest, PendingReference};
 use bibi_core::{Locator, MetadataProvider, Reference, ReferenceSource};
 use bibi_documents::{
     ArtifactKind, DocumentStore, Error as DocumentError, FetchOutcome, FetchPolicy, arxiv_pdf_url,
-};
-use bibi_manifest::{
-    AddOutcome, ConflictPolicy, KeyRequest, Manifest, PendingReference, SourceSnapshot,
 };
 use std::{
     fmt,
@@ -17,19 +18,19 @@ use std::{
 struct Selected {
     key: String,
     reference: Reference,
-    manifest_path: PathBuf,
+    cache_root: PathBuf,
     save_outcome: Option<AddOutcome>,
 }
 
-async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
-    let path = find_manifest(cwd)?;
-    let mut manifest = Manifest::load_verified(&path)?;
-    if let Some(item) = manifest.find(selector)? {
+async fn select(path: &Path, selector: &str, save: bool) -> Result<Selected> {
+    let mut file = open(path)?;
+    let root = cache_root(&file).to_path_buf();
+    if let Some(item) = file.find(selector)? {
         let save_outcome = save.then(|| AddOutcome::Existing(item.key.clone()));
         return Ok(Selected {
             key: item.key,
             reference: item.reference,
-            manifest_path: path,
+            cache_root: root,
             save_outcome,
         });
     }
@@ -41,16 +42,17 @@ async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
         let record = client.resolve(&locator).await?;
         let key = record.texkey.clone();
         let reference = record.project()?;
-        let outcome = manifest
-            .add_batch(
-                vec![PendingReference {
-                    key: KeyRequest::Suggested(key),
-                    source: SourceSnapshot::inspire(record),
-                }],
-                ConflictPolicy::Skip,
-            )?
-            .pop()
-            .expect("one outcome");
+        let outcomes = file.add_batch(
+            vec![PendingReference {
+                entry: Entry::from_inspire(&key, &record)?,
+                key: KeyRequest::Suggested(key),
+            }],
+            ConflictPolicy::Skip,
+        )?;
+        if changed(&outcomes) {
+            persist(&file)?;
+        }
+        let outcome = outcomes.into_iter().next().expect("one outcome");
         let key = match &outcome {
             AddOutcome::Added(key)
             | AddOutcome::Existing(key)
@@ -60,7 +62,7 @@ async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
         Ok(Selected {
             key,
             reference,
-            manifest_path: path,
+            cache_root: root,
             save_outcome: Some(outcome),
         })
     } else {
@@ -68,7 +70,7 @@ async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
         Ok(Selected {
             key: selector.into(),
             reference,
-            manifest_path: path,
+            cache_root: root,
             save_outcome: None,
         })
     }
@@ -84,7 +86,7 @@ pub(crate) struct FetchOptions {
     pub(crate) save: bool,
 }
 
-pub(crate) async fn fetch(cwd: &Path, selector: &str, options: FetchOptions) -> Result<()> {
+pub(crate) async fn fetch(path: &Path, selector: &str, options: FetchOptions) -> Result<()> {
     let policy = if options.force {
         FetchPolicy::Force
     } else if options.cache_only {
@@ -97,7 +99,7 @@ pub(crate) async fn fetch(cwd: &Path, selector: &str, options: FetchOptions) -> 
     } else {
         ArtifactKind::Pdf
     };
-    let selected = select(cwd, selector, options.save).await?;
+    let selected = select(path, selector, options.save).await?;
     if let Some(outcome) = &selected.save_outcome {
         eprintln!(
             "{}",
@@ -114,7 +116,7 @@ pub(crate) async fn fetch(cwd: &Path, selector: &str, options: FetchOptions) -> 
     let target = if options.return_url {
         FetchTarget::Url(url)
     } else {
-        let outcome = fetch_selected(&selected.manifest_path, arxiv, kind, policy).await?;
+        let outcome = fetch_selected(&selected.cache_root, arxiv, kind, policy).await?;
         eprintln!("{}", fetch_message(&selected.key, &url, kind, &outcome));
         FetchTarget::Path(outcome.path().to_owned())
     };
@@ -151,12 +153,11 @@ fn open_target(target: &FetchTarget) -> Result<()> {
 }
 
 async fn fetch_selected(
-    path: &Path,
+    root: &Path,
     arxiv: &str,
     kind: ArtifactKind,
     policy: FetchPolicy,
 ) -> Result<FetchOutcome> {
-    let root = path.parent().unwrap_or_else(|| Path::new("."));
     if policy != FetchPolicy::CacheOnly {
         ensure_cache_layout(root)?;
     }

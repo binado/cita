@@ -1,11 +1,11 @@
-use super::{find_manifest, inspire_client, print_add_outcomes};
+use super::{changed, inspire_client, open, persist, print_add_outcomes};
 use anyhow::{Result, bail};
+use bibi_bibfile::{ConflictPolicy, Entry, KeyRequest, PendingReference};
 use bibi_core::{Locator, MetadataProvider};
-use bibi_manifest::{ConflictPolicy, KeyRequest, Manifest, PendingReference, SourceSnapshot};
 use std::path::Path;
 
 pub(crate) async fn add(
-    cwd: &Path,
+    path: &Path,
     explicit_key: Option<&str>,
     values: &[String],
     overwrite: bool,
@@ -17,6 +17,9 @@ pub(crate) async fn add(
         .iter()
         .map(|value| value.parse::<Locator>())
         .collect::<Result<Vec<_>, _>>()?;
+    // Load before resolving so a missing bibliography fails without spending a
+    // network round trip first.
+    let mut file = open(path)?;
     let client = inspire_client()?;
     let mut pending = Vec::with_capacity(locators.len());
     for locator in &locators {
@@ -25,9 +28,11 @@ pub(crate) async fn add(
             Some(key) => KeyRequest::Exact(key.to_owned()),
             None => KeyRequest::Suggested(record.texkey.clone()),
         };
+        // Build the complete entry before touching the file: a lookup that
+        // fails must never leave a stub behind in a file the user owns.
         pending.push(PendingReference {
+            entry: Entry::from_inspire(key.as_str(), &record)?,
             key,
-            source: SourceSnapshot::inspire(record),
         });
     }
     let policy = if overwrite {
@@ -35,8 +40,10 @@ pub(crate) async fn add(
     } else {
         ConflictPolicy::Skip
     };
-    let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
-    let outcomes = manifest.add_batch(pending, policy)?;
+    let outcomes = file.add_batch(pending, policy)?;
     print_add_outcomes(&outcomes);
+    if changed(&outcomes) {
+        persist(&file)?;
+    }
     Ok(())
 }

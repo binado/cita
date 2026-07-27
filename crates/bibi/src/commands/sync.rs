@@ -1,50 +1,55 @@
-use super::{find_manifest, inspire_client};
+use super::{inspire_client, open, persist};
 use anyhow::Result;
-use bibi_core::MetadataProvider;
-use bibi_manifest::Manifest;
-use std::{fmt, path::Path};
+use bibi_bibfile::Bibfile;
+use std::path::Path;
 
-pub(crate) async fn sync(cwd: &Path) -> Result<()> {
-    println!("{}", sync_outcome(cwd).await?);
+pub(crate) async fn sync(path: &Path) -> Result<()> {
+    let mut file = open(path)?;
+    let outcome = refresh(&mut file).await?;
+    println!("{outcome}");
+    if outcome.refreshed > 0 {
+        persist(&file)?;
+    }
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct SyncOutcome {
-    changed: bool,
-    managed: usize,
-    imported: usize,
+    /// Managed entries whose content actually changed.
+    pub(crate) refreshed: usize,
+    /// Managed entries considered.
+    pub(crate) managed: usize,
+    /// Entries bibi does not refresh.
+    pub(crate) unmanaged: usize,
 }
 
-impl fmt::Display for SyncOutcome {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.changed {
-            write!(
-                formatter,
-                "Synced {} managed references; left {} imported unchanged",
-                self.managed, self.imported
-            )
-        } else {
-            write!(
-                formatter,
-                "Already in sync: {} managed, {} imported",
-                self.managed, self.imported
-            )
-        }
+impl std::fmt::Display for SyncOutcome {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "refreshed {} of {} managed entries; {} unmanaged",
+            self.refreshed, self.managed, self.unmanaged
+        )
     }
 }
 
-async fn sync_outcome(cwd: &Path) -> Result<SyncOutcome> {
-    let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
-    let ids = manifest.inspire_record_ids();
-    let managed = ids.len();
-    let imported = manifest.references().len() - managed;
-    let provider_ids = ids.iter().map(u64::to_string).collect::<Vec<_>>();
-    let refreshed = inspire_client()?.refresh(&provider_ids).await?;
-    let changed = manifest.replace_inspire(refreshed)?;
+/// Refresh every managed entry by its stable INSPIRE record id.
+pub(crate) async fn refresh(file: &mut Bibfile) -> Result<SyncOutcome> {
+    let managed = file.managed();
+    let unmanaged = file.entries().len() - managed.len();
+    if managed.is_empty() {
+        return Ok(SyncOutcome {
+            refreshed: 0,
+            managed: 0,
+            unmanaged,
+        });
+    }
+    let ids = managed.iter().map(|(_, id)| *id).collect::<Vec<_>>();
+    let records = inspire_client()?.refresh_records(&ids).await?;
+    let refreshed = file.apply_records(&records)?;
     Ok(SyncOutcome {
-        changed,
-        managed,
-        imported,
+        refreshed: refreshed.len(),
+        managed: managed.len(),
+        unmanaged,
     })
 }

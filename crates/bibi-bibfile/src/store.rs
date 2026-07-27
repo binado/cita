@@ -3,6 +3,7 @@
 use crate::{BIBLIOGRAPHY_FILE, Entry, Error, FIELD_PREFIX, PATH_ENV};
 use bibi_bibliography::{scan_entries, strip_fields_with_prefix, validate_key};
 use bibi_core::{Locator, Reference, normalize_arxiv, normalize_doi};
+use bibi_inspire_client::InspireRecord;
 use std::{
     collections::HashMap,
     env, fs,
@@ -30,7 +31,8 @@ pub enum KeyRequest {
 }
 
 impl KeyRequest {
-    fn as_str(&self) -> &str {
+    /// The requested key, whether exact or suggested.
+    pub fn as_str(&self) -> &str {
         match self {
             Self::Exact(key) | Self::Suggested(key) => key,
         }
@@ -490,6 +492,57 @@ impl Bibfile {
             .expect("find returned a stored key");
         self.entries[at].rekey(new_key)?;
         Ok(found.key)
+    }
+
+    /// Apply refreshed INSPIRE records to the entries that requested them.
+    ///
+    /// Returns the local keys whose content actually changed. An entry whose
+    /// stored timestamp matches the returned one is left completely alone, so a
+    /// sync that learns nothing new touches no bytes and produces no diff.
+    ///
+    /// Every managed entry must be explained by exactly one record and every
+    /// record by exactly one entry: a record id is the strongest identity bibi
+    /// has, so an unexplained one on either side means the file and the
+    /// provider disagree about what is stored, which is not something to paper
+    /// over by writing something plausible.
+    pub fn apply_records(&mut self, records: &[InspireRecord]) -> Result<Vec<String>, Error> {
+        let mut by_id: HashMap<u64, &InspireRecord> = HashMap::new();
+        for record in records {
+            if by_id.insert(record.record_id, record).is_some() {
+                return Err(Error::UnexpectedRecord(record.record_id));
+            }
+        }
+        let mut claimed: HashMap<u64, String> = HashMap::new();
+        let mut changed = Vec::new();
+        for at in 0..self.entries.len() {
+            if self.entries[at].is_frozen() {
+                continue;
+            }
+            let Some(record_id) = self.entries[at].inspire_record_id() else {
+                continue;
+            };
+            let key = self.entries[at].key.clone();
+            if let Some(other) = claimed.insert(record_id, key.clone()) {
+                return Err(Error::DuplicateRecord {
+                    key,
+                    other,
+                    record_id,
+                });
+            }
+            let record = by_id.remove(&record_id).ok_or(Error::MissingRecord {
+                key: key.clone(),
+                record_id,
+            })?;
+            if self.entries[at].inspire_updated().as_deref() == Some(record.updated.as_str()) {
+                continue;
+            }
+            self.entries[at].refresh(record)?;
+            changed.push(key);
+        }
+        if let Some(record_id) = by_id.keys().next() {
+            return Err(Error::UnexpectedRecord(*record_id));
+        }
+        Ok(changed)
     }
 
     /// Append an entry at the end of the file, under `key`.

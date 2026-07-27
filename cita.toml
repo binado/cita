@@ -1,0 +1,42 @@
+schema = 1
+
+[references."Einsle:2025xsh"]
+source = "inspire"
+record_id = 2935640
+updated = "2025-09-29T04:29:50.237193+00:00"
+bibtex = """
+@article{Einsle:2025xsh,
+    author = "Einsle, Hugo and Bizouard, Marie-Anne and Regimbau, Tania and Sakellariadou, Mairi",
+    title = "{Gravitational-wave background detection using machine learning}",
+    eprint = "2506.14764",
+    archivePrefix = "arXiv",
+    primaryClass = "gr-qc",
+    doi = "10.1103/hs9b-drwx",
+    journal = "Phys. Rev. D",
+    volume = "112",
+    number = "6",
+    pages = "063056",
+    year = "2025"
+}"""
+
+[references."Einsle:2025xsh".identifiers]
+arxiv = "2506.14764"
+doi = "10.1103/hs9b-drwx"
+
+[references."Owen:2026hst"]
+source = "inspire"
+record_id = 3170956
+updated = "2026-06-24T04:18:01.622836+00:00"
+bibtex = """
+@article{Owen:2026hst,
+    author = "Owen, Caroline B. and Toubiana, Alexandre and Gerosa, Davide",
+    title = "{Population-level correlations in Bayesian statistics: an illustrative model for gravitational-wave astronomy}",
+    eprint = "2606.21076",
+    archivePrefix = "arXiv",
+    primaryClass = "gr-qc",
+    month = "6",
+    year = "2026"
+}"""
+
+[references."Owen:2026hst".identifiers]
+arxiv = "2606.21076"

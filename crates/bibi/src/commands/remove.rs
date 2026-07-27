@@ -1,12 +1,15 @@
-use super::find_manifest;
+use super::{open, persist};
 use anyhow::Result;
-use bibi_manifest::Manifest;
 use std::path::Path;
 
-pub(crate) fn remove(cwd: &Path, selectors: &[String]) -> Result<()> {
-    let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
-    for item in manifest.remove_batch(selectors)? {
+pub(crate) fn remove(path: &Path, selectors: &[String]) -> Result<()> {
+    let mut file = open(path)?;
+    let removed = file.remove_batch(selectors)?;
+    for item in &removed {
         println!("Removed {}", item.key);
+    }
+    if !removed.is_empty() {
+        persist(&file)?;
     }
     Ok(())
 }

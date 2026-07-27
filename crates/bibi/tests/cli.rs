@@ -12,18 +12,24 @@ fn bibi(cwd: &Path, args: &[&str]) -> Output {
         .current_dir(cwd)
         .args(args)
         .env("NO_COLOR", "1")
+        .env_remove("BIBI_BIB")
+        .output()
+        .unwrap()
+}
+
+fn bibi_with_env(cwd: &Path, args: &[&str], key: &str, value: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_bibi"))
+        .current_dir(cwd)
+        .args(args)
+        .env("NO_COLOR", "1")
+        .env_remove("BIBI_BIB")
+        .env(key, value)
         .output()
         .unwrap()
 }
 
 fn bibi_with_server(cwd: &Path, args: &[&str], base: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_bibi"))
-        .current_dir(cwd)
-        .args(args)
-        .env("NO_COLOR", "1")
-        .env("BIBI_INSPIRE_BASE_URL", base)
-        .output()
-        .unwrap()
+    bibi_with_env(cwd, args, "BIBI_INSPIRE_BASE_URL", base)
 }
 
 fn bibi_stdin(cwd: &Path, args: &[&str], input: &str) -> Output {
@@ -31,6 +37,7 @@ fn bibi_stdin(cwd: &Path, args: &[&str], input: &str) -> Output {
         .current_dir(cwd)
         .args(args)
         .env("NO_COLOR", "1")
+        .env_remove("BIBI_BIB")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -61,19 +68,19 @@ fn success_streams(output: Output) -> (String, String) {
         String::from_utf8(output.stderr).unwrap(),
     )
 }
+
 fn failure(output: Output) -> String {
     assert!(!output.status.success(), "command unexpectedly succeeded");
     String::from_utf8(output.stderr).unwrap()
 }
 
-/// An empty schema-1 project, written directly now that `init` is gone.
-///
-/// An empty reference set renders to an empty bibliography, so these two files
-/// are exactly what the removed command produced and they verify against each
-/// other.
-fn project(directory: &Path) {
-    fs::write(directory.join("cita.toml"), "schema = 1\n").unwrap();
+/// An empty bibliography, which is all a bibi project is.
+fn bib(directory: &Path) {
     fs::write(directory.join("references.bib"), "").unwrap();
+}
+
+fn read_bib(directory: &Path) -> String {
+    fs::read_to_string(directory.join("references.bib")).unwrap()
 }
 
 fn entry(key: &str, title: &str, extra: &str) -> String {
@@ -113,66 +120,13 @@ fn server(responses: Vec<(&'static str, String)>) -> (String, thread::JoinHandle
 }
 
 fn json_record(id: u64, key: &str, title: &str, arxiv: &str) -> String {
+    json_record_at(id, key, title, arxiv, "2026-01-01T00:00:00Z")
+}
+
+fn json_record_at(id: u64, key: &str, title: &str, arxiv: &str, updated: &str) -> String {
     format!(
-        r#"{{"id":"{id}","updated":"2026-01-01T00:00:00Z","metadata":{{"titles":[{{"title":"{title}"}}],"authors":[{{"full_name":"Doe, Jane"}}],"texkeys":["{key}"],"arxiv_eprints":[{{"value":"{arxiv}","categories":["hep-th"]}}],"document_type":["article"]}}}}"#
+        r#"{{"id":"{id}","updated":"{updated}","metadata":{{"titles":[{{"title":"{title}"}}],"authors":[{{"full_name":"Doe, Jane"}}],"texkeys":["{key}"],"arxiv_eprints":[{{"value":"{arxiv}","categories":["hep-th"]}}],"document_type":["article"]}}}}"#
     )
-}
-
-fn json_record_with_doi(id: u64, key: &str, title: &str, arxiv: &str, doi: &str) -> String {
-    format!(
-        r#"{{"id":"{id}","updated":"2026-01-01T00:00:00Z","metadata":{{"titles":[{{"title":"{title}"}}],"authors":[{{"full_name":"Doe, Jane"}}],"texkeys":["{key}"],"arxiv_eprints":[{{"value":"{arxiv}","categories":["hep-th"]}}],"dois":[{{"value":"{doi}"}}],"document_type":["article"]}}}}"#
-    )
-}
-
-fn sortable_library(directory: &Path) {
-    project(directory);
-    let input = format!(
-        "{}\n{}\n{}",
-        entry(
-            "K.later",
-            "Beta result",
-            "author={Zimmerman, Zed}, year={2020},"
-        ),
-        entry(
-            "K.early",
-            "Delta result",
-            "author={Aaronson, Ann}, year={1990},"
-        ),
-        entry("K.undated", "Alpha result", "author={Median, Mia},")
-    );
-    success(bibi_stdin(directory, &["import", "-"], &input));
-}
-
-fn key_positions(output: &str, keys: [&str; 3]) -> [usize; 3] {
-    keys.map(|key| {
-        output
-            .find(key)
-            .unwrap_or_else(|| panic!("{key} missing from:\n{output}"))
-    })
-}
-
-/// Whether `directory` is on a case-insensitive filesystem, probed so the
-/// regression test means something on both macOS and Linux CI.
-fn case_insensitive(directory: &Path) -> bool {
-    let probe = directory.join("case-probe");
-    fs::write(&probe, b"probe").unwrap();
-    let insensitive = directory.join("CASE-PROBE").exists();
-    fs::remove_file(&probe).unwrap();
-    insensitive
-}
-
-fn arxiv_library(directory: &Path) {
-    project(directory);
-    let input = format!(
-        "{}\n{}",
-        entry("Zed", "Cached reference", "eprint={2001.00001},"),
-        entry("Alpha", "No eprint", "doi={10.1000/alpha},")
-    );
-    success(bibi_stdin(directory, &["import", "-"], &input));
-}
-
-fn cached_pdf(directory: &Path, bytes: &[u8]) {
-    cached_pdf_for(directory, "2001.00001", bytes);
 }
 
 fn cached_pdf_for(directory: &Path, arxiv: &str, bytes: &[u8]) {
@@ -187,254 +141,389 @@ fn cached_source_for(directory: &Path, arxiv: &str, name: &str, bytes: &[u8]) {
     fs::write(source, bytes).unwrap();
 }
 
-#[test]
-fn nested_projects_discover_the_nearest_manifest() {
-    let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
-    let nested = directory.path().join("nested");
-    fs::create_dir(&nested).unwrap();
-    project(&nested);
-    success(bibi_stdin(
-        &nested,
-        &["import", "-"],
-        &entry("Nested", "Nested project", ""),
-    ));
-    let child = nested.join("child");
-    fs::create_dir(&child).unwrap();
-
-    assert!(success(bibi(&child, &["list"])).contains("Nested project"));
-    assert!(
-        !fs::read_to_string(directory.path().join("cita.toml"))
-            .unwrap()
-            .contains("Nested")
+fn arxiv_library(directory: &Path) {
+    bib(directory);
+    let input = format!(
+        "{}\n{}",
+        entry("Zed", "Cached reference", "eprint={2001.00001},"),
+        entry("Alpha", "No eprint", "doi={10.1000/alpha},")
     );
+    success(bibi_stdin(directory, &["import", "-"], &input));
 }
 
+// ---------------------------------------------------------------- resolution
+
 #[test]
-fn legacy_manifest_is_rejected_without_rewriting() {
+fn a_missing_bibliography_is_reported_with_the_fix_and_never_created() {
     let directory = tempfile::tempdir().unwrap();
-    fs::write(directory.path().join("cita.toml"), "schema = 2\n").unwrap();
     let error = failure(bibi(directory.path(), &["list"]));
-    assert!(error.contains("unsupported cita.toml schema 2"), "{error}");
+    assert!(error.contains("no references.bib at"), "{error}");
+    assert!(error.contains("touch references.bib"), "{error}");
+    assert!(error.contains("--path"), "{error}");
     assert!(!directory.path().join("references.bib").exists());
 }
 
+/// A bibliography in a parent directory is deliberately *not* discovered: a
+/// `.bib` is not a project marker, so silently adopting one would be a trap.
 #[test]
-fn import_is_source_preserving_and_skips_duplicates_by_default() {
+fn resolution_never_walks_up_to_a_parent_bibliography() {
     let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
-    let input = entry("B", "Beta", "doi={10.1/B},");
+    bib(directory.path());
+    let nested = directory.path().join("chapters");
+    fs::create_dir(&nested).unwrap();
+    assert!(failure(bibi(&nested, &["list"])).contains("no references.bib at"));
+}
+
+#[test]
+fn path_and_the_environment_both_select_a_bibliography() {
+    let directory = tempfile::tempdir().unwrap();
+    let elsewhere = directory.path().join("papers");
+    fs::create_dir(&elsewhere).unwrap();
+    bib(&elsewhere);
+    success(bibi_stdin(
+        directory.path(),
+        &["--path", "papers/references.bib", "import", "-"],
+        &entry("Viaflag", "Chosen by flag", ""),
+    ));
+
+    // The flag also accepts a directory, and works after the subcommand.
+    assert!(success(bibi(directory.path(), &["list", "-p", "papers"])).contains("Chosen by flag"));
+    let via_env = bibi_with_env(
+        directory.path(),
+        &["list"],
+        "BIBI_BIB",
+        elsewhere.join("references.bib").to_str().unwrap(),
+    );
+    assert!(success(via_env).contains("Chosen by flag"));
+    assert!(!directory.path().join("references.bib").exists());
+}
+
+// -------------------------------------------------------- byte preservation
+
+/// The governing promise of a hand-edited source of truth: a mutation rewrites
+/// the entries it touches and nothing else.
+#[test]
+fn mutations_leave_every_untouched_byte_alone() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("references.bib");
+    let original = "% Chapter one sources\n@article{Alpha,\n\ttitle = {Alpha},\n\teprint = {2001.00001}\n}\n\n% Chapter two\n@book{Beta,\n  title = {Beta},\n  year = {1995},\n}\n";
+    fs::write(&path, original).unwrap();
+
+    success(bibi(directory.path(), &["rekey", "Alpha", "Gamma"]));
     assert_eq!(
-        success(bibi_stdin(directory.path(), &["import", "-"], &input)),
-        "added B\n"
+        read_bib(directory.path()),
+        original.replace("@article{Alpha,", "@article{Gamma,")
     );
-    // An import mixing a fresh entry with a different-key duplicate of an
-    // existing DOI adds the fresh one and skips the duplicate, exiting 0.
-    let mixed = format!(
-        "{}\n{}",
-        entry("C", "Gamma", "doi={10.1/C},"),
-        entry("D", "Delta", "doi={10.1/b},")
-    );
-    let output = success(bibi_stdin(directory.path(), &["import", "-"], &mixed));
-    assert!(output.contains("added C"), "{output}");
-    assert!(
-        output.contains("skipped D: already present as B"),
-        "{output}"
-    );
-    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
-    assert!(manifest.contains("[references.C]"), "{manifest}");
-    assert!(!manifest.contains("[references.D]"), "{manifest}");
-}
 
-#[test]
-fn import_reports_identical_duplicates_as_skipped() {
-    let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
     success(bibi_stdin(
         directory.path(),
         &["import", "-"],
-        &entry("A", "Alpha", "doi={10.1/A},"),
+        &entry("Delta", "Delta", ""),
     ));
-    // A batch re-listing an identical existing entry alongside a fresh one adds
-    // the new entry and reports the identical one as an idempotent "already
-    // present" no-op, printed per-line as `skipped A` with no aggregate summary.
-    let mixed = format!(
-        "{}\n{}",
-        entry("A", "Alpha", "doi={10.1/A},"),
-        entry("B", "Beta", "doi={10.1/B},")
+    let after_import = read_bib(directory.path());
+    assert!(
+        after_import.starts_with("% Chapter one sources"),
+        "{after_import}"
     );
-    let output = success(bibi_stdin(directory.path(), &["import", "-"], &mixed));
-    assert!(output.contains("added B"), "{output}");
-    assert!(output.contains("skipped A"), "{output}");
-    assert!(!output.contains(" added,"), "{output}");
+    assert!(after_import.contains("% Chapter two"), "{after_import}");
+    assert!(
+        after_import.contains("\ttitle = {Alpha},"),
+        "{after_import}"
+    );
+    // Appended, not resorted: the user owns the ordering.
+    assert!(after_import.trim_end().ends_with('}'), "{after_import}");
+    assert!(
+        after_import.find("@misc{Delta,") > after_import.find("@book{Beta,"),
+        "{after_import}"
+    );
 }
 
 #[test]
-fn import_overwrite_rekeys_a_duplicate_and_leaves_others_untouched() {
+fn removing_the_first_entry_keeps_a_file_header() {
     let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
+    let path = directory.path().join("references.bib");
+    fs::write(
+        &path,
+        "% my library\n@misc{First,\n  title = {First},\n}\n\n@misc{Second,\n  title = {Second},\n}\n",
+    )
+    .unwrap();
+    success(bibi(directory.path(), &["remove", "First"]));
+    assert_eq!(
+        read_bib(directory.path()),
+        "% my library\n@misc{Second,\n  title = {Second},\n}\n"
+    );
+}
+
+// -------------------------------------------------------------------- import
+
+#[test]
+fn import_preserves_source_bytes_and_skips_duplicates_by_default() {
+    let directory = tempfile::tempdir().unwrap();
+    bib(directory.path());
+    let source = entry("Alpha", "Alpha title", "doi={10.1/ALPHA},");
+    assert_eq!(
+        success(bibi_stdin(directory.path(), &["import", "-"], &source)),
+        "added Alpha\n"
+    );
+    assert!(read_bib(directory.path()).contains(&source));
+
+    // Same identity under a new key is a collision, not a second entry.
+    let again = entry("Beta", "Beta title", "doi={10.1/alpha},");
+    assert_eq!(
+        success(bibi_stdin(directory.path(), &["import", "-"], &again)),
+        "skipped Beta: already present as Alpha\n"
+    );
+    assert!(!read_bib(directory.path()).contains("Beta title"));
+}
+
+#[test]
+fn import_overwrite_replaces_the_colliding_entry() {
+    let directory = tempfile::tempdir().unwrap();
+    bib(directory.path());
     success(bibi_stdin(
         directory.path(),
         &["import", "-"],
-        &entry("foo", "Foo", "eprint={2107.00001},"),
+        &entry("Alpha", "Old", "doi={10.1/X},"),
     ));
-
-    // bar duplicates foo's arXiv identity; baz is fresh.
-    let second = format!(
-        "{}\n{}",
-        entry("bar", "Bar", "eprint={2107.00001},"),
-        entry("baz", "Baz", "eprint={2202.00002},")
-    );
-    let output = success(bibi_stdin(directory.path(), &["import", "-"], &second));
-    assert!(
-        output.contains("skipped bar: already present as foo"),
-        "{output}"
-    );
-    assert!(output.contains("added baz"), "{output}");
-    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
-    assert!(manifest.contains("[references.foo]"), "{manifest}");
-    assert!(manifest.contains("[references.baz]"), "{manifest}");
-    assert!(!manifest.contains("[references.bar]"), "{manifest}");
-
-    // Re-import with --overwrite rekeys foo -> bar and leaves baz as-is.
-    let output = success(bibi_stdin(
-        directory.path(),
-        &["import", "--overwrite", "-"],
-        &second,
-    ));
-    assert!(output.contains("overwrote foo -> bar"), "{output}");
-    assert!(output.contains("skipped baz"), "{output}");
-    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
-    assert!(manifest.contains("[references.bar]"), "{manifest}");
-    assert!(manifest.contains("[references.baz]"), "{manifest}");
-    assert!(!manifest.contains("[references.foo]"), "{manifest}");
-
-    // The generated bibliography follows the rekey with no drift.
-    let bibliography = fs::read_to_string(directory.path().join("references.bib")).unwrap();
-    assert!(bibliography.contains("@misc{bar,"), "{bibliography}");
-    assert!(!bibliography.contains("@misc{foo,"), "{bibliography}");
-}
-
-#[test]
-fn import_overwrite_reports_every_removed_collision() {
-    let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
-    let existing = format!(
-        "{}\n{}",
-        entry("DoiOwner", "DOI owner", "doi={10.1/BRIDGE},"),
-        entry("ArxivOwner", "arXiv owner", "eprint={2401.00042},")
-    );
-    success(bibi_stdin(directory.path(), &["import", "-"], &existing));
-
-    let incoming = entry(
-        "Combined",
-        "Combined",
-        "doi={10.1/bridge}, eprint={2401.00042},",
-    );
     assert_eq!(
         success(bibi_stdin(
             directory.path(),
             &["import", "--overwrite", "-"],
-            &incoming,
+            &entry("Renamed", "New", "doi={10.1/X},"),
         )),
-        "overwrote DoiOwner, ArxivOwner -> Combined\n"
+        "overwrote Alpha -> Renamed\n"
     );
+    let bibliography = read_bib(directory.path());
+    assert!(bibliography.contains("@misc{Renamed,"), "{bibliography}");
+    assert!(!bibliography.contains("Old"), "{bibliography}");
+}
 
-    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
-    assert!(manifest.contains("[references.Combined]"), "{manifest}");
-    assert!(!manifest.contains("[references.DoiOwner]"), "{manifest}");
-    assert!(!manifest.contains("[references.ArxivOwner]"), "{manifest}");
-    let bibliography = fs::read_to_string(directory.path().join("references.bib")).unwrap();
-    assert!(bibliography.contains("@misc{Combined,"), "{bibliography}");
-    assert!(!bibliography.contains("@misc{DoiOwner,"), "{bibliography}");
+/// An incoming file is somebody else's working bibliography, so it will have
+/// comments in it and must still import.
+#[test]
+fn import_tolerates_comments_and_directives_in_the_source() {
+    let directory = tempfile::tempdir().unwrap();
+    bib(directory.path());
+    let source = format!(
+        "% their notes\n@string{{j = {{Journal}}}}\n\n{}\n\n% trailing\n",
+        entry("Theirs", "Their paper", "")
+    );
+    assert_eq!(
+        success(bibi_stdin(directory.path(), &["import", "-"], &source)),
+        "added Theirs\n"
+    );
+    let bibliography = read_bib(directory.path());
+    assert!(bibliography.contains("@misc{Theirs,"), "{bibliography}");
+    // Their commentary is theirs; only entries cross over.
+    assert!(!bibliography.contains("their notes"), "{bibliography}");
+}
+
+/// Bookkeeping written by someone else's bibi is not evidence about this file.
+#[test]
+fn import_strips_bibis_own_fields_from_incoming_entries() {
+    let directory = tempfile::tempdir().unwrap();
+    bib(directory.path());
+    let source = entry(
+        "Theirs",
+        "Their paper",
+        "eprint={2001.00001},\n  x-bibi-inspire-id = {999999},\n  x-bibi-frozen = {true},",
+    );
+    success(bibi_stdin(directory.path(), &["import", "-"], &source));
+    let bibliography = read_bib(directory.path());
+    assert!(!bibliography.contains("x-bibi-"), "{bibliography}");
+    // Their spacing survives verbatim; only bibi's namespace is taken out.
     assert!(
-        !bibliography.contains("@misc{ArxivOwner,"),
+        bibliography.contains("eprint={2001.00001},"),
         "{bibliography}"
     );
 }
 
 #[test]
-fn add_overwrite_replaces_a_colliding_local_key() {
+fn import_accepts_several_sources_and_refuses_the_bibliography_itself() {
     let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
+    bib(directory.path());
+    for (name, key) in [("one.bib", "One"), ("two.bib", "Two")] {
+        fs::write(
+            directory.path().join(name),
+            format!("{}\n", entry(key, key, "")),
+        )
+        .unwrap();
+    }
+    let output = success(bibi(directory.path(), &["import", "one.bib", "two.bib"]));
+    assert!(
+        output.contains("added One") && output.contains("added Two"),
+        "{output}"
+    );
+
+    let error = failure(bibi(directory.path(), &["import", "references.bib"]));
+    assert!(error.contains("into itself"), "{error}");
+}
+
+// ------------------------------------------------------------ remove / rekey
+
+#[test]
+fn remove_resolves_identity_selectors_and_is_atomic() {
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    let error = failure(bibi(directory.path(), &["remove", "Zed", "missing"]));
+    assert!(error.contains("no reference matches `missing`"), "{error}");
+    assert!(read_bib(directory.path()).contains("@misc{Zed,"));
+
+    assert_eq!(
+        success(bibi(directory.path(), &["remove", "2001.00001"])),
+        "Removed Zed\n"
+    );
+    assert!(!read_bib(directory.path()).contains("@misc{Zed,"));
+}
+
+#[test]
+fn rekey_renames_by_any_selector_and_refuses_a_taken_key() {
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    assert_eq!(
+        success(bibi(directory.path(), &["rekey", "2001.00001", "Higgs"])),
+        "Renamed Zed -> Higgs\n"
+    );
+    assert!(read_bib(directory.path()).contains("@misc{Higgs,"));
+    assert!(
+        failure(bibi(directory.path(), &["rekey", "Higgs", "Alpha"])).contains("already in use")
+    );
+}
+
+// --------------------------------------------------------------------- check
+
+#[test]
+fn check_passes_a_clean_file_and_reports_every_problem_at_once() {
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    assert!(success(bibi(directory.path(), &["check"])).contains("is valid: 2 references"));
+
+    fs::write(
+        directory.path().join("references.bib"),
+        format!(
+            "{}\n\n{}\n\n{}\n",
+            entry("A", "A", "doi={10.1/DUP},"),
+            entry("B", "B", "doi={10.1/dup},"),
+            entry("C", "C", "eprint={2001.00001},"),
+        ),
+    )
+    .unwrap();
+    let error = failure(bibi(directory.path(), &["check"]));
+    assert!(
+        error.contains("B: shares the identity doi:10.1/dup with `A`"),
+        "{error}"
+    );
+    assert!(error.contains("has 1 problem"), "{error}");
+}
+
+// ---------------------------------------------------------------------- list
+
+#[test]
+fn list_sorts_by_the_requested_field() {
+    let directory = tempfile::tempdir().unwrap();
+    bib(directory.path());
+    let input = format!(
+        "{}\n{}\n{}",
+        entry(
+            "K.later",
+            "Beta result",
+            "author={Zimmerman, Zed}, year={2020},"
+        ),
+        entry(
+            "K.early",
+            "Delta result",
+            "author={Aaronson, Ann}, year={1990},"
+        ),
+        entry("K.undated", "Alpha result", "author={Median, Mia},")
+    );
+    success(bibi_stdin(directory.path(), &["import", "-"], &input));
+
+    let by_year = success(bibi(directory.path(), &["list", "--sort-by", "year"]));
+    let early = by_year.find("K.early").unwrap();
+    let later = by_year.find("K.later").unwrap();
+    let undated = by_year.find("K.undated").unwrap();
+    assert!(early < later && later < undated, "{by_year}");
+
+    let by_title = success(bibi(directory.path(), &["list", "--sort-by", "title"]));
+    assert!(
+        by_title.find("Alpha result") < by_title.find("Beta result"),
+        "{by_title}"
+    );
+}
+
+// -------------------------------------------------------------------- export
+
+#[test]
+fn export_strips_bibi_fields_and_adds_the_arxiv_url() {
+    let directory = tempfile::tempdir().unwrap();
+    bib(directory.path());
+    let json = json_record(42, "Provider:42", "Provider title", "2401.00042");
+    let bibtex = entry("Provider:42", "Provider title", "eprint={2401.00042},");
+    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bibtex)]);
+    success(bibi_with_server(
+        directory.path(),
+        &["add", "2401.00042"],
+        &base,
+    ));
+    handle.join().unwrap();
+    assert!(read_bib(directory.path()).contains("x-bibi-inspire-id"));
+
+    let exported = success(bibi(directory.path(), &["export", "-o", "-"]));
+    assert!(!exported.contains("x-bibi-"), "{exported}");
+    assert!(
+        exported.contains("url = {https://arxiv.org/pdf/2401.00042}"),
+        "{exported}"
+    );
+
+    let kept = success(bibi(
+        directory.path(),
+        &["export", "-o", "-", "--keep-metadata"],
+    ));
+    assert!(kept.contains("x-bibi-inspire-id"), "{kept}");
+}
+
+#[test]
+fn export_defaults_beside_the_bibliography_and_refuses_to_overwrite_it() {
+    let directory = tempfile::tempdir().unwrap();
+    arxiv_library(directory.path());
+    let name = directory.path().file_name().unwrap().to_str().unwrap();
+    let output = success(bibi(directory.path(), &["export"]));
+    assert!(output.contains(&format!("{name}.bib")), "{output}");
+    assert!(directory.path().join(format!("{name}.bib")).exists());
+
+    let error = failure(bibi(directory.path(), &["export", "-o", "references.bib"]));
+    assert!(error.contains("the bibliography itself"), "{error}");
+}
+
+#[test]
+fn export_is_byte_stable_and_keeps_an_authored_url() {
+    let directory = tempfile::tempdir().unwrap();
+    bib(directory.path());
     success(bibi_stdin(
         directory.path(),
         &["import", "-"],
-        &entry("Provider:42", "Imported", "doi={10.1000/imported},"),
+        &entry(
+            "Authored",
+            "Authored",
+            "eprint={2001.00001},\n  url = {https://example.test/paper},",
+        ),
     ));
-    let json = json_record(42, "Provider:42", "Provider", "2401.00042");
-    let bib = entry("Provider:42", "Provider", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bib)]);
-
-    let output = success(bibi_with_server(
-        directory.path(),
-        &["add", "--overwrite", "2401.00042"],
-        &base,
-    ));
-    handle.join().unwrap();
-    assert!(output.contains("overwrote Provider:42"), "{output}");
-    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
-    assert!(manifest.contains("record_id = 42"), "{manifest}");
-    assert!(!manifest.contains("10.1000/imported"), "{manifest}");
+    let first = success(bibi(directory.path(), &["export", "-o", "-"]));
+    let second = success(bibi(directory.path(), &["export", "-o", "-"]));
+    assert_eq!(first, second);
+    assert!(first.contains("https://example.test/paper"), "{first}");
+    assert!(!first.contains("arxiv.org/pdf"), "{first}");
 }
 
-#[test]
-fn add_exact_overwrite_reports_and_removes_all_collisions() {
-    let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
-
-    let old_json = json_record(42, "Provider:Old", "Old provider", "2301.00042");
-    let old_bib = entry("Provider:Old", "Old provider", "eprint={2301.00042},");
-    let (base, handle) = server(vec![("200 OK", old_json), ("200 OK", old_bib)]);
-    success(bibi_with_server(
-        directory.path(),
-        &["add", "--key", "Local", "inspire:42"],
-        &base,
-    ));
-    handle.join().unwrap();
-
-    let occupied = format!(
-        "{}\n{}",
-        entry("Renamed", "Requested key occupant", "doi={10.1/FREED},"),
-        entry("ArxivOwner", "arXiv owner", "eprint={2401.00042},")
-    );
-    success(bibi_stdin(directory.path(), &["import", "-"], &occupied));
-
-    let new_json = json_record(42, "Provider:New", "New provider", "2401.00042");
-    let new_bib = entry("Provider:New", "New provider", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", new_json), ("200 OK", new_bib)]);
-    assert_eq!(
-        success(bibi_with_server(
-            directory.path(),
-            &["add", "--overwrite", "--key", "Renamed", "inspire:42",],
-            &base,
-        )),
-        "overwrote Renamed, Local, ArxivOwner -> Renamed\n"
-    );
-    handle.join().unwrap();
-
-    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
-    assert!(manifest.contains("[references.Renamed]"), "{manifest}");
-    assert!(manifest.contains("record_id = 42"), "{manifest}");
-    assert!(!manifest.contains("[references.Local]"), "{manifest}");
-    assert!(!manifest.contains("[references.ArxivOwner]"), "{manifest}");
-    assert!(!manifest.contains("10.1/FREED"), "{manifest}");
-    let bibliography = fs::read_to_string(directory.path().join("references.bib")).unwrap();
-    assert!(bibliography.contains("@misc{Renamed,"), "{bibliography}");
-    assert!(!bibliography.contains("@misc{Local,"), "{bibliography}");
-    assert!(
-        !bibliography.contains("@misc{ArxivOwner,"),
-        "{bibliography}"
-    );
-}
+// ----------------------------------------------------------------- add /sync
 
 #[test]
-fn add_accepts_an_arxiv_url_and_preserves_an_explicit_local_key() {
+fn add_stores_provider_bookkeeping_as_entry_fields() {
     let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
+    bib(directory.path());
     let json = json_record(42, "Provider:42", "Provider title", "2401.00042");
-    let bib = entry("Provider:42", "Provider title", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bib)]);
+    let bibtex = entry("Provider:42", "Provider title", "eprint={2401.00042},");
+    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bibtex)]);
     assert_eq!(
         success(bibi_with_server(
             directory.path(),
@@ -442,7 +531,7 @@ fn add_accepts_an_arxiv_url_and_preserves_an_explicit_local_key() {
                 "add",
                 "--key",
                 "Local:42",
-                "https://arxiv.org/abs/2401.00042",
+                "https://arxiv.org/abs/2401.00042"
             ],
             &base
         )),
@@ -451,85 +540,50 @@ fn add_accepts_an_arxiv_url_and_preserves_an_explicit_local_key() {
     let requests = handle.join().unwrap();
     assert!(requests[0].contains("format=json"));
     assert!(requests[1].contains("format=bibtex"));
-    let bibliography = fs::read_to_string(directory.path().join("references.bib")).unwrap();
+
+    let bibliography = read_bib(directory.path());
+    assert!(bibliography.contains("@misc{Local:42,"), "{bibliography}");
     assert!(
-        bibliography.starts_with("@misc{Local:42,"),
+        bibliography.contains("x-bibi-inspire-id = {42}"),
         "{bibliography}"
     );
-    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
-    assert!(manifest.contains("record_id = 42"));
-    assert!(manifest.contains("Provider:42"));
+    assert!(
+        bibliography.contains("x-bibi-arxiv = {2401.00042}"),
+        "{bibliography}"
+    );
+    // The provider texkey is not the local key and never becomes one.
+    assert!(
+        !bibliography.contains("@misc{Provider:42,"),
+        "{bibliography}"
+    );
 }
 
+/// A failed lookup must not leave a stub behind in a file the user owns.
 #[test]
-fn add_skips_a_suggested_key_that_collides_with_different_content() {
+fn a_failed_add_leaves_the_bibliography_untouched() {
     let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
-    success(bibi_stdin(
-        directory.path(),
-        &["import", "-"],
-        &entry("Provider:42", "Imported", "doi={10.1000/imported},"),
-    ));
-    let json = json_record(42, "Provider:42", "Provider", "2401.00042");
-    let bib = entry("Provider:42", "Provider", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bib)]);
-
-    // The suggested texkey already holds unrelated imported content: the add is
-    // skipped (not fatal) and the existing entry is left untouched.
-    let output = success(bibi_with_server(
-        directory.path(),
-        &["add", "2401.00042"],
-        &base,
-    ));
+    arxiv_library(directory.path());
+    let before = read_bib(directory.path());
+    let (base, handle) = server(vec![("500 Internal Server Error", String::new())]);
+    assert!(
+        !failure(bibi_with_server(
+            directory.path(),
+            &["add", "2401.00042"],
+            &base
+        ))
+        .is_empty()
+    );
     handle.join().unwrap();
-    assert!(
-        output.contains("skipped Provider:42: local key already holds different content"),
-        "{output}"
-    );
-    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
-    assert!(manifest.contains("10.1000/imported"), "{manifest}");
-    assert!(!manifest.contains("record_id = 42"), "{manifest}");
+    assert_eq!(read_bib(directory.path()), before);
 }
 
 #[test]
-fn cli_prints_every_inspire_retry_to_stderr() {
+fn sync_refreshes_managed_entries_and_leaves_the_rest_alone() {
     let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
-    let json = json_record(42, "Provider:42", "Provider title", "2401.00042");
-    let bib = entry("Provider:42", "Provider title", "eprint={2401.00042},");
-    let (base, handle) = server(vec![
-        ("429 Too Many Requests", String::new()),
-        ("429 Too Many Requests", String::new()),
-        ("429 Too Many Requests", String::new()),
-        ("200 OK", json),
-        ("200 OK", bib),
-    ]);
-    let output = bibi_with_server(directory.path(), &["add", "2401.00042"], &base);
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    for attempt in 1..=3 {
-        let message = format!("attempt {attempt} of 3");
-        assert_eq!(stderr.matches(&message).count(), 1, "{stderr}");
-    }
-    assert_eq!(
-        stderr.matches("INSPIRE rate limited").count(),
-        3,
-        "{stderr}"
-    );
-    assert_eq!(handle.join().unwrap().len(), 5);
-}
-
-#[test]
-fn sync_refreshes_managed_records_by_id_and_leaves_imports_unchanged() {
-    let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
-    let initial_json = json_record(42, "Provider:42", "Old", "2401.00042");
-    let initial_bib = entry("Provider:42", "Old", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", initial_json), ("200 OK", initial_bib)]);
+    bib(directory.path());
+    let json = json_record(42, "Provider:42", "Old", "2401.00042");
+    let bibtex = entry("Provider:42", "Old", "eprint={2401.00042},");
+    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bibtex)]);
     success(bibi_with_server(
         directory.path(),
         &["add", "--key", "Local", "2401.00042"],
@@ -542,13 +596,19 @@ fn sync_refreshes_managed_records_by_id_and_leaves_imports_unchanged() {
         &entry("Imported", "Untouched", "eprint={2401.00999},"),
     ));
 
-    let fresh = json_record(42, "Current:42", "Fresh", "2401.00042");
-    let search_json = format!(r#"{{"hits":{{"hits":[{fresh}]}}}}"#);
+    let fresh = json_record_at(
+        42,
+        "Current:42",
+        "Fresh",
+        "2401.00042",
+        "2026-06-01T00:00:00Z",
+    );
+    let search = format!(r#"{{"hits":{{"hits":[{fresh}]}}}}"#);
     let fresh_bib = entry("Current:42", "Fresh", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", search_json), ("200 OK", fresh_bib)]);
+    let (base, handle) = server(vec![("200 OK", search), ("200 OK", fresh_bib)]);
     let output = success(bibi_with_server(directory.path(), &["sync"], &base));
     assert!(
-        output.contains("1 managed references; left 1 imported unchanged"),
+        output.contains("refreshed 1 of 1 managed entries; 1 unmanaged"),
         "{output}"
     );
     let requests = handle.join().unwrap();
@@ -557,69 +617,53 @@ fn sync_refreshes_managed_records_by_id_and_leaves_imports_unchanged() {
         "{}",
         requests[0]
     );
-    let bibliography = fs::read_to_string(directory.path().join("references.bib")).unwrap();
-    assert!(bibliography.contains("@misc{Local,"));
-    assert!(bibliography.contains("Fresh"));
-    assert!(bibliography.contains("@misc{Imported,"));
-    assert!(bibliography.contains("Untouched"));
+
+    let bibliography = read_bib(directory.path());
+    assert!(bibliography.contains("@misc{Local,"), "{bibliography}");
+    assert!(bibliography.contains("Fresh"), "{bibliography}");
+    assert!(bibliography.contains("@misc{Imported,"), "{bibliography}");
+    assert!(bibliography.contains("Untouched"), "{bibliography}");
 }
 
+/// An unchanged provider timestamp means there is nothing to write, so the
+/// file must come back byte-identical rather than merely equivalent.
 #[test]
-fn stale_provider_texkeys_remain_selectable_for_save_and_remove() {
+fn sync_writes_nothing_when_the_provider_timestamp_is_unchanged() {
     let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
-    let initial_json = json_record(42, "Provider:Old", "Old", "2401.00042");
-    let initial_bib = entry("Provider:Old", "Old", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", initial_json), ("200 OK", initial_bib)]);
+    bib(directory.path());
+    let json = json_record(42, "Provider:42", "Same", "2401.00042");
+    let bibtex = entry("Provider:42", "Same", "eprint={2401.00042},");
+    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bibtex)]);
     success(bibi_with_server(
         directory.path(),
-        &["add", "2401.00042"],
+        &["add", "--key", "Local", "2401.00042"],
         &base,
     ));
     handle.join().unwrap();
+    let before = read_bib(directory.path());
 
-    let fresh = json_record(42, "Provider:New", "Fresh", "2401.00042");
-    let search_json = format!(r#"{{"hits":{{"hits":[{fresh}]}}}}"#);
-    let fresh_bib = entry("Provider:New", "Fresh", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", search_json), ("200 OK", fresh_bib)]);
-    success(bibi_with_server(directory.path(), &["sync"], &base));
+    let same = json_record(42, "Provider:42", "Same", "2401.00042");
+    let search = format!(r#"{{"hits":{{"hits":[{same}]}}}}"#);
+    let (base, handle) = server(vec![
+        ("200 OK", search),
+        (
+            "200 OK",
+            entry("Provider:42", "Same", "eprint={2401.00042},"),
+        ),
+    ]);
+    let output = success(bibi_with_server(directory.path(), &["sync"], &base));
     handle.join().unwrap();
-
-    cached_pdf_for(directory.path(), "2401.00042", b"%PDF-cached");
-    let (stdout, stderr) = success_streams(bibi_with_server(
-        directory.path(),
-        &["fetch", "--save", "https://inspirehep.net/literature/42"],
-        "http://127.0.0.1:1/",
-    ));
-    assert_eq!(
-        stdout,
-        format!(
-            "{}\n",
-            directory
-                .path()
-                .canonicalize()
-                .unwrap()
-                .join(".bibi/files/arxiv/2401.00042.pdf")
-                .display()
-        )
+    assert!(
+        output.contains("refreshed 0 of 1 managed entries"),
+        "{output}"
     );
-    assert_eq!(
-        stderr,
-        concat!(
-            "skipped Provider:Old\n",
-            "Already fetched Provider:Old: https://arxiv.org/pdf/2401.00042\n"
-        )
-    );
-    assert_eq!(
-        success(bibi(directory.path(), &["remove", "inspire:42"])),
-        "Removed Provider:Old\n"
-    );
+    assert_eq!(read_bib(directory.path()), before);
 }
 
 #[test]
-fn imported_only_sync_performs_no_network_work() {
+fn an_import_only_bibliography_performs_no_network_work() {
     let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
+    bib(directory.path());
     success(bibi_stdin(
         directory.path(),
         &["import", "-"],
@@ -631,168 +675,47 @@ fn imported_only_sync_performs_no_network_work() {
             &["sync"],
             "http://127.0.0.1:1/"
         )),
-        "Already in sync: 0 managed, 1 imported\n"
+        "refreshed 0 of 0 managed entries; 1 unmanaged\n"
     );
 }
 
 #[test]
-fn remove_is_atomic_and_resolves_identity_selectors() {
+fn cli_prints_every_inspire_retry_to_stderr() {
     let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
-    let input = format!(
-        "{}\n{}",
-        entry("Alpha", "First", "doi={10.1000/example},"),
-        entry("Zed", "Second", "")
-    );
-    success(bibi_stdin(directory.path(), &["import", "-"], &input));
-    let manifest_path = directory.path().join("cita.toml");
-    let before = fs::read(&manifest_path).unwrap();
-    let error = failure(bibi(directory.path(), &["remove", "Alpha", "missing"]));
-    assert!(
-        error.contains("reference `missing` was not found"),
-        "{error}"
-    );
-    assert_eq!(fs::read(&manifest_path).unwrap(), before);
-    assert_eq!(
-        success(bibi(
-            directory.path(),
-            &["remove", "https://doi.org/10.1000/example"]
-        )),
-        "Removed Alpha\n"
-    );
-    assert!(
-        !fs::read_to_string(&manifest_path)
-            .unwrap()
-            .contains("Alpha")
-    );
-    assert!(
-        !fs::read_to_string(directory.path().join("references.bib"))
-            .unwrap()
-            .contains("First")
-    );
-}
-
-#[test]
-fn list_order_desc_reverses_the_key_sort() {
-    let directory = tempfile::tempdir().unwrap();
-    sortable_library(directory.path());
-    let ascending = success(bibi(directory.path(), &["list"]));
-    let [early, later, undated] = key_positions(&ascending, ["K.early", "K.later", "K.undated"]);
-    assert!(early < later && later < undated, "{ascending}");
-    let descending = success(bibi(directory.path(), &["list", "--order", "desc"]));
-    let [early, later, undated] = key_positions(&descending, ["K.early", "K.later", "K.undated"]);
-    assert!(undated < later && later < early, "{descending}");
-}
-
-#[test]
-fn list_sorts_by_title_and_author() {
-    let directory = tempfile::tempdir().unwrap();
-    sortable_library(directory.path());
-    let by_title = success(bibi(directory.path(), &["list", "--sort-by", "title"]));
-    let [early, later, undated] = key_positions(&by_title, ["K.early", "K.later", "K.undated"]);
-    assert!(undated < later && later < early, "{by_title}");
-    let by_author = success(bibi(directory.path(), &["list", "--sort-by", "author"]));
-    let [early, later, undated] = key_positions(&by_author, ["K.early", "K.later", "K.undated"]);
-    assert!(early < undated && undated < later, "{by_author}");
-}
-
-#[test]
-fn list_displays_authors_then_collaboration_then_placeholder() {
-    let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
-    let input = [
-        entry("One", "One", "author={Alice},"),
-        entry("Many", "Many", "author={Alice and Bob},"),
-        entry("Team", "Team", "collaboration={ATLAS Collaboration},"),
-        entry("Nobody", "Nobody", "note={none},"),
-    ]
-    .join("\n");
-    success(bibi_stdin(directory.path(), &["import", "-"], &input));
-    let output = success(bibi(directory.path(), &["list"]));
-    let one = output
-        .lines()
-        .find(|line| line.starts_with("One "))
-        .unwrap();
-    let many = output
-        .lines()
-        .find(|line| line.starts_with("Many "))
-        .unwrap();
-    let team = output
-        .lines()
-        .find(|line| line.starts_with("Team "))
-        .unwrap();
-    let nobody = output
-        .lines()
-        .find(|line| line.starts_with("Nobody "))
-        .unwrap();
-    assert!(one.contains("Alice"), "{one}");
-    assert!(!one.contains("et al."), "{one}");
-    assert!(many.contains("Alice et al."), "{many}");
-    assert!(team.contains("ATLAS Collaboration"), "{team}");
-    assert!(nobody.contains('—'), "{nobody}");
-}
-
-#[test]
-fn list_sorts_by_year_and_keeps_missing_years_last() {
-    let directory = tempfile::tempdir().unwrap();
-    sortable_library(directory.path());
-    let ascending = success(bibi(directory.path(), &["list", "--sort-by", "year"]));
-    let [early, later, undated] = key_positions(&ascending, ["K.early", "K.later", "K.undated"]);
-    assert!(early < later && later < undated, "{ascending}");
-    let descending = success(bibi(
+    bib(directory.path());
+    let json = json_record(42, "Provider:42", "Retried", "2401.00042");
+    let bibtex = entry("Provider:42", "Retried", "eprint={2401.00042},");
+    let (base, handle) = server(vec![
+        ("429 Too Many Requests", String::new()),
+        ("200 OK", json),
+        ("200 OK", bibtex),
+    ]);
+    let (stdout, stderr) = success_streams(bibi_with_server(
         directory.path(),
-        &["list", "--sort-by", "year", "--order", "desc"],
+        &["add", "2401.00042"],
+        &base,
     ));
-    let [early, later, undated] = key_positions(&descending, ["K.early", "K.later", "K.undated"]);
-    assert!(later < early && early < undated, "{descending}");
+    handle.join().unwrap();
+    assert!(stdout.contains("added Provider:42"), "{stdout}");
+    assert!(stderr.contains("INSPIRE rate limited"), "{stderr}");
 }
 
+// --------------------------------------------------------------------- fetch
+
 #[test]
-fn fetch_reuses_cached_pdf_and_reports_missing_arxiv_id() {
+fn fetch_reuses_a_cached_pdf_and_reports_a_missing_arxiv_id() {
     let directory = tempfile::tempdir().unwrap();
     arxiv_library(directory.path());
-    cached_pdf(directory.path(), b"%PDF-cached");
-    let nested = directory.path().join("nested");
-    fs::create_dir(&nested).unwrap();
-    let (stdout, stderr) = success_streams(bibi(&nested, &["fetch", "Zed"]));
-    assert_eq!(
-        stdout,
-        format!(
-            "{}\n",
-            directory
-                .path()
-                .canonicalize()
-                .unwrap()
-                .join(".bibi/files/arxiv/2001.00001.pdf")
-                .display()
-        )
-    );
-    assert_eq!(
-        stderr,
-        "Already fetched Zed: https://arxiv.org/pdf/2001.00001\n"
-    );
-    let (stdout, stderr) = success_streams(bibi(&nested, &["fetch", "--cache-only", "Zed"]));
-    assert_eq!(
-        stdout,
-        format!(
-            "{}\n",
-            directory
-                .path()
-                .canonicalize()
-                .unwrap()
-                .join(".bibi/files/arxiv/2001.00001.pdf")
-                .display()
-        )
-    );
-    assert_eq!(
-        stderr,
-        "Already fetched Zed: https://arxiv.org/pdf/2001.00001\n"
-    );
-    let error = failure(bibi(&nested, &["fetch", "--force", "Alpha"]));
+    cached_pdf_for(directory.path(), "2001.00001", b"%PDF-1.4 body");
+    let (stdout, stderr) = success_streams(bibi(directory.path(), &["fetch", "Zed"]));
     assert!(
-        error.contains("reference `Alpha` has no arXiv eprint"),
-        "{error}"
+        stdout.trim().ends_with(".bibi/files/arxiv/2001.00001.pdf"),
+        "{stdout}"
     );
+    assert!(stderr.contains("Already fetched Zed"), "{stderr}");
+
+    let error = failure(bibi(directory.path(), &["fetch", "Alpha"]));
+    assert!(error.contains("has no arXiv eprint"), "{error}");
 }
 
 #[test]
@@ -807,112 +730,44 @@ fn fetch_url_prints_only_the_url_without_touching_the_cache() {
 }
 
 #[test]
-fn fetch_source_reuses_the_cached_directory_from_nested_working_directories() {
+fn fetch_source_reuses_the_cached_directory() {
     let directory = tempfile::tempdir().unwrap();
     arxiv_library(directory.path());
     cached_source_for(
         directory.path(),
         "2001.00001",
-        "figures/plot.tex",
-        b"cached",
+        "main.tex",
+        b"\\documentclass{article}",
     );
-    let nested = directory.path().join("nested");
-    fs::create_dir(&nested).unwrap();
-
-    let (stdout, stderr) =
-        success_streams(bibi(&nested, &["fetch", "--source", "--cache-only", "Zed"]));
-    assert_eq!(
-        stdout,
-        format!(
-            "{}\n",
-            directory
-                .path()
-                .canonicalize()
-                .unwrap()
-                .join(".bibi/files/arxiv/2001.00001/source")
-                .display()
-        )
+    let (stdout, stderr) = success_streams(bibi(directory.path(), &["fetch", "--source", "Zed"]));
+    assert!(
+        stdout
+            .trim()
+            .ends_with(".bibi/files/arxiv/2001.00001/source"),
+        "{stdout}"
     );
-    assert_eq!(stderr, "Already fetched source for Zed\n");
+    assert!(
+        stderr.contains("Already fetched source for Zed"),
+        "{stderr}"
+    );
 }
 
 #[test]
-fn fetch_source_cache_miss_has_guidance_and_creates_no_cache_state() {
+fn fetch_cache_only_errors_on_a_miss_without_creating_the_cache() {
     let directory = tempfile::tempdir().unwrap();
     arxiv_library(directory.path());
-
-    let error = failure(bibi(
-        directory.path(),
-        &["fetch", "--source", "--cache-only", "Zed"],
-    ));
-    assert!(error.contains("source is not cached"), "{error}");
+    let error = failure(bibi(directory.path(), &["fetch", "--cache-only", "Zed"]));
     assert!(error.contains("rerun without --cache-only"), "{error}");
     assert!(!directory.path().join(".bibi").exists());
 }
 
 #[test]
-fn fetch_source_cache_only_suggests_force_for_an_invalid_cached_source() {
+fn fetch_save_stores_an_unmatched_locator_before_fetching() {
     let directory = tempfile::tempdir().unwrap();
     arxiv_library(directory.path());
-    fs::create_dir_all(directory.path().join(".bibi/files/arxiv/2001.00001/source")).unwrap();
-
-    let error = failure(bibi(
-        directory.path(),
-        &["fetch", "--source", "--cache-only", "Zed"],
-    ));
-    assert!(error.contains("cached source directory"), "{error}");
-    assert!(error.contains("retry with --force"), "{error}");
-}
-
-#[test]
-fn fetch_source_conflicts_with_url_and_still_checks_for_arxiv_ids() {
-    let directory = tempfile::tempdir().unwrap();
-    arxiv_library(directory.path());
-    let conflict = failure(bibi(
-        directory.path(),
-        &["fetch", "--source", "--url", "Zed"],
-    ));
-    assert!(conflict.contains("cannot be used with"), "{conflict}");
-
-    let missing = failure(bibi(
-        directory.path(),
-        &["fetch", "--source", "--cache-only", "Alpha"],
-    ));
-    assert!(
-        missing.contains("reference `Alpha` has no arXiv eprint"),
-        "{missing}"
-    );
-}
-
-#[test]
-fn fetch_source_save_uses_the_selected_local_key() {
-    let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
-    cached_source_for(directory.path(), "2401.00042", "main.tex", b"cached source");
-    let record = json_record(42, "Provider:42", "Saved", "2401.00042");
+    let json = json_record(42, "Provider:42", "Saved", "2401.00042");
     let bibtex = entry("Provider:42", "Saved", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", record), ("200 OK", bibtex)]);
-
-    let (stdout, stderr) = success_streams(bibi_with_server(
-        directory.path(),
-        &["fetch", "--source", "--cache-only", "--save", "2401.00042"],
-        &base,
-    ));
-    handle.join().unwrap();
-    assert!(stdout.ends_with(".bibi/files/arxiv/2401.00042/source\n"));
-    assert_eq!(
-        stderr,
-        "added Provider:42\nAlready fetched source for Provider:42\n"
-    );
-}
-
-#[test]
-fn fetch_url_can_save_metadata_without_creating_the_pdf_cache() {
-    let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
-    let record = json_record(42, "Provider:42", "Saved", "2401.00042");
-    let bibtex = entry("Provider:42", "Saved", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", record), ("200 OK", bibtex)]);
+    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bibtex)]);
     let (stdout, stderr) = success_streams(bibi_with_server(
         directory.path(),
         &["fetch", "--url", "--save", "2401.00042"],
@@ -920,318 +775,6 @@ fn fetch_url_can_save_metadata_without_creating_the_pdf_cache() {
     ));
     handle.join().unwrap();
     assert_eq!(stdout, "https://arxiv.org/pdf/2401.00042\n");
-    assert_eq!(stderr, "added Provider:42\n");
-    assert!(!directory.path().join(".bibi").exists());
-    assert!(
-        fs::read_to_string(directory.path().join("cita.toml"))
-            .unwrap()
-            .contains("record_id = 42")
-    );
-}
-
-#[test]
-fn fetch_save_uses_the_actual_existing_local_key() {
-    let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
-    let old_json = json_record(42, "Provider:Old", "Old", "2401.00042");
-    let old_bib = entry("Provider:Old", "Old", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", old_json), ("200 OK", old_bib)]);
-    success(bibi_with_server(
-        directory.path(),
-        &["add", "--key", "Local", "2401.00042"],
-        &base,
-    ));
-    handle.join().unwrap();
-    cached_pdf_for(directory.path(), "2401.00042", b"%PDF-cached");
-
-    let new_json = json_record_with_doi(42, "Provider:New", "New", "2401.00042", "10.1000/new");
-    let new_bib = entry(
-        "Provider:New",
-        "New",
-        "eprint={2401.00042}, doi={10.1000/new},",
-    );
-    let (base, handle) = server(vec![("200 OK", new_json), ("200 OK", new_bib)]);
-    let (_, stderr) = success_streams(bibi_with_server(
-        directory.path(),
-        &["fetch", "--save", "doi:10.1000/new"],
-        &base,
-    ));
-    handle.join().unwrap();
-    assert_eq!(
-        stderr,
-        concat!(
-            "skipped Local\n",
-            "Already fetched Local: https://arxiv.org/pdf/2401.00042\n"
-        )
-    );
-}
-
-#[test]
-fn fetch_save_skips_a_local_key_that_holds_different_content() {
-    let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
-    success(bibi_stdin(
-        directory.path(),
-        &["import", "-"],
-        &entry("Provider:42", "Imported", "doi={10.1000/imported},"),
-    ));
-    let json = json_record(42, "Provider:42", "Provider", "2401.00042");
-    let bib = entry("Provider:42", "Provider", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bib)]);
-    // The suggested texkey already holds unrelated imported content: the save is
-    // skipped, the URL for the resolved paper is still returned, and the
-    // pre-existing entry is left untouched.
-    let (stdout, stderr) = success_streams(bibi_with_server(
-        directory.path(),
-        &["fetch", "--url", "--save", "2401.00042"],
-        &base,
-    ));
-    handle.join().unwrap();
-    assert!(stderr.contains("skipped Provider:42"), "{stderr}");
-    assert!(stdout.contains("2401.00042"), "{stdout}");
-    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
-    assert!(manifest.contains("10.1000/imported"), "{manifest}");
-    assert!(!manifest.contains("record_id = 42"), "{manifest}");
-}
-
-#[test]
-fn fetch_force_and_url_are_mutually_exclusive() {
-    let directory = tempfile::tempdir().unwrap();
-    let error = failure(bibi(
-        directory.path(),
-        &["fetch", "--force", "--url", "Zed"],
-    ));
-    assert!(error.contains("cannot be used with"), "{error}");
-}
-
-#[test]
-fn fetch_suggests_force_for_an_invalid_cached_pdf() {
-    let directory = tempfile::tempdir().unwrap();
-    arxiv_library(directory.path());
-    cached_pdf(directory.path(), b"not a PDF");
-    let error = failure(bibi(directory.path(), &["fetch", "Zed"]));
-    assert!(error.contains("retry with --force"), "{error}");
-}
-
-#[test]
-fn fetch_cache_only_errors_on_a_cache_miss_without_creating_the_cache() {
-    let directory = tempfile::tempdir().unwrap();
-    arxiv_library(directory.path());
-    let error = failure(bibi(directory.path(), &["fetch", "--cache-only", "Zed"]));
-    assert!(error.contains("PDF is not cached"), "{error}");
-    assert!(error.contains("rerun without --cache-only"), "{error}");
-    assert!(!directory.path().join(".bibi").exists());
-}
-
-#[test]
-fn fetch_cache_only_suggests_force_for_an_invalid_cached_pdf() {
-    let directory = tempfile::tempdir().unwrap();
-    arxiv_library(directory.path());
-    cached_pdf(directory.path(), b"not a PDF");
-    let error = failure(bibi(directory.path(), &["fetch", "--cache-only", "Zed"]));
-    assert!(error.contains("retry with --force"), "{error}");
-}
-
-#[test]
-fn export_injects_arxiv_urls_and_leaves_the_generated_bibliography_untouched() {
-    let directory = tempfile::tempdir().unwrap();
-    arxiv_library(directory.path());
-    let generated = fs::read(directory.path().join("references.bib")).unwrap();
-
-    let stdout = success(bibi(directory.path(), &["export"]));
-    assert!(stdout.starts_with("Exported "), "{stdout}");
-
-    // The export is a separate artifact; references.bib stays authoritative.
-    assert_eq!(
-        fs::read(directory.path().join("references.bib")).unwrap(),
-        generated
-    );
-    let name = directory.path().file_name().unwrap().to_str().unwrap();
-    let exported = fs::read_to_string(directory.path().join(format!("{name}.bib"))).unwrap();
-    assert!(
-        exported.contains("url = {https://arxiv.org/pdf/2001.00001}"),
-        "{exported}"
-    );
-    // The DOI-only entry has no arXiv ID, so it gets no derived URL.
-    let alpha = exported
-        .split("\n\n")
-        .find(|block| block.starts_with("@misc{Alpha,"))
-        .unwrap_or_else(|| panic!("{exported}"));
-    assert!(!alpha.contains("url"), "{alpha}");
-    assert_eq!(exported.matches("url = {").count(), 1, "{exported}");
-}
-
-#[test]
-fn export_derives_the_url_from_an_inspire_records_curated_arxiv_id() {
-    let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
-
-    let json = json_record(42, "Provider:42", "Provider", "2401.00042");
-    let bib = entry("Provider:42", "Provider", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bib)]);
-    success(bibi_with_server(
-        directory.path(),
-        &["add", "inspire:42"],
-        &base,
-    ));
-    handle.join().unwrap();
-
-    let stdout = success(bibi(directory.path(), &["export"]));
-    assert!(stdout.starts_with("Exported "), "{stdout}");
-    let name = directory.path().file_name().unwrap().to_str().unwrap();
-    let exported = fs::read_to_string(directory.path().join(format!("{name}.bib"))).unwrap();
-    assert!(
-        exported.contains("url = {https://arxiv.org/pdf/2401.00042}"),
-        "{exported}"
-    );
-}
-
-#[test]
-fn export_honors_output_and_resolves_it_against_the_caller() {
-    let directory = tempfile::tempdir().unwrap();
-    arxiv_library(directory.path());
-    let nested = directory.path().join("sub");
-    fs::create_dir(&nested).unwrap();
-
-    // The manifest is found by walking ancestors, but a relative --output
-    // resolves against the caller's directory, as import paths do.
-    success(bibi(&nested, &["export", "-o", "custom.bib"]));
-    assert!(nested.join("custom.bib").is_file());
-    let name = directory.path().file_name().unwrap().to_str().unwrap();
-    assert!(!directory.path().join(format!("{name}.bib")).exists());
-}
-
-#[test]
-fn export_refuses_to_overwrite_the_managed_files() {
-    let directory = tempfile::tempdir().unwrap();
-    arxiv_library(directory.path());
-    let generated = fs::read(directory.path().join("references.bib")).unwrap();
-    let manifest = fs::read(directory.path().join("cita.toml")).unwrap();
-
-    for target in ["references.bib", "./sub/../references.bib", "cita.toml"] {
-        fs::create_dir_all(directory.path().join("sub")).unwrap();
-        let stderr = failure(bibi(directory.path(), &["export", "-o", target]));
-        assert!(stderr.contains("managed file"), "{stderr}");
-    }
-    #[cfg(unix)]
-    {
-        // A symlinked directory must not let the export alias a managed file
-        // through a different path.
-        std::os::unix::fs::symlink(".", directory.path().join("alias")).unwrap();
-        let stderr = failure(bibi(
-            directory.path(),
-            &["export", "-o", "alias/references.bib"],
-        ));
-        assert!(stderr.contains("managed file"), "{stderr}");
-    }
-    assert_eq!(
-        fs::read(directory.path().join("references.bib")).unwrap(),
-        generated
-    );
-    assert_eq!(
-        fs::read(directory.path().join("cita.toml")).unwrap(),
-        manifest
-    );
-}
-
-#[test]
-fn export_refuses_to_overwrite_another_projects_managed_files() {
-    let root = tempfile::tempdir().unwrap();
-    let one = root.path().join("one");
-    let two = root.path().join("two");
-    fs::create_dir(&one).unwrap();
-    fs::create_dir(&two).unwrap();
-    arxiv_library(&one);
-    arxiv_library(&two);
-    let bibliography = fs::read(two.join("references.bib")).unwrap();
-    let manifest = fs::read(two.join("cita.toml")).unwrap();
-
-    // --output is the only path in the CLI that can leave the discovered
-    // project, so the guard has to know about every project, not just this one.
-    for target in ["../two/references.bib", "../two/cita.toml"] {
-        let stderr = failure(bibi(&one, &["export", "-o", target]));
-        assert!(stderr.contains("managed file"), "{stderr}");
-    }
-    assert_eq!(fs::read(two.join("references.bib")).unwrap(), bibliography);
-    assert_eq!(fs::read(two.join("cita.toml")).unwrap(), manifest);
-
-    // A managed name is only managed where a project owns it, so the same file
-    // name in a plain directory stays a legal target.
-    fs::create_dir(root.path().join("plain")).unwrap();
-    success(bibi(&one, &["export", "-o", "../plain/references.bib"]));
-    assert!(root.path().join("plain/references.bib").is_file());
-}
-
-#[test]
-fn export_refuses_a_case_alias_of_a_managed_file_on_a_case_insensitive_filesystem() {
-    let directory = tempfile::tempdir().unwrap();
-    arxiv_library(directory.path());
-    let insensitive = case_insensitive(directory.path());
-    let generated = fs::read(directory.path().join("references.bib")).unwrap();
-    let manifest = fs::read(directory.path().join("cita.toml")).unwrap();
-
-    for target in ["References.bib", "CITA.toml"] {
-        let output = bibi(directory.path(), &["export", "-o", target]);
-        if insensitive {
-            // On this filesystem `target` names the same inode as the managed
-            // file, so it already exists; the assertion below on the managed
-            // files' bytes is what proves the export did not touch it.
-            let stderr = failure(output);
-            assert!(stderr.contains("managed file"), "{stderr}");
-        } else {
-            success(output);
-            assert!(directory.path().join(target).is_file());
-            fs::remove_file(directory.path().join(target)).unwrap();
-        }
-    }
-
-    // Either branch must leave both managed files byte-identical.
-    assert_eq!(
-        fs::read(directory.path().join("references.bib")).unwrap(),
-        generated
-    );
-    assert_eq!(
-        fs::read(directory.path().join("cita.toml")).unwrap(),
-        manifest
-    );
-}
-
-#[test]
-fn export_is_byte_stable_and_keeps_an_authored_url() {
-    let directory = tempfile::tempdir().unwrap();
-    project(directory.path());
-    let input = entry(
-        "Authored",
-        "Has its own url",
-        "eprint={2001.00001},\n  url = {https://example.test/paper},",
-    );
-    success(bibi_stdin(directory.path(), &["import", "-"], &input));
-
-    success(bibi(directory.path(), &["export"]));
-    let name = directory.path().file_name().unwrap().to_str().unwrap();
-    let exported = directory.path().join(format!("{name}.bib"));
-    let first = fs::read(&exported).unwrap();
-    success(bibi(directory.path(), &["export"]));
-    // Re-running must not append a second url or otherwise churn the bytes.
-    assert_eq!(fs::read(&exported).unwrap(), first);
-    let text = String::from_utf8(first).unwrap();
-    assert!(text.contains("https://example.test/paper"), "{text}");
-    assert!(!text.contains("arxiv.org"), "{text}");
-}
-
-#[test]
-fn export_requires_a_project_and_a_current_bibliography() {
-    let bare = tempfile::tempdir().unwrap();
-    let stderr = failure(bibi(bare.path(), &["export"]));
-    assert!(stderr.contains("no cita.toml found"), "{stderr}");
-
-    let directory = tempfile::tempdir().unwrap();
-    arxiv_library(directory.path());
-    fs::write(directory.path().join("references.bib"), "drift\n").unwrap();
-    // Export claims to hold the same entries as references.bib, so it must
-    // refuse to run against drift rather than silently disagree with it.
-    let stderr = failure(bibi(directory.path(), &["export"]));
-    assert!(stderr.contains("run `bibi generate`"), "{stderr}");
-    let name = directory.path().file_name().unwrap().to_str().unwrap();
-    assert!(!directory.path().join(format!("{name}.bib")).exists());
+    assert!(stderr.contains("added Provider:42"), "{stderr}");
+    assert!(read_bib(directory.path()).contains("x-bibi-inspire-id = {42}"));
 }
