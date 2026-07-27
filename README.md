@@ -1,12 +1,14 @@
 # bibi
 
-bibi is a Git-friendly bibliography CLI. It keeps authoritative source snapshots
-in `cita.toml` and deterministically generates the tracked `references.bib`.
+bibi is a Git-friendly bibliography CLI whose source of truth is your
+`references.bib` file. Entries are authoritative BibTeX and stay exactly as you
+or your provider wrote them; bibi's own bookkeeping rides along in `x-bibi-*`
+fields on the entries, where LaTeX ignores it. There is no manifest, no
+generated artifact, and nothing to keep in step.
+
 INSPIRE is the managed metadata provider: its records retain canonical
-identifiers selected from and cross-checked against INSPIRE's exact BibTeX and
-can be refreshed by stable record ID. Generic BibTeX ingestion is available
-through `bibi import`, which preserves each standalone entry's exact source
-bytes.
+identifiers cross-checked against INSPIRE's exact BibTeX and are refreshed by
+stable record ID.
 
 Requires Rust 1.88 or newer.
 
@@ -17,12 +19,18 @@ cargo install bibi
 ## Quick start
 
 ```bash
+touch references.bib
 bibi add https://arxiv.org/abs/1207.7214 doi:10.1016/j.physletb.2012.08.020
-bibi import local-references.bib
+bibi import colleague.bib
 bibi list
 bibi sync
 bibi fetch 1207.7214
 ```
+
+bibi operates on `./references.bib` unless you point it elsewhere with
+`-p/--path` (a file or a directory) or `$BIBI_BIB`. It never searches parent
+directories, and it never creates the file for you — if you work in
+subdirectories, set `BIBI_BIB` in a `.envrc`.
 
 Supported locators are bare arXiv IDs; explicit `arxiv:`, `doi:`, or `inspire:`
 locators; and canonical `https://arxiv.org`, `https://inspirehep.net`, or
@@ -32,24 +40,30 @@ work as selectors.
 
 ## Commands
 
-- `bibi import <path|->` atomically imports all standalone entries from a file
-  or stdin.
-- `bibi add [--key K] <locator>...` resolves INSPIRE JSON and authoritative
-  BibTeX. `--key` keeps an independent local key and accepts one locator.
-- `bibi sync` refreshes only INSPIRE snapshots by stable record ID and leaves
-  imported entries byte-for-byte unchanged.
+- `bibi add [--key K] [--overwrite] <locator>...` resolves INSPIRE JSON and
+  authoritative BibTeX. `--key` keeps an independent local key and accepts one
+  locator. A failed lookup writes nothing.
+- `bibi import [--overwrite] <path|->...` folds entries from other BibTeX files
+  into yours. Sources are only ever read. Comments and directives in a source
+  are tolerated, and any `x-bibi-*` fields on incoming entries are stripped —
+  someone else's bookkeeping is not evidence about your bibliography, and
+  `bibi sync` re-establishes it from each entry's own identity.
+- `bibi sync [--dry-run] [--verbose]` reconciles with INSPIRE. Managed entries
+  refresh by record ID; entries INSPIRE recognizes but bibi does not yet track
+  are adopted, which attaches bookkeeping while leaving your wording alone.
+  Entries INSPIRE does not know are reported, not treated as failures.
 - `bibi remove <selector>...` removes a batch atomically.
+- `bibi rekey <selector> <new-key>` changes one entry's citation key, touching
+  only that token.
 - `bibi list [--sort-by key|title|author|year] [--order asc|desc]` displays
   source-neutral projections.
-- `bibi export [-o/--output <file>]` writes a derived BibTeX file for tools that
-  want a resolvable link, such as Zotero. It renders the same entries as
-  `references.bib` and adds `url = {https://arxiv.org/pdf/<id>}` to each entry
-  with an arXiv ID, leaving entries that already define a `url` untouched. The
-  default file is named for the project directory; a relative `--output` is
-  relative to the directory where bibi was invoked. The export never overwrites
-  a managed file — not this project's, and not a `cita.toml` or `references.bib`
-  belonging to any other project — and it refuses to run while `references.bib`
-  has drifted.
+- `bibi check` validates the file and reports every problem at once.
+- `bibi export [-o/--output <file>] [--keep-metadata]` writes a copy for
+  somebody else to read: `x-bibi-*` fields removed, and
+  `url = {https://arxiv.org/pdf/<id>}` added to each entry with an arXiv ID,
+  leaving authored `url` values untouched. `-o -` writes to stdout. The default
+  file is named for the bibliography's directory. The only target it refuses is
+  the bibliography itself.
 - `bibi fetch [--force | --cache-only | --url] [--source] [--open] [--save]
   <selector>` returns an absolute cached PDF path by default, the arXiv PDF URL
   with `-u/--url`, or an absolute extracted source directory with `--source`.
@@ -63,48 +77,56 @@ Successful `fetch` output is suitable for command substitution; status messages
 are written to stderr. For example, choose a specific PDF viewer on macOS with
 `open -a Skim "$(bibi fetch <selector>)"`.
 
+Git is yours to drive. bibi writes one tracked text file in the format you read,
+so `git diff` already shows what changed.
+
 ## Storage rules
 
-`cita.toml` is the sole authority. Each sorted local key contains one tagged
-source snapshot (`inspire` or `import`). Snapshots are strictly validated and
-duplicate normalized DOI, arXiv, or provider identities are rejected across all
-sources.
+`references.bib` is the sole authority. Bibliographic content is the BibTeX
+itself; bibi adds only these fields:
 
-The projected `Reference` intentionally contains only the fields Bibi needs for
+| Field | Meaning |
+|---|---|
+| `x-bibi-inspire-id` | stable INSPIRE record id; its presence is what makes an entry managed |
+| `x-bibi-inspire-updated` | provider timestamp, so a sync that learns nothing writes nothing |
+| `x-bibi-arxiv` | curated normalized arXiv id |
+| `x-bibi-doi` | curated normalized DOI |
+| `x-bibi-frozen` | never refreshed, never resolved — for entries you have corrected by hand, and for work INSPIRE will never have |
+
+Because the file is yours to edit, **a mutation rewrites only the entries it
+touches**. Your comments, `@string` directives, indentation, and entry ordering
+survive every command; new entries are appended rather than sorted in. Loading
+and writing back without changing anything reproduces the file byte for byte.
+
+Duplicate normalized DOI, arXiv, or provider identities are rejected across the
+whole file, as are missing titles and unsafe citation keys.
+
+The projected `Reference` intentionally contains only the fields bibi needs for
 selection and display: title, authors, collaborations, year, and DOI/arXiv/
-provider identifiers. The authoritative BibTeX remains available in the source
-snapshot for all other bibliographic data.
-
-`references.bib` behaves like a lockfile: entries are sorted by local key,
-separated by one blank line, and end with one newline. Preserved field bytes are
-unchanged; only the citation-key token may be re-keyed. Every normal command
-checks its exact bytes against the manifest and reports drift. Use `bibi
-generate` to repair it.
+provider identifiers. The BibTeX entry remains available for everything else.
 
 The `bibi export` output is a derived, one-way convenience artifact. It is never
 authoritative, is not tracked or verified, and is not read back by any command;
-regenerate it instead of editing it, and add it to `.gitignore` if you do not
-want it tracked. Re-importing an export into Zotero adds items again rather than
-updating the previous import.
+regenerate it instead of editing it. Re-importing an export into Zotero adds
+items again rather than updating the previous import.
 
-Mutations validate and render the complete candidate in memory, atomically
-persist `references.bib` first, and persist `cita.toml` as the commit point.
-Downloaded PDFs and extracted source packages live under `.bibi/files`, and
-`/.bibi/files/` is added to the project root's `.gitignore` so the cache is not
-tracked.
+Mutations validate a complete candidate in memory, then replace the file in one
+atomic write. Downloaded PDFs and extracted source packages live under
+`.bibi/files` beside the bibliography, and `/.bibi/files/` is added to the
+directory's `.gitignore` so the cache is not tracked.
 
 ## Workspace
 
 - `bibi-core`: locators, neutral `Reference` vocabulary, and provider traits.
-- `bibi-bibliography`: standalone BibTeX snapshot projection, raw-entry
-  preservation, re-keying, and `biblatex`-based generic rendering.
+- `bibi-bibliography`: BibTeX projection, whole-file span scanning, raw-entry
+  preservation, re-keying, and field insertion and removal.
 - `bibi-inspire-client`: typed INSPIRE JSON metadata, authoritative BibTeX
   snapshots, and stable-ID refreshes.
-- `bibi-manifest`: schema-1 project validation, identity indexes, deterministic
-  TOML, output verification, and coordinated writes.
+- `bibi-bibfile`: the `.bib` file as the store — byte-preserving mutation,
+  identity uniqueness, validation, and path resolution.
 - `bibi-documents`: validated arXiv PDF/source downloads, safe source
   extraction, and atomic caching.
-- `bibi`: CLI wiring, discovery, and selectors.
+- `bibi`: CLI wiring, sync reconciliation, and export policy.
 
 ## Development
 
@@ -119,19 +141,18 @@ Provider and document tests are hermetic and use local TCP listeners.
 
 ## Publishing
 
-All six crates share one version and their APIs are intentionally unstable
-throughout 0.x. Releases are automated with
+All five crates share one version. Releases are automated with
 [release-plz](https://release-plz.dev) (`release-plz.toml`,
 `.github/workflows/release-plz.yml`):
 
 1. Merge Conventional-Commit PRs to `main`.
 2. release-plz opens (or updates) a "release PR" that bumps the shared version
    and updates every crate's `CHANGELOG.md`.
-3. Merging that release PR publishes all six crates in dependency order and tags
-   them.
+3. Merging that release PR publishes all five crates in dependency order and
+   tags them.
 
-After the first release, smoke-test with `cargo install bibi --locked`.
+After a release, smoke-test with `cargo install bibi --locked`.
 
 As an emergency fallback, the crates can still be published by hand in
 dependency order: `bibi-core`, then `bibi-bibliography` and `bibi-documents`,
-then `bibi-inspire-client`, then `bibi-manifest`, and finally `bibi`.
+then `bibi-inspire-client`, then `bibi-bibfile`, and finally `bibi`.

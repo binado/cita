@@ -38,7 +38,7 @@ pub(crate) struct SyncReport {
     /// Entries with an identity INSPIRE does not know.
     unresolved: Vec<String>,
     /// Entries with nothing to look up at all.
-    unidentified: usize,
+    unidentified: Vec<String>,
     /// Entries the user marked off-limits.
     frozen: usize,
 }
@@ -62,6 +62,9 @@ impl SyncReport {
         for key in &self.unresolved {
             println!("  not on INSPIRE: {key}");
         }
+        for key in &self.unidentified {
+            println!("  no DOI or arXiv id to look up: {key}");
+        }
     }
 }
 
@@ -81,7 +84,7 @@ impl fmt::Display for SyncReport {
             self.refreshed.len(),
             self.managed
         )?;
-        let unmanaged = self.unresolved.len() + self.unidentified;
+        let unmanaged = self.unresolved.len() + self.unidentified.len();
         if unmanaged > 0 {
             writeln!(
                 formatter,
@@ -99,10 +102,20 @@ async fn reconcile(file: &mut Bibfile) -> Result<SyncReport> {
     let managed = file.managed();
     let unmanaged = file.unmanaged()?;
     let frozen = file.entries().iter().filter(|e| e.is_frozen()).count();
+    // Whatever is left over has neither bookkeeping nor an identifier to look
+    // one up by, so sync can only report it.
+    let accounted = |key: &str| {
+        managed.iter().any(|(k, _)| k == key) || unmanaged.iter().any(|(k, _)| k == key)
+    };
     let mut report = SyncReport {
         managed: managed.len(),
         frozen,
-        unidentified: file.entries().len() - managed.len() - unmanaged.len() - frozen,
+        unidentified: file
+            .entries()
+            .iter()
+            .filter(|entry| !entry.is_frozen() && !accounted(&entry.key))
+            .map(|entry| entry.key.clone())
+            .collect(),
         ..SyncReport::default()
     };
     if managed.is_empty() && unmanaged.is_empty() {

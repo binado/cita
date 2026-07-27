@@ -1,6 +1,6 @@
 [workspace]
 # release-plz reads Conventional Commits for version bumps and writes per-crate
-# CHANGELOGs. All six crates share `version_group = "bibi"` so they stay in
+# CHANGELOGs. All five crates share `version_group = "bibi"` so they stay in
 # lockstep on a single version, matching the manual "all crates share one
 # version" contract. Default per-crate git tags ({{ package }}-v{{ version }})
 # and changelog updates are kept.
@@ -14,15 +14,15 @@ name = "bibi-bibliography"
 version_group = "bibi"
 
 [[package]]
+name = "bibi-bibfile"
+version_group = "bibi"
+
+[[package]]
 name = "bibi-documents"
 version_group = "bibi"
 
 [[package]]
 name = "bibi-inspire-client"
-version_group = "bibi"
-
-[[package]]
-name = "bibi-manifest"
 version_group = "bibi"
 
 [[package]]

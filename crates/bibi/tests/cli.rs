@@ -935,3 +935,30 @@ fn sync_dry_run_reports_the_plan_without_writing() {
     assert!(stderr.contains("not written"), "{stderr}");
     assert_eq!(read_bib(directory.path()), before);
 }
+
+/// The summary points at --verbose, so --verbose has to account for everything
+/// the summary counted — including entries with no identifier to look up.
+#[test]
+fn sync_verbose_lists_every_entry_the_summary_counted() {
+    let directory = tempfile::tempdir().unwrap();
+    bib(directory.path());
+    let input = format!(
+        "{}\n{}",
+        entry("NoIds", "A textbook", ""),
+        entry("Unknown", "Never indexed", "doi={10.1/UNKNOWN},"),
+    );
+    success(bibi_stdin(directory.path(), &["import", "-"], &input));
+    let (base, handle) = server(vec![("404 Not Found", String::new())]);
+    let output = success(bibi_with_server(
+        directory.path(),
+        &["sync", "--verbose"],
+        &base,
+    ));
+    handle.join().unwrap();
+    assert!(output.contains("2 entries not on INSPIRE"), "{output}");
+    assert!(output.contains("not on INSPIRE: Unknown"), "{output}");
+    assert!(
+        output.contains("no DOI or arXiv id to look up: NoIds"),
+        "{output}"
+    );
+}

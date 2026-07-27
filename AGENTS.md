@@ -2,25 +2,25 @@
 
 ## What this is
 
-bibi is a Git-friendly bibliography CLI. Authoritative BibTeX (plus curated
-INSPIRE identifiers) lives in schema-1 `cita.toml`; `references.bib` is a
-deterministic, tracked generated artifact. That inversion is being replaced:
-the `.bib` file becomes the single source of truth and `bibi-manifest` goes
-away. Rust edition 2024, MSRV 1.88.
+bibi is a Git-friendly bibliography CLI. The `references.bib` file *is* the
+source of truth: entries are authoritative BibTeX, and bibi's own bookkeeping
+lives in `x-bibi-*` fields on those entries. There is no manifest and no
+generated artifact, so there is nothing that can drift. Rust edition 2024,
+MSRV 1.88.
 
 ## Commands
 
 ```bash
 cargo build --workspace
 cargo test --workspace
-cargo test -p bibi-bibliography
+cargo test -p bibi-bibfile
 cargo test --test cli
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p bibi -- add 1207.7214
 cargo run -p bibi -- import local.bib
-cargo run -p bibi -- export
 cargo run -p bibi -- sync
+cargo run -p bibi -- export
 cargo test --test e2e -- --ignored  # live INSPIRE, network required
 ```
 
@@ -41,79 +41,123 @@ bibi-core
    ↑                ↑                      ↑
 bibi-bibliography ← bibi-inspire-client   bibi-documents
    └──────────┬────────┘                   │
-        bibi-manifest ─────────────────────┤
+        bibi-bibfile ──────────────────────┤
               └──────── bibi ──────────────┘
 ```
 
 - `bibi-core`: `Reference`, provider traits, locators, and normalization.
-- `bibi-bibliography`: strict standalone BibTeX snapshots, projections,
-  and raw-entry re-keying and field insertion.
+- `bibi-bibliography`: standalone BibTeX snapshots and projections, whole-file
+  span scanning, and raw-entry re-keying plus field insertion and removal.
 - `bibi-inspire-client`: lean `InspireRecord`s (authoritative BibTeX plus
   record id, timestamp, and canonical arXiv/DOI), stable-record-ID refresh
   batches, bounded queries, and 429 retries; cross-checks its BibTeX against the
   selected JSON through `bibi-bibliography`.
-- `bibi-manifest`: schema-1 project authority, identity indexes, deterministic
-  TOML, generated bibliography verification, and coordinated writes. Slated for
-  replacement by a `.bib`-backed store.
+- `bibi-bibfile`: the `.bib` file as the store — loading, byte-preserving
+  mutation, identity uniqueness, validation, and path resolution.
 - `bibi-documents`: accepts a validated arXiv ID and atomically caches PDFs and
   safely extracts gzip-compressed TeX source packages beneath `.bibi/files/arxiv`.
-- `bibi`: CLI, parent discovery, sync reconciliation, and derived-export policy.
+- `bibi`: CLI, sync reconciliation, and export policy.
 
 ## Key decisions
 
-### Source snapshots and raw entries
+### The file is the store
 
-`cita.toml` snapshots are authoritative; projections are derived. Every source
-stores authoritative standalone BibTeX and its `Reference` (title, authors, year,
-publication, arXiv/DOI) is projected from that BibTeX. INSPIRE entries are tagged
-`source = "inspire"` and additionally carry the refresh key (`record_id`), an
-`updated` timestamp, and a curated `identifiers` block (canonical normalized
-arXiv/DOI) that overrides the projected identity; imports are tagged
-`source = "import"` and derive identity from their entry. BibTeX parsing uses raw
-spans plus semantic `biblatex` parsing. Rendering sorts by local key, changes
-only the raw key token, joins entries with one blank line, and appends one
-newline. Do not add a handwritten writer.
+Entries are authoritative BibTeX; `Reference` (title, authors, year,
+publication, arXiv/DOI) is projected from them. Tool-owned bookkeeping lives in
+one namespace on the entries themselves:
 
-Only entries and whitespace are allowed. Reject directives, comments/non-entry
-content, malformed or duplicate entries, missing titles, texkeys outside
+| Field | Meaning |
+|---|---|
+| `x-bibi-inspire-id` | stable INSPIRE record id; its **presence** marks an entry as managed |
+| `x-bibi-inspire-updated` | provider timestamp, used to skip refreshes that change nothing |
+| `x-bibi-arxiv` | curated normalized arXiv id, overriding the projected one |
+| `x-bibi-doi` | curated normalized DOI, overriding the projected one |
+| `x-bibi-frozen` | never refreshed, never resolved |
+
+There is no `source = "inspire" | "import"` tag: managed-ness is derived from
+field presence, so an entry cannot claim to be managed without carrying a
+refresh key. LaTeX toolchains ignore unknown fields, so an annotated file
+compiles as-is; `bibi export` is for handing the file to a human or a reference
+manager, not for building a document.
+
+### Byte preservation
+
+The file is hand-edited, so a mutation must rewrite only the entries it touches.
+`Bibfile` holds the bytes *between* entries alongside the entries and renders by
+concatenation, which makes preservation structural rather than careful: no code
+path inspects comments, `@string` directives, or the author's spacing, so
+nothing can lose them. The governing test is that load-then-render is
+byte-identical across a corpus covering CRLF, unicode, one-line entries, missing
+trailing newlines, and directives — keep it passing.
+
+New entries append at the end; the user owns the ordering, so nothing re-sorts.
+`bibi-bibliography::scan_entries` is the lenient whole-file scanner; `parse` and
+every single-entry helper stay strict, because a standalone snapshot is rendered
+from scratch and would lose anything unmodelled.
+
+Reject malformed or duplicate entries, missing titles, keys outside
 `[A-Za-z0-9._:+-]+`, and duplicate normalized DOI/eprint identities.
-
-### Derived exports
-
-`bibi export` writes a separate artifact and never touches `references.bib`.
-Layout stays in `bibi-manifest::Manifest::render_derived`, so every rendered
-bibliography shares one set of rules; only field-level policy lives in the CLI.
-Fields are added through `bibi-bibliography::insert_field`, which splices after
-an entry's last field value using scanner-owned spans, before any trailing
-whitespace or inline comment, so comma placement is exact and the field cannot
-be swallowed by a comment. An entry that already defines the field is returned
-unchanged, which keeps authored values and makes repeated exports byte-stable.
-
-Exports are pure functions of `cita.toml`: no network, no cache probing, no
-machine-specific paths. They are untracked, unverified, never read back, and
-refuse to run against bibliography drift. `--output` is the only CLI path that
-can leave the discovered project, so it refuses both this project's managed
-files and any managed file a *different* project owns; a managed name only
-counts inside the directory that owns it.
 
 ### Atomic mutations
 
-Add, import, remove, and sync validate a complete candidate before writing.
-Persist and sync `references.bib` first, then persist and sync `cita.toml` as the
-commit point. The old manifest remains authoritative after an interrupted
-second write.
+Add, import, remove, rekey, and sync validate a complete candidate before
+writing, then replace the file in one `atomic_write`. There is one file and no
+ordering contract, so an interrupted run leaves the old contents intact.
+
+`add` resolves before it writes, so a failed lookup never leaves a stub behind.
+
+### Path resolution
+
+`--path`, then `$BIBI_BIB`, then `./references.bib`. Never a walk up the tree: a
+`.bib` is not a project marker, and silently adopting a parent directory's
+bibliography is worse than asking. A directory argument resolves to the default
+file name inside it. A missing file is always an error, never created — a
+mistyped directory must not become a new, empty bibliography. Every mutating
+command echoes the file it wrote, because there is no longer a single legal
+target to infer.
+
+### Exports
+
+`bibi export` writes a separate artifact and never touches the bibliography.
+It **removes** the `x-bibi-*` namespace by default (`--keep-metadata` opts out)
+and adds `url = {https://arxiv.org/pdf/<id>}` to entries with an arXiv id.
+Layout is normalized, unlike a write back to the source of truth: an export is
+derived and nobody edits it.
+
+Fields are added through `bibi-bibliography::insert_field`, which splices after
+an entry's last field value using scanner-owned spans, before any trailing
+whitespace or inline comment, so comma placement is exact and the field cannot
+be swallowed by a comment. `strip_fields_with_prefix` is its exact inverse; a
+test asserts the two round-trip byte-for-byte. An entry that already defines a
+field keeps its authored value, which makes repeated exports byte-stable.
+
+Exports are pure functions of the bibliography: no network, no cache probing, no
+machine-specific paths. `--output` refuses exactly one target, the source of
+truth itself; `-` writes to stdout.
 
 ### INSPIRE sync
 
-Refresh by stable INSPIRE record ID. Batch at 100 records or a 6 KiB encoded `q`
-value. Fetch JSON and BibTeX searches sequentially and match each raw entry to
-exactly one JSON record through returned texkeys. Retry 429 three times using
-`Retry-After` capped at sixty seconds, otherwise five seconds, and report each
-retry on stderr.
+`bibi sync` is one command doing one thing by two lookups. Managed entries
+refresh by stable record id, batched at 100 records or a 6 KiB encoded `q`.
+Unmanaged entries with a DOI or arXiv id are resolved through the direct
+`/api/arxiv` and `/api/doi` endpoints, which return exactly one record or a
+not-found, so there is no ambiguity to arbitrate. Resolution runs first, so an
+entry adopted in a run is counted by the same pass.
 
-Every managed record and returned result must be explained. Local citation keys
-are independent from provider texkeys and never change during refresh. Imported
-BibTeX snapshots cause no network request.
+Adoption attaches bookkeeping and keeps the user's own BibTeX: it answers "what
+is this thing I have", not "replace it". Recording the provider's current
+timestamp makes that stick, since the refresh then finds them equal and writes
+nothing. A record INSPIRE does not know is reported, not fatal — a bibliography
+legitimately holds textbooks and theses.
+
+Every managed record and returned result must be explained. Two entries claiming
+one record id is refused; `import` cannot catch that case, because it dedupes on
+DOI and arXiv id. Local citation keys are independent from provider texkeys and
+never change during refresh. Output summarizes rather than enumerates, since a
+mixed bibliography always has entries INSPIRE cannot place.
+
+Retry 429 three times using `Retry-After` capped at sixty seconds, otherwise
+five seconds, and report each retry on stderr.
 
 ### Selectors and documents
 
@@ -123,7 +167,13 @@ authoritative BibTeX and stores the record. It returns either an absolute cached
 PDF path, an absolute extracted source directory with `--source`, or, with
 `--url`, the arXiv PDF URL; `--source` and `--url` are mutually exclusive;
 `--open` launches that target. Documents use the projected arXiv ID; stored IDs
-are versionless and cache paths retain legacy arXiv archive directories.
+are versionless and cache paths retain legacy arXiv archive directories. The
+cache lives beside the bibliography.
+
+### Git
+
+Git integration is the user's own. bibi writes one tracked text file in the
+format the user reads, so `git diff` already shows what changed.
 
 ## Error handling
 
