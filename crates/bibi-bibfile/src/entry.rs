@@ -141,6 +141,30 @@ impl Entry {
         Ok(())
     }
 
+    /// Attach provider bookkeeping without disturbing the entry's content.
+    ///
+    /// This is what resolving an unmanaged entry does, and it deliberately
+    /// keeps the user's own BibTeX: the question resolving answers is "what is
+    /// this thing I already have", not "replace it with the provider's copy".
+    /// Recording the provider's current timestamp is what makes that stick —
+    /// the next sync sees them agree and writes nothing.
+    pub fn adopt(&mut self, record: &InspireRecord) -> Result<(), Error> {
+        let mut bibtex = insert_field(
+            &self.bibtex,
+            INSPIRE_ID_FIELD,
+            &record.record_id.to_string(),
+        )?;
+        bibtex = insert_field(&bibtex, INSPIRE_UPDATED_FIELD, &record.updated)?;
+        if let Some(arxiv) = &record.arxiv {
+            bibtex = insert_field(&bibtex, ARXIV_FIELD, &normalize_arxiv(arxiv))?;
+        }
+        if let Some(doi) = &record.doi {
+            bibtex = insert_field(&bibtex, DOI_FIELD, &normalize_doi(doi))?;
+        }
+        self.bibtex = bibtex;
+        Ok(())
+    }
+
     /// Drop one tool-owned field, if present.
     pub fn clear_field(&mut self, name: &str) -> Result<(), Error> {
         self.bibtex = remove_field(&self.bibtex, name)?;

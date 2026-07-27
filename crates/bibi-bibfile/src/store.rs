@@ -545,6 +545,30 @@ impl Bibfile {
         Ok(changed)
     }
 
+    /// Attach a resolved INSPIRE record to an entry bibi did not manage.
+    ///
+    /// Refuses when another entry already claims the record, because two local
+    /// keys tracking one upstream paper is a duplicate the user has to settle:
+    /// `import` dedupes on DOI and arXiv id, so it cannot catch a pair that
+    /// only turns out to be the same paper once INSPIRE resolves both.
+    pub fn adopt(&mut self, key: &str, record: &InspireRecord) -> Result<(), Error> {
+        if let Some(other) = self
+            .entries
+            .iter()
+            .find(|entry| entry.key != key && entry.inspire_record_id() == Some(record.record_id))
+        {
+            return Err(Error::DuplicateRecord {
+                key: key.to_owned(),
+                other: other.key.clone(),
+                record_id: record.record_id,
+            });
+        }
+        let at = self
+            .index_of(key)
+            .ok_or_else(|| Error::NoMatch(key.into()))?;
+        self.entries[at].adopt(record)
+    }
+
     /// Append an entry at the end of the file, under `key`.
     fn append(&mut self, key: String, mut entry: Entry) -> Result<(), Error> {
         if entry.key != key {

@@ -593,7 +593,9 @@ fn sync_refreshes_managed_entries_and_leaves_the_rest_alone() {
     success(bibi_stdin(
         directory.path(),
         &["import", "-"],
-        &entry("Imported", "Untouched", "eprint={2401.00999},"),
+        // No identifiers at all, so sync has nothing to look this one up by
+        // and makes no request for it.
+        &entry("Imported", "Untouched", ""),
     ));
 
     let fresh = json_record_at(
@@ -608,9 +610,10 @@ fn sync_refreshes_managed_entries_and_leaves_the_rest_alone() {
     let (base, handle) = server(vec![("200 OK", search), ("200 OK", fresh_bib)]);
     let output = success(bibi_with_server(directory.path(), &["sync"], &base));
     assert!(
-        output.contains("refreshed 1 of 1 managed entries; 1 unmanaged"),
+        output.contains("refreshed 1 of 1 managed entries"),
         "{output}"
     );
+    assert!(output.contains("1 entries not on INSPIRE"), "{output}");
     let requests = handle.join().unwrap();
     assert!(
         requests[0].contains("control_number%3A42"),
@@ -675,7 +678,7 @@ fn an_import_only_bibliography_performs_no_network_work() {
             &["sync"],
             "http://127.0.0.1:1/"
         )),
-        "refreshed 0 of 0 managed entries; 1 unmanaged\n"
+        "refreshed 0 of 0 managed entries\n1 entries not on INSPIRE (--verbose to list)\n"
     );
 }
 
@@ -777,4 +780,158 @@ fn fetch_save_stores_an_unmatched_locator_before_fetching() {
     assert_eq!(stdout, "https://arxiv.org/pdf/2401.00042\n");
     assert!(stderr.contains("added Provider:42"), "{stderr}");
     assert!(read_bib(directory.path()).contains("x-bibi-inspire-id = {42}"));
+}
+
+/// Resolving an unmanaged entry and refreshing a managed one are one command,
+/// because which of the two applies is bookkeeping the user should not track.
+#[test]
+fn sync_adopts_an_entry_inspire_recognizes_without_rewriting_it() {
+    let directory = tempfile::tempdir().unwrap();
+    bib(directory.path());
+    let mine = entry("Mine", "My own wording", "eprint={2401.00042},");
+    success(bibi_stdin(directory.path(), &["import", "-"], &mine));
+
+    let json = json_record(42, "Provider:42", "Provider wording", "2401.00042");
+    let bibtex = entry("Provider:42", "Provider wording", "eprint={2401.00042},");
+    let (base, handle) = server(vec![
+        ("200 OK", json),
+        ("200 OK", bibtex),
+        (
+            "200 OK",
+            format!(
+                r#"{{"hits":{{"hits":[{}]}}}}"#,
+                json_record(42, "Provider:42", "Provider wording", "2401.00042")
+            ),
+        ),
+        (
+            "200 OK",
+            entry("Provider:42", "Provider wording", "eprint={2401.00042},"),
+        ),
+    ]);
+    let output = success(bibi_with_server(directory.path(), &["sync"], &base));
+    handle.join().unwrap();
+    assert!(output.contains("resolved 1 entries"), "{output}");
+    assert!(
+        output.contains("refreshed 0 of 1 managed entries"),
+        "{output}"
+    );
+
+    let bibliography = read_bib(directory.path());
+    assert!(
+        bibliography.contains("x-bibi-inspire-id = {42}"),
+        "{bibliography}"
+    );
+    // Adoption answers "what is this", not "replace it": the wording is mine.
+    assert!(bibliography.contains("My own wording"), "{bibliography}");
+    assert!(!bibliography.contains("Provider wording"), "{bibliography}");
+}
+
+#[test]
+fn sync_reports_entries_inspire_does_not_know_without_failing() {
+    let directory = tempfile::tempdir().unwrap();
+    bib(directory.path());
+    success(bibi_stdin(
+        directory.path(),
+        &["import", "-"],
+        &entry("Textbook", "A textbook", "doi={10.1/TEXTBOOK},"),
+    ));
+    let before = read_bib(directory.path());
+    let (base, handle) = server(vec![("404 Not Found", String::new())]);
+    let output = success(bibi_with_server(
+        directory.path(),
+        &["sync", "--verbose"],
+        &base,
+    ));
+    handle.join().unwrap();
+    assert!(output.contains("1 entries not on INSPIRE"), "{output}");
+    assert!(output.contains("not on INSPIRE: Textbook"), "{output}");
+    assert_eq!(read_bib(directory.path()), before);
+}
+
+/// The marker covers both halves of sync: a frozen entry is neither refreshed
+/// nor looked up, which is what makes it usable for a hand-corrected entry and
+/// for a book INSPIRE will never have.
+#[test]
+fn sync_leaves_frozen_entries_completely_alone() {
+    let directory = tempfile::tempdir().unwrap();
+    bib(directory.path());
+    fs::write(
+        directory.path().join("references.bib"),
+        format!(
+            "{}\n",
+            entry(
+                "Frozen",
+                "Mine forever",
+                "eprint={2401.00042},\n  x-bibi-frozen = {true},"
+            )
+        ),
+    )
+    .unwrap();
+    let before = read_bib(directory.path());
+    let output = success(bibi_with_server(
+        directory.path(),
+        &["sync"],
+        "http://127.0.0.1:1/",
+    ));
+    assert!(output.contains("1 frozen entries left alone"), "{output}");
+    assert_eq!(read_bib(directory.path()), before);
+}
+
+/// import dedupes on DOI and arXiv id, so it cannot catch a pair that only
+/// turns out to be one paper once INSPIRE resolves both.
+#[test]
+fn sync_refuses_two_entries_that_resolve_to_one_record() {
+    let directory = tempfile::tempdir().unwrap();
+    bib(directory.path());
+    fs::write(
+        directory.path().join("references.bib"),
+        format!(
+            "{}\n\n{}\n",
+            entry("ByArxiv", "One", "eprint={2401.00042},"),
+            entry("ByDoi", "Two", "doi={10.1/SAME},"),
+        ),
+    )
+    .unwrap();
+    let (base, handle) = server(vec![
+        ("200 OK", json_record(42, "P:42", "One", "2401.00042")),
+        ("200 OK", entry("P:42", "One", "eprint={2401.00042},")),
+        ("200 OK", json_record(42, "P:42", "One", "2401.00042")),
+        ("200 OK", entry("P:42", "One", "eprint={2401.00042},")),
+    ]);
+    let error = failure(bibi_with_server(directory.path(), &["sync"], &base));
+    handle.join().unwrap();
+    assert!(error.contains("both claim INSPIRE record 42"), "{error}");
+}
+
+#[test]
+fn sync_dry_run_reports_the_plan_without_writing() {
+    let directory = tempfile::tempdir().unwrap();
+    bib(directory.path());
+    success(bibi_stdin(
+        directory.path(),
+        &["import", "-"],
+        &entry("Mine", "Mine", "eprint={2401.00042},"),
+    ));
+    let before = read_bib(directory.path());
+    let (base, handle) = server(vec![
+        ("200 OK", json_record(42, "P:42", "Provider", "2401.00042")),
+        ("200 OK", entry("P:42", "Provider", "eprint={2401.00042},")),
+        (
+            "200 OK",
+            format!(
+                r#"{{"hits":{{"hits":[{}]}}}}"#,
+                json_record(42, "P:42", "Provider", "2401.00042")
+            ),
+        ),
+        ("200 OK", entry("P:42", "Provider", "eprint={2401.00042},")),
+    ]);
+    let (stdout, stderr) = success_streams(bibi_with_server(
+        directory.path(),
+        &["sync", "--dry-run"],
+        &base,
+    ));
+    handle.join().unwrap();
+    assert!(stdout.contains("resolved 1 entries"), "{stdout}");
+    assert!(stderr.contains("not written"), "{stderr}");
+    assert_eq!(read_bib(directory.path()), before);
 }

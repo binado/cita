@@ -31,8 +31,8 @@ enum Command {
     Import(ImportArgs),
     /// Resolve and add one or more references through INSPIRE
     Add(AddArgs),
-    /// Refresh every INSPIRE-managed entry by stable record id
-    Sync,
+    /// Reconcile with INSPIRE: adopt what it recognizes, refresh what it changed
+    Sync(SyncArgs),
     /// Remove references by local key or provider/DOI/arXiv identity
     Remove(RemoveArgs),
     /// Change one reference's local citation key
@@ -60,6 +60,16 @@ struct ImportArgs {
     /// BibTeX files to import, or `-` to read from standard input
     #[arg(required = true)]
     sources: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct SyncArgs {
+    /// Look everything up and report the plan without writing
+    #[arg(long)]
+    dry_run: bool,
+    /// List every adopted, refreshed, and unresolved entry
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 #[derive(Debug, Args)]
@@ -191,7 +201,7 @@ async fn run() -> Result<()> {
             overwrite,
             locators,
         })) => commands::add(&path, key.as_deref(), &locators, overwrite).await?,
-        Some(Command::Sync) => commands::sync(&path).await?,
+        Some(Command::Sync(args)) => commands::sync(&path, args.dry_run, args.verbose).await?,
         Some(Command::Remove(args)) => commands::remove(&path, &args.selectors)?,
         Some(Command::Rekey(args)) => commands::rekey(&path, &args.selector, &args.new_key)?,
         Some(Command::List(ListArgs {
