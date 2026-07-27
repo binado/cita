@@ -1,11 +1,9 @@
-use super::find_manifest;
-use anyhow::{Context, Result, anyhow, bail};
+use super::{Target, global_root, resolve_target};
+use anyhow::{Context, Result, bail};
 use cita_bibliography::insert_field;
 use cita_core::ReferenceSource;
 use cita_documents::arxiv_pdf_url;
-use cita_manifest::{
-    BIBLIOGRAPHY_FILE, LIBRARY_FILE, MANIFEST_FILE, Manifest, SourceSnapshot, atomic_write,
-};
+use cita_manifest::{Library, SourceSnapshot, atomic_write};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -13,48 +11,64 @@ use std::{
 
 const URL_FIELD: &str = "url";
 
-/// Write a derived bibliography and report where it went.
-pub(crate) fn export(project: &Path, caller: &Path, output: Option<&Path>) -> Result<()> {
-    let path = export_outcome(project, caller, output)?;
+/// Write one URL-enriched bibliography export.
+pub(crate) fn export(target: &Target, caller: &Path, output: Option<&Path>) -> Result<()> {
+    let path = export_outcome(target, caller, output)?;
     println!("Exported {}", path.display());
     Ok(())
 }
 
-/// Write a derived bibliography for the project containing `project`.
-///
-/// A relative `output` resolves against `caller`, matching how import paths use
-/// the caller's directory rather than the resolved project.
-pub(crate) fn export_outcome(
-    project: &Path,
-    caller: &Path,
-    output: Option<&Path>,
-) -> Result<PathBuf> {
-    // The export claims to hold the same entries as references.bib, so a
-    // drifted bibliography must fail rather than silently disagree with it.
-    let manifest = Manifest::load_verified(find_manifest(project)?)?;
-    let directory = manifest
-        .path()
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
+fn export_outcome(target: &Target, caller: &Path, output: Option<&Path>) -> Result<PathBuf> {
+    let manifest = target.load()?;
     let path = match output {
         Some(output) if output.is_absolute() => output.to_path_buf(),
         Some(output) => caller.join(output),
-        None => default_export_path(&directory)?,
+        None => caller.join(format!("{}.bib", target.name)),
     };
-    ensure_not_managed(&path, &manifest)?;
+    ensure_outside_store(&path, target.store_root())?;
     let rendered = manifest.render_derived(derive_entry)?;
     atomic_write(&path, rendered.as_bytes())?;
     Ok(path)
 }
 
-/// Add the derived arXiv PDF URL to one re-keyed entry that has an arXiv ID.
+/// Export every shelf into an existing directory, continuing after failures.
+pub(crate) fn batch_export(caller: &Path, output: Option<&Path>) -> Result<bool> {
+    let library = Library::open_or_create(global_root()?)?;
+    let directory = match output {
+        Some(path) if path.is_absolute() => path.to_path_buf(),
+        Some(path) => caller.join(path),
+        None => caller.to_path_buf(),
+    };
+    if !directory.is_dir() {
+        bail!(
+            "batch export destination {} is not an existing directory",
+            directory.display()
+        );
+    }
+    let mut failed = false;
+    for name in library.shelves() {
+        let outcome = resolve_target(Some(name)).and_then(|target| {
+            let output = directory.join(format!("{name}.bib"));
+            export_outcome(&target, caller, Some(&output))
+        });
+        match outcome {
+            Ok(path) => println!("Shelf {name}: exported {}", path.display()),
+            Err(error) => {
+                failed = true;
+                println!("Shelf {name}: failed:");
+                for line in format!("{error:#}").lines() {
+                    println!("  {line}");
+                }
+            }
+        }
+    }
+    Ok(failed)
+}
+
 fn derive_entry(key: &str, source: &SourceSnapshot, entry: String) -> Result<String> {
     let reference = source
         .project()
         .with_context(|| format!("could not project `{key}`"))?;
-    // The projected identity already carries INSPIRE's curated arXiv ID, so one
-    // rule covers imported and INSPIRE snapshots alike.
     let Some(arxiv) = reference.identifiers.arxiv.first() else {
         return Ok(entry);
     };
@@ -63,68 +77,19 @@ fn derive_entry(key: &str, source: &SourceSnapshot, entry: String) -> Result<Str
     Ok(insert_field(&entry, URL_FIELD, url.as_str())?)
 }
 
-fn default_export_path(directory: &Path) -> Result<PathBuf> {
-    let name = directory.file_name().ok_or_else(|| {
-        anyhow!(
-            "could not derive an export file name from {}; pass --output",
-            directory.display()
-        )
-    })?;
-    // `OsString` rather than `format!` so a non-UTF-8 directory name works.
-    let mut file = name.to_os_string();
-    file.push(".bib");
-    Ok(directory.join(file))
-}
-
-/// Refuse to write over a managed file.
-///
-/// The identity check covers this project's own files. `--output` is the only
-/// path in the CLI that can leave the discovered project, so it also has to
-/// answer for every other project's files, which the ownership check below does.
-fn ensure_not_managed(path: &Path, manifest: &Manifest) -> Result<()> {
+fn ensure_outside_store(path: &Path, store: &Path) -> Result<()> {
     let target = resolved(path)?;
-    for managed in [manifest.bibliography_path(), manifest.path()] {
-        if target == resolved(managed)? {
-            bail!(
-                "refusing to write the export over the managed file {}",
-                managed.display()
-            );
-        }
-    }
-    ensure_not_owned_elsewhere(&target)
-}
-
-/// Refuse a target that some other project or library manages.
-///
-/// A managed name is only managed inside the directory that owns it, so a
-/// `references.bib` in a plain LaTeX directory remains a legal export target;
-/// the same name beside a `cita.toml` does not.
-fn ensure_not_owned_elsewhere(target: &Path) -> Result<()> {
-    let (Some(name), Some(parent)) = (target.file_name(), target.parent()) else {
-        return Ok(());
-    };
-    let (owner, kind) = match name.to_str() {
-        Some(MANIFEST_FILE | BIBLIOGRAPHY_FILE) => (MANIFEST_FILE, "project"),
-        Some(LIBRARY_FILE) => (LIBRARY_FILE, "library"),
-        _ => return Ok(()),
-    };
-    if parent.join(owner).is_file() {
+    let store = fs::canonicalize(store)
+        .with_context(|| format!("could not resolve cita home {}", store.display()))?;
+    if target == store || target.starts_with(&store) {
         bail!(
-            "refusing to write the export over the managed file {}, which belongs to the {kind} at {}",
-            target.display(),
-            parent.display()
+            "refusing to write an export inside the global cita store {}",
+            store.display()
         );
     }
     Ok(())
 }
 
-/// An absolute, canonical path for comparing against managed files.
-///
-/// An existing target is canonicalized outright, so a case-insensitive
-/// filesystem reports the on-disk name and `References.bib` cannot alias
-/// `references.bib`. A target that does not exist yet cannot alias an existing
-/// managed file, so only its parent is canonicalized, which still collapses
-/// `..` segments and symlinked directories.
 fn resolved(path: &Path) -> Result<PathBuf> {
     let absolute = std::path::absolute(path)
         .with_context(|| format!("could not resolve {}", path.display()))?;
@@ -137,4 +102,15 @@ fn resolved(path: &Path) -> Result<PathBuf> {
     let parent = fs::canonicalize(parent)
         .with_context(|| format!("could not resolve the directory {}", parent.display()))?;
     Ok(parent.join(file))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn store_descendants_are_rejected() {
+        let store = tempfile::tempdir().unwrap();
+        assert!(ensure_outside_store(&store.path().join("out.bib"), store.path()).is_err());
+    }
 }

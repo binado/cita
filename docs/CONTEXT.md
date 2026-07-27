@@ -1,75 +1,54 @@
 # Domain context
 
-## Library and shelf
+## Global library and shelf
 
-A library is a `cita-library.toml` registry that maps stable shelf names to
-library-root-relative paths. A shelf is a completely independent cita project
-with its own authoritative manifest, generated bibliography, document cache,
-identities, and Git commits. The registry routes commands; it does not aggregate
-or share bibliographic state.
+Cita owns one user-global library rooted at `$CITA_HOME`, or `$HOME/.cita` by
+default. `library.toml` contains a sorted set of stable shelf names and records
+the fixed `main` default. Shelf locations are deterministic:
+`shelves/<name>/shelf.toml`. Commands never discover local project files.
 
-Shelf names are stable identifiers; the registered path is fixed at
-registration time, and registering an existing name under a different path is
-rejected. Paths must remain beneath the library root and cannot be equal,
-nested, or symlink aliases. Library discovery walks ancestors independently of
-nearest-project `cita.toml` discovery. Library-wide sync and generation are
-ordered collections of independent shelf mutations, not one crash-atomic
-transaction.
-
-## Reference
-
-A `Reference` is Cita's provider-neutral semantic projection: title, authors,
-collaborations, display year, publication, URL, primary category, and normalized
-identifiers. Commands consume references; they do not inspect provider payloads
-or parse tracked output.
+Every data command lazily initializes the library and `main`. An explicit shelf
+must already exist; selection never creates. Shelf mutations are independent,
+atomically replace one manifest, and hold a per-shelf advisory lock across the
+read-modify-write operation. Batch sync and export run in shelf-name order and
+continue after failures.
 
 ## Source snapshot
 
-A source snapshot is the authoritative provider-specific evidence stored under a
-local citation key in `cita.toml`. Every snapshot holds authoritative standalone
-BibTeX and is tagged by the source that owns its refresh lifecycle.
+A source snapshot is authoritative provider-specific evidence stored under a
+local citation key in `shelf.toml`. Every snapshot contains standalone BibTeX
+and is tagged by its refresh lifecycle.
 
-- An INSPIRE entry (`source = "inspire"`) contains authoritative INSPIRE BibTeX,
-  the stable record ID (its refresh key), an update timestamp, and canonical
-  normalized arXiv/DOI values selected from and cross-checked against that
-  BibTeX.
-- An import (`source = "import"`) contains one exact standalone imported entry.
+- `source = "inspire"` stores authoritative INSPIRE BibTeX, stable record ID,
+  update timestamp, and canonical normalized arXiv/DOI values selected from and
+  cross-checked against that BibTeX.
+- `source = "import"` stores one exact standalone imported entry.
 
-Snapshots project to `Reference` from their BibTeX; INSPIRE entries override the
-projected arXiv/DOI with their stored identifiers and add the `inspire` provider
-id. Projections are derived and are never stored as a second authority.
+Snapshots project to provider-neutral `Reference` values. INSPIRE's curated
+arXiv/DOI values override projected identities and add the namespaced provider
+identity. Duplicate normalized identities are rejected within a shelf.
 
 ## Local citation key
 
-The sorted key in `references` is Cita's local identity for citation and Git
-review. It may differ from a provider texkey. Refreshing a source snapshot never
-changes it; bibliography generation changes only the raw entry's key token.
+The sorted manifest key is Cita's local citation identity and may differ from a
+provider texkey. Refreshing a source snapshot never changes it. Rendering changes
+only the raw BibTeX key token.
 
-## Provider identity
+## Export
 
-An identifier names the same work independently of its local key. DOI and arXiv
-identifiers are normalized globally. Provider identities are namespaced, for
-example `inspire:1124337`. Any identity shared by different local keys is a
-conflict, including across source kinds.
+There is no managed `references.bib`. `cita export` deterministically materializes
+an untracked, unverified, one-way BibTeX artifact from a selected shelf. Entries
+are sorted by local key, separated by one blank line, and end with one newline.
+The CLI adds an arXiv PDF URL when an entry has an arXiv identity but no authored
+URL.
 
-## Generated bibliography
+Relative outputs resolve from the caller's directory. An omitted output becomes
+`<shelf>.bib`; exports cannot target the global store. Cita never reads exports
+back.
 
-`references.bib` is a tracked generated artifact, analogous to a lockfile. Its
-bytes are completely derived from the manifest: local-key order, preserved raw
-entry fields, one blank line between entries, and a final newline. Drift is an
-error; `cita generate` repairs it.
+## Documents
 
-## Derived export
-
-The `cita export` output is a derived artifact, not a generated one. It shares
-the generated bibliography's layout and ordering but adds resolvable `url`
-fields for downstream reference managers. Unlike `references.bib` it is not
-tracked, not verified, never read back, and never authoritative — it is written
-for other tools to consume and regenerated rather than edited.
-
-## Managed and imported references
-
-INSPIRE snapshots are managed: `cita sync` refreshes them by stable record ID.
-BibTeX snapshots are imported/unmanaged and remain byte-for-byte unchanged until
-explicitly removed. Cita does not merge provenance or adopt one source as
-another.
+PDFs and safely extracted source packages live under the library-wide `files/`
+cache and are shared across shelves by normalized, versionless arXiv ID.
+Transient `fetch` resolves INSPIRE JSON only unless `--save` stores the complete
+record in the selected shelf.

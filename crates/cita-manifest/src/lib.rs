@@ -1,13 +1,14 @@
-//! Schema-1 source snapshot storage and generated-bibliography coordination.
+//! Schema-1 authoritative source-snapshot storage.
 #![warn(missing_docs)]
 
 mod library;
 
-pub use library::{LIBRARY_FILE, Library, LibraryError, Shelf};
-
-use cita_bibliography::{
-    BibtexSnapshot, parse as parse_bibtex, project_bibtex, rename_entry, validate_key,
+pub use library::{
+    DEFAULT_SHELF, LIBRARY_FILE, Library, LibraryError, ShelfLock, global_library_root,
+    validate_shelf_name,
 };
+
+use cita_bibliography::{BibtexSnapshot, project_bibtex, rename_entry, validate_key};
 use cita_core::{
     Locator, ProjectionError, Reference, ReferenceSource, normalize_arxiv, normalize_doi,
 };
@@ -24,10 +25,8 @@ use thiserror::Error;
 
 /// Manifest schema version supported by this crate.
 pub const SCHEMA: u32 = 1;
-/// Name of the authoritative project manifest.
-pub const MANIFEST_FILE: &str = "cita.toml";
-/// Name of the deterministic generated BibTeX artifact.
-pub const BIBLIOGRAPHY_FILE: &str = "references.bib";
+/// Name of an authoritative shelf manifest.
+pub const MANIFEST_FILE: &str = "shelf.toml";
 
 /// A stored reference tagged by the source that owns its refresh lifecycle.
 /// Bibliographic content is always projected from the authoritative BibTeX;
@@ -213,10 +212,9 @@ pub enum AddOutcome {
 }
 
 #[derive(Debug)]
-/// Loaded schema-1 manifest and its coordinated bibliography artifact.
+/// Loaded schema-1 shelf manifest.
 pub struct Manifest {
     path: PathBuf,
-    bibliography_path: PathBuf,
     references: BTreeMap<String, SourceSnapshot>,
 }
 
@@ -252,7 +250,7 @@ pub enum Error {
     },
     /// The manifest uses a schema this release cannot migrate or read.
     #[error(
-        "unsupported cita.toml schema {found}; this version supports schema 1 and provides no legacy migration"
+        "unsupported shelf.toml schema {found}; this version supports schema 1 and provides no legacy migration"
     )]
     UnsupportedSchema {
         /// Schema value found in the file.
@@ -265,12 +263,6 @@ pub enum Error {
         path: PathBuf,
         /// Underlying filesystem error.
         source: std::io::Error,
-    },
-    /// Generated BibTeX differs from the manifest-derived bytes.
-    #[error("generated bibliography drift at {path}; run `cita generate`")]
-    BibliographyDrift {
-        /// Drifted bibliography path.
-        path: PathBuf,
     },
     /// An exact-key add tried to rename an already stored identity.
     #[error("cannot rename existing reference `{existing}` to `{requested}` during add")]
@@ -316,54 +308,26 @@ pub enum Error {
 }
 
 impl Manifest {
-    /// Create an empty schema-1 manifest and bibliography in a directory.
-    pub fn create(directory: impl AsRef<Path>) -> Result<Self, Error> {
-        let directory = directory.as_ref();
-        let path = directory.join(MANIFEST_FILE);
-        let bibliography_path = directory.join(BIBLIOGRAPHY_FILE);
-        if path.exists() || bibliography_path.exists() {
-            return Err(Error::AlreadyExists(if path.exists() {
-                path
-            } else {
-                bibliography_path
-            }));
+    /// Create an empty schema-1 shelf manifest at `path`.
+    pub fn create(path: impl AsRef<Path>) -> Result<Self, Error> {
+        let requested = path.as_ref();
+        let path = if requested.is_dir() {
+            requested.join(MANIFEST_FILE)
+        } else {
+            requested.to_path_buf()
+        };
+        if path.exists() {
+            return Err(Error::AlreadyExists(path));
         }
         let manifest = Self {
             path,
-            bibliography_path,
             references: BTreeMap::new(),
         };
         manifest.persist_candidate(&manifest.references)?;
         Ok(manifest)
     }
 
-    /// Create schema 1 from an existing standalone bibliography in one mutation.
-    pub fn import_existing(directory: impl AsRef<Path>) -> Result<Self, Error> {
-        let directory = directory.as_ref();
-        let path = directory.join(MANIFEST_FILE);
-        let bibliography_path = directory.join(BIBLIOGRAPHY_FILE);
-        if path.exists() {
-            return Err(Error::AlreadyExists(path));
-        }
-        let source = fs::read_to_string(&bibliography_path).map_err(|source| Error::Read {
-            path: bibliography_path.clone(),
-            source,
-        })?;
-        let references = parse_bibtex(&source)?
-            .into_iter()
-            .map(|(key, snapshot)| (key, SourceSnapshot::Import(snapshot)))
-            .collect::<BTreeMap<_, _>>();
-        validate_references(&references)?;
-        let manifest = Self {
-            path,
-            bibliography_path,
-            references,
-        };
-        manifest.persist_candidate(&manifest.references)?;
-        Ok(manifest)
-    }
-
-    /// Load and semantically validate a manifest without checking generated output.
+    /// Load and semantically validate a shelf manifest.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref().to_path_buf();
         let source = fs::read_to_string(&path).map_err(|source| Error::Read {
@@ -392,31 +356,15 @@ impl Manifest {
             path: path.clone(),
             message: error.to_string(),
         })?;
-        let bibliography_path = path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(BIBLIOGRAPHY_FILE);
         Ok(Self {
             path,
-            bibliography_path,
             references: data.references,
         })
-    }
-
-    /// Load a manifest and verify its generated bibliography byte-for-byte.
-    pub fn load_verified(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let manifest = Self::load(path)?;
-        manifest.verify_bibliography()?;
-        Ok(manifest)
     }
 
     /// Return the authoritative manifest path.
     pub fn path(&self) -> &Path {
         &self.path
-    }
-    /// Return the coordinated generated bibliography path.
-    pub fn bibliography_path(&self) -> &Path {
-        &self.bibliography_path
     }
     /// Return snapshots ordered by local citation key.
     pub fn references(&self) -> &BTreeMap<String, SourceSnapshot> {
@@ -672,7 +620,7 @@ impl Manifest {
     /// [`Manifest::render_bibliography`] does, joined by one blank line with a
     /// single trailing newline. `transform` receives the local key, its
     /// snapshot, and the re-keyed entry, and owns any field-level policy. This
-    /// renders a separate artifact and never touches `references.bib`.
+    /// renders a separate artifact and never writes a managed bibliography.
     pub fn render_derived<E: From<Error>>(
         &self,
         transform: impl FnMut(&str, &SourceSnapshot, String) -> Result<String, E>,
@@ -680,43 +628,9 @@ impl Manifest {
         render_entries(&self.references, transform)
     }
 
-    /// Verify that the generated bibliography exactly matches the manifest.
-    pub fn verify_bibliography(&self) -> Result<(), Error> {
-        let expected = self.render_bibliography()?;
-        // A missing file is drift (repairable by `cita generate`); any other
-        // read failure is an environment problem and must not masquerade as it.
-        let actual = match fs::read(&self.bibliography_path) {
-            Ok(bytes) => Some(bytes),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(source) => {
-                return Err(Error::Read {
-                    path: self.bibliography_path.clone(),
-                    source,
-                });
-            }
-        };
-        if actual.as_deref() != Some(expected.as_bytes()) {
-            return Err(Error::BibliographyDrift {
-                path: self.bibliography_path.clone(),
-            });
-        }
-        Ok(())
-    }
-
-    /// Atomically regenerate the bibliography from authoritative snapshots.
-    pub fn generate(&self) -> Result<(), Error> {
-        atomic_write(
-            &self.bibliography_path,
-            self.render_bibliography()?.as_bytes(),
-        )
-    }
-
     fn persist_candidate(&self, candidate: &BTreeMap<String, SourceSnapshot>) -> Result<(), Error> {
         validate_references(candidate)?;
-        let bibliography = render_bibliography(candidate)?;
         let manifest = render_manifest(candidate)?;
-        // The bibliography is prepared first. The manifest is the commit point.
-        atomic_write(&self.bibliography_path, bibliography.as_bytes())?;
         atomic_write(&self.path, manifest.as_bytes())
     }
 }
@@ -950,7 +864,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_round_trips_and_generated_output_is_verified() {
+    fn schema_round_trips_and_bibliography_renders() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
         add(
@@ -963,20 +877,13 @@ mod tests {
         assert!(text.contains("[references.Alpha]"), "{text}");
         assert!(text.contains("source = \"import\""), "{text}");
         assert!(!text.contains("[references.Alpha.source]"), "{text}");
-        let loaded = Manifest::load_verified(dir.path().join(MANIFEST_FILE)).unwrap();
+        let loaded = Manifest::load(dir.path().join(MANIFEST_FILE)).unwrap();
         assert!(
             loaded
                 .render_bibliography()
                 .unwrap()
                 .starts_with("@misc{Alpha,")
         );
-        fs::write(dir.path().join(BIBLIOGRAPHY_FILE), "edited").unwrap();
-        assert!(matches!(
-            Manifest::load_verified(dir.path().join(MANIFEST_FILE)),
-            Err(Error::BibliographyDrift { .. })
-        ));
-        loaded.generate().unwrap();
-        Manifest::load_verified(dir.path().join(MANIFEST_FILE)).unwrap();
     }
 
     #[test]
@@ -1008,10 +915,9 @@ mod tests {
         let mut manifest = Manifest::create(dir.path()).unwrap();
         add(&mut manifest, vec![imported("A", "A", "doi={10.1/X}")]).unwrap();
         let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
-        let before_bib = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
 
         // A different key sharing the same normalized DOI is skipped, not fatal,
-        // and leaves both managed files byte-for-byte unchanged.
+        // and leaves the authoritative manifest byte-for-byte unchanged.
         assert_eq!(
             add(&mut manifest, vec![imported("B", "B", "doi={10.1/x}")]).unwrap(),
             [AddOutcome::Skipped {
@@ -1022,10 +928,6 @@ mod tests {
         assert_eq!(
             fs::read(dir.path().join(MANIFEST_FILE)).unwrap(),
             before_manifest
-        );
-        assert_eq!(
-            fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap(),
-            before_bib
         );
 
         // Overwrite rekeys: the old key is removed and the incoming key stored.
@@ -1051,7 +953,6 @@ mod tests {
         let mut manifest = Manifest::create(dir.path()).unwrap();
         add(&mut manifest, vec![inspire("Local", "Provider:Old", 42)]).unwrap();
         let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
-        let before_bibliography = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
 
         let mut changed = inspire("Provider:New", "Provider:New", 42);
         let SourceSnapshot::Inspire(entry) = &mut changed.source else {
@@ -1070,10 +971,6 @@ mod tests {
             fs::read(dir.path().join(MANIFEST_FILE)).unwrap(),
             before_manifest
         );
-        assert_eq!(
-            fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap(),
-            before_bibliography
-        );
     }
 
     #[test]
@@ -1086,7 +983,6 @@ mod tests {
         )
         .unwrap();
         let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
-        let before_bibliography = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
 
         assert_eq!(
             add(
@@ -1105,10 +1001,6 @@ mod tests {
         assert_eq!(
             fs::read(dir.path().join(MANIFEST_FILE)).unwrap(),
             before_manifest
-        );
-        assert_eq!(
-            fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap(),
-            before_bibliography
         );
 
         // Under overwrite the same explicit-key request rekeys the record.
@@ -1134,7 +1026,6 @@ mod tests {
         let mut manifest = Manifest::create(dir.path()).unwrap();
         add(&mut manifest, vec![inspire("Local", "Provider:One", 1)]).unwrap();
         let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
-        let before_bibliography = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
 
         // Same local key, different record: skipped without touching the files.
         assert_eq!(
@@ -1147,10 +1038,6 @@ mod tests {
         assert_eq!(
             fs::read(dir.path().join(MANIFEST_FILE)).unwrap(),
             before_manifest
-        );
-        assert_eq!(
-            fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap(),
-            before_bibliography
         );
 
         // Overwrite replaces the content in place under the same key.
@@ -1367,22 +1254,14 @@ mod tests {
     }
 
     #[test]
-    fn read_failures_are_not_reported_as_drift() {
+    fn manifest_read_failures_are_reported() {
         let dir = tempfile::tempdir().unwrap();
         Manifest::create(dir.path()).unwrap();
-        let bibliography = dir.path().join(BIBLIOGRAPHY_FILE);
-        fs::remove_file(&bibliography).unwrap();
-        assert!(matches!(
-            Manifest::load_verified(dir.path().join(MANIFEST_FILE)),
-            Err(Error::BibliographyDrift { .. })
-        ));
-        // A directory at the bibliography path makes fs::read fail with an
-        // error other than NotFound, which must surface as a read failure.
-        fs::create_dir(&bibliography).unwrap();
-        assert!(matches!(
-            Manifest::load_verified(dir.path().join(MANIFEST_FILE)),
-            Err(Error::Read { .. })
-        ));
+        let path = dir.path().join(MANIFEST_FILE);
+        fs::remove_file(&path).unwrap();
+        assert!(matches!(Manifest::load(&path), Err(Error::Read { .. })));
+        fs::create_dir(&path).unwrap();
+        assert!(matches!(Manifest::load(&path), Err(Error::Read { .. })));
     }
 
     #[test]
@@ -1565,13 +1444,13 @@ mod tests {
             2
         );
         assert!(manifest.references().contains_key("Imported"));
-        let bibliography = fs::read_to_string(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
+        let bibliography = manifest.render_bibliography().unwrap();
         assert!(bibliography.contains("@misc{LocalA,"), "{bibliography}");
         assert!(bibliography.contains("@misc{LocalB,"), "{bibliography}");
     }
 
     #[test]
-    fn invalid_refresh_record_sets_leave_both_files_unchanged() {
+    fn invalid_refresh_record_sets_leave_the_manifest_unchanged() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
         add(
@@ -1583,7 +1462,6 @@ mod tests {
         )
         .unwrap();
         let before_manifest = fs::read(dir.path().join(MANIFEST_FILE)).unwrap();
-        let before_bibliography = fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap();
         let one = updated("ProviderA", 1, "new");
         let two = updated("ProviderB", 2, "new");
         let unexpected = updated("ProviderC", 3, "new");
@@ -1599,10 +1477,6 @@ mod tests {
             assert_eq!(
                 fs::read(dir.path().join(MANIFEST_FILE)).unwrap(),
                 before_manifest
-            );
-            assert_eq!(
-                fs::read(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap(),
-                before_bibliography
             );
         }
     }
@@ -1628,7 +1502,7 @@ mod tests {
     }
 
     #[test]
-    fn render_derived_matches_the_generated_bibliography_for_an_identity_transform() {
+    fn render_derived_matches_plain_bibliography_for_an_identity_transform() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
         add(
@@ -1640,8 +1514,8 @@ mod tests {
         )
         .unwrap();
         add(&mut manifest, vec![inspire("Rec", "Prov:2026", 7)]).unwrap();
-        // The derived renderer owns layout for every artifact, so the identity
-        // transform must reproduce references.bib byte for byte.
+        // The derived renderer owns layout for every export, so the identity
+        // transform must reproduce the plain bibliography byte for byte.
         assert_eq!(
             manifest
                 .render_derived::<Error>(|_, _, entry| Ok(entry))

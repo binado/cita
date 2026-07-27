@@ -1,12 +1,10 @@
-use super::{add_message, ensure_cache_layout, find_manifest, highlight_style, inspire_client};
+use super::{Target, add_message, highlight_style, inspire_client};
 use anyhow::{Context, Result};
 use cita_core::{Locator, MetadataProvider, Reference, ReferenceSource};
 use cita_documents::{
     ArtifactKind, DocumentStore, Error as DocumentError, FetchOutcome, FetchPolicy, arxiv_pdf_url,
 };
-use cita_manifest::{
-    AddOutcome, ConflictPolicy, KeyRequest, Manifest, PendingReference, SourceSnapshot,
-};
+use cita_manifest::{AddOutcome, ConflictPolicy, KeyRequest, PendingReference, SourceSnapshot};
 use std::{
     fmt,
     io::{self, IsTerminal},
@@ -17,19 +15,19 @@ use std::{
 struct Selected {
     key: String,
     reference: Reference,
-    manifest_path: PathBuf,
+    files_root: PathBuf,
     save_outcome: Option<AddOutcome>,
 }
 
-async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
-    let path = find_manifest(cwd)?;
-    let mut manifest = Manifest::load_verified(&path)?;
+async fn select(target: &Target, selector: &str, save: bool) -> Result<Selected> {
+    let _lock = save.then(|| target.lock()).transpose()?;
+    let mut manifest = target.load()?;
     if let Some(item) = manifest.find(selector)? {
         let save_outcome = save.then(|| AddOutcome::Existing(item.key.clone()));
         return Ok(Selected {
             key: item.key,
             reference: item.reference,
-            manifest_path: path,
+            files_root: target.files_root(),
             save_outcome,
         });
     }
@@ -60,7 +58,7 @@ async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
         Ok(Selected {
             key,
             reference,
-            manifest_path: path,
+            files_root: target.files_root(),
             save_outcome: Some(outcome),
         })
     } else {
@@ -68,7 +66,7 @@ async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
         Ok(Selected {
             key: selector.into(),
             reference,
-            manifest_path: path,
+            files_root: target.files_root(),
             save_outcome: None,
         })
     }
@@ -84,7 +82,7 @@ pub(crate) struct FetchOptions {
     pub(crate) save: bool,
 }
 
-pub(crate) async fn fetch(cwd: &Path, selector: &str, options: FetchOptions) -> Result<()> {
+pub(crate) async fn fetch(target: &Target, selector: &str, options: FetchOptions) -> Result<()> {
     let policy = if options.force {
         FetchPolicy::Force
     } else if options.cache_only {
@@ -97,7 +95,7 @@ pub(crate) async fn fetch(cwd: &Path, selector: &str, options: FetchOptions) -> 
     } else {
         ArtifactKind::Pdf
     };
-    let selected = select(cwd, selector, options.save).await?;
+    let selected = select(target, selector, options.save).await?;
     if let Some(outcome) = &selected.save_outcome {
         eprintln!(
             "{}",
@@ -114,7 +112,7 @@ pub(crate) async fn fetch(cwd: &Path, selector: &str, options: FetchOptions) -> 
     let target = if options.return_url {
         FetchTarget::Url(url)
     } else {
-        let outcome = fetch_selected(&selected.manifest_path, arxiv, kind, policy).await?;
+        let outcome = fetch_selected(&selected.files_root, arxiv, kind, policy).await?;
         eprintln!("{}", fetch_message(&selected.key, &url, kind, &outcome));
         FetchTarget::Path(outcome.path().to_owned())
     };
@@ -151,16 +149,12 @@ fn open_target(target: &FetchTarget) -> Result<()> {
 }
 
 async fn fetch_selected(
-    path: &Path,
+    files_root: &Path,
     arxiv: &str,
     kind: ArtifactKind,
     policy: FetchPolicy,
 ) -> Result<FetchOutcome> {
-    let root = path.parent().unwrap_or_else(|| Path::new("."));
-    if policy != FetchPolicy::CacheOnly {
-        ensure_cache_layout(root)?;
-    }
-    DocumentStore::new(root.join(".cita/files"))?
+    DocumentStore::new(files_root)?
         .fetch_artifact(arxiv, kind, policy)
         .await
         .map_err(document_error_with_hint)

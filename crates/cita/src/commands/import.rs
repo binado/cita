@@ -1,21 +1,23 @@
-use super::{find_manifest, print_add_outcomes};
+use super::{Target, print_add_outcomes};
 use anyhow::{Context, Result};
 use cita_bibliography::parse as parse_bibtex;
-use cita_manifest::{ConflictPolicy, KeyRequest, Manifest, PendingReference, SourceSnapshot};
+use cita_manifest::{ConflictPolicy, KeyRequest, PendingReference, SourceSnapshot};
 use std::{
     fs,
     io::{self, Read},
     path::Path,
 };
 
-pub(crate) fn import(cwd: &Path, input: &str, overwrite: bool) -> Result<()> {
+pub(crate) fn import(target: &Target, caller: &Path, input: &str, overwrite: bool) -> Result<()> {
     let mut source = String::new();
     if input == "-" {
         io::stdin()
             .read_to_string(&mut source)
             .context("could not read BibTeX from stdin")?;
     } else {
-        source = fs::read_to_string(input).with_context(|| format!("could not read {input}"))?;
+        let path = caller.join(input);
+        source = fs::read_to_string(&path)
+            .with_context(|| format!("could not read {}", path.display()))?;
     }
     let pending = parse_bibtex(&source)?
         .into_iter()
@@ -29,7 +31,8 @@ pub(crate) fn import(cwd: &Path, input: &str, overwrite: bool) -> Result<()> {
     } else {
         ConflictPolicy::Skip
     };
-    let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
+    let _lock = target.lock()?;
+    let mut manifest = target.load()?;
     let outcomes = manifest.add_batch(pending, policy)?;
     print_add_outcomes(&outcomes);
     Ok(())

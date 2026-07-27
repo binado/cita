@@ -1,11 +1,10 @@
-use super::{find_manifest, inspire_client, print_add_outcomes};
+use super::{Target, inspire_client, print_add_outcomes};
 use anyhow::{Result, bail};
 use cita_core::{Locator, MetadataProvider};
-use cita_manifest::{ConflictPolicy, KeyRequest, Manifest, PendingReference, SourceSnapshot};
-use std::path::Path;
+use cita_manifest::{ConflictPolicy, KeyRequest, PendingReference, SourceSnapshot};
 
 pub(crate) async fn add(
-    cwd: &Path,
+    target: &Target,
     explicit_key: Option<&str>,
     values: &[String],
     overwrite: bool,
@@ -35,7 +34,8 @@ pub(crate) async fn add(
     } else {
         ConflictPolicy::Skip
     };
-    let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
+    let _lock = target.lock()?;
+    let mut manifest = target.load()?;
     let outcomes = manifest.add_batch(pending, policy)?;
     print_add_outcomes(&outcomes);
     Ok(())

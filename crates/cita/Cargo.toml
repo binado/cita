@@ -1,6 +1,6 @@
 [package]
 name = "cita"
-description = "A Git-friendly bibliography database"
+description = "A personal bibliography library"
 readme = "../../README.md"
 keywords = ["bibliography", "bibtex", "citations", "inspirehep"]
 categories = ["command-line-utilities", "science"]

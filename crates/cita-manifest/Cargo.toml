@@ -1,6 +1,6 @@
 [package]
 name = "cita-manifest"
-description = "Authoritative source-snapshot storage for Cita"
+description = "Global library and authoritative shelf storage for Cita"
 readme = "README.md"
 keywords = ["bibliography", "bibtex", "citations"]
 categories = ["command-line-utilities", "science"]
@@ -15,6 +15,7 @@ authors.workspace = true
 cita-bibliography.workspace = true
 cita-core.workspace = true
 cita-inspire-client.workspace = true
+fs2.workspace = true
 serde.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true

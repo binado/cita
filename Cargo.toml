@@ -29,6 +29,7 @@ cita-documents = { path = "crates/cita-documents", version = "0.5.0" }
 cita-inspire-client = { path = "crates/cita-inspire-client", version = "0.5.0" }
 cita-manifest = { path = "crates/cita-manifest", version = "0.5.0" }
 flate2 = "1"
+fs2 = "0.4"
 httpdate = "1"
 opener = "0.8.5"
 percent-encoding = "2.3.2"

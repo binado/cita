@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- add global library persistence, deterministic shelf paths, and advisory locks
+
+### Removed
+
+- remove generated-bibliography coordination and arbitrary shelf registration
+  paths
+
 ## [0.5.0](https://github.com/binado/cita/compare/cita-manifest-v0.4.0...cita-manifest-v0.5.0) - 2026-07-28
 
 ### Other

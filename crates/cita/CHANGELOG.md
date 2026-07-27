@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- add a lazily initialized global personal library with named shelves and a
+  shared document cache
+- add deterministic positional and all-shelf BibTeX exports
+- add advisory locks that prevent concurrent shelf mutations from losing data
+
+### Removed
+
+- remove local project discovery, generated `references.bib`, `generate`,
+  `commit`, and the path-based `library` command tree
+
 ## [0.4.0](https://github.com/binado/cita/compare/cita-v0.3.2...cita-v0.4.0) - 2026-07-25
 
 ### Added

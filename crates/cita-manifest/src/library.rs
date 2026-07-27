@@ -1,66 +1,81 @@
-//! Schema-1 library registry storage and shelf-path validation.
+//! Schema-1 global library registry and shelf locking.
 
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
-    fs,
+    collections::BTreeSet,
+    env,
+    fs::{self, File, OpenOptions},
     io::Write,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
-use crate::{BIBLIOGRAPHY_FILE, MANIFEST_FILE, SCHEMA};
+use crate::{MANIFEST_FILE, Manifest, SCHEMA};
 
-/// Name of the library registry.
-pub const LIBRARY_FILE: &str = "cita-library.toml";
+/// Name of the global library registry.
+pub const LIBRARY_FILE: &str = "library.toml";
+/// Fixed default shelf name.
+pub const DEFAULT_SHELF: &str = "main";
 
-/// A registered, independently managed cita project.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Shelf {
-    path: PathBuf,
-}
-
-impl Shelf {
-    /// Return the shelf path relative to the library root.
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-/// A loaded schema-1 library registry.
+/// A loaded schema-1 global library registry.
 #[derive(Clone, Debug)]
 pub struct Library {
-    path: PathBuf,
-    shelves: BTreeMap<String, Shelf>,
+    root: PathBuf,
+    shelves: BTreeSet<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LibraryData {
     schema: u32,
-    #[serde(default)]
-    shelves: BTreeMap<String, ShelfData>,
+    default: String,
+    shelves: BTreeSet<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ShelfData {
-    path: String,
+/// An exclusive advisory lock for one shelf.
+#[derive(Debug)]
+pub struct ShelfLock {
+    _file: File,
 }
 
-/// Error produced by library discovery, validation, or persistence.
+/// Error produced by global library loading, validation, locking, or persistence.
 #[derive(Debug, Error)]
 pub enum LibraryError {
-    /// No registry was found during ancestor discovery.
-    #[error("no cita-library.toml found in {start} or its parents; run `cita library init`")]
-    NotFound {
-        /// Directory where discovery began.
-        start: PathBuf,
+    /// The global library root is not absolute.
+    #[error("cita home must be an absolute path: {0}")]
+    RelativeRoot(PathBuf),
+    /// The explicit global library root is empty.
+    #[error("CITA_HOME cannot be empty")]
+    EmptyRoot,
+    /// No operating-system home directory is available.
+    #[error("could not determine the home directory; set CITA_HOME to an absolute path")]
+    HomeUnavailable,
+    /// A managed directory could not be created.
+    #[error("could not create {path}: {source}")]
+    CreateDirectory {
+        /// Directory that could not be created.
+        path: PathBuf,
+        /// Underlying filesystem error.
+        source: std::io::Error,
     },
-    /// The requested library root is not an existing directory.
-    #[error("library path {0} is not an existing directory")]
-    NotDirectory(PathBuf),
+    /// A managed directory is not a direct directory.
+    #[error("invalid managed directory {path}: {message}")]
+    InvalidDirectory {
+        /// Invalid directory.
+        path: PathBuf,
+        /// Validation diagnostic.
+        message: String,
+    },
+    /// A managed file is not a direct regular file.
+    #[error("invalid managed file {path}: {message}")]
+    InvalidFile {
+        /// Invalid file.
+        path: PathBuf,
+        /// Validation diagnostic.
+        message: String,
+    },
     /// A managed file could not be read.
     #[error("could not read {path}: {source}")]
     Read {
@@ -79,46 +94,33 @@ pub enum LibraryError {
     },
     /// The registry uses an unsupported schema.
     #[error(
-        "unsupported cita-library.toml schema {found}; this version supports schema 1 and provides no legacy migration"
+        "unsupported library.toml schema {found}; this version supports schema 1 and provides no legacy migration"
     )]
     UnsupportedSchema {
         /// Schema value found in the file.
         found: i64,
     },
-    /// A library root also contains shelf-level managed artifacts.
-    #[error("library root cannot contain shelf artifact {0}")]
-    RootShelf(PathBuf),
     /// A shelf name is malformed.
     #[error("invalid shelf name `{0}`; names must match [A-Za-z0-9][A-Za-z0-9._-]*")]
     InvalidName(String),
-    /// A shelf path is malformed, unsafe, missing, escapes the library root,
-    /// or overlaps another shelf.
-    #[error("invalid path for shelf `{name}`: {message}")]
-    InvalidPath {
-        /// Shelf whose path is invalid.
+    /// A requested shelf is not registered.
+    #[error("unknown shelf `{0}`")]
+    UnknownShelf(String),
+    /// A shelf path is missing, malformed, or a symlink.
+    #[error("invalid shelf `{name}`: {message}")]
+    InvalidShelf {
+        /// Shelf name.
         name: String,
         /// Validation diagnostic.
         message: String,
     },
-    /// A requested shelf is not registered.
-    #[error("unknown shelf `{0}`")]
-    UnknownShelf(String),
-    /// A shelf name is already registered with another path.
-    #[error("shelf `{name}` is already registered at {path}")]
-    AlreadyRegistered {
-        /// Stable shelf name.
-        name: String,
-        /// Existing relative path.
+    /// A managed lock could not be acquired.
+    #[error("could not lock {path}: {source}")]
+    Lock {
+        /// Lock file path.
         path: PathBuf,
-    },
-    /// A loaded registry's shelves failed validation.
-    #[error("invalid library {path}: {source}")]
-    InvalidShelf {
-        /// Invalid registry path.
-        path: PathBuf,
-        /// The specific validation failure.
-        #[source]
-        source: Box<LibraryError>,
+        /// Underlying filesystem error.
+        source: std::io::Error,
     },
     /// The registry could not be serialized.
     #[error("could not serialize library: {0}")]
@@ -131,47 +133,86 @@ pub enum LibraryError {
         /// Underlying filesystem error.
         source: std::io::Error,
     },
+    /// A shelf manifest is invalid.
+    #[error("invalid shelf `{name}`: {source}")]
+    Manifest {
+        /// Shelf name.
+        name: String,
+        /// Manifest error.
+        #[source]
+        source: crate::Error,
+    },
+}
+
+/// Resolve the user-global library root from `CITA_HOME` or the home directory.
+pub fn global_library_root() -> Result<PathBuf, LibraryError> {
+    if let Some(configured) = env::var_os("CITA_HOME") {
+        if configured.is_empty() {
+            return Err(LibraryError::EmptyRoot);
+        }
+        let path = PathBuf::from(configured);
+        if !path.is_absolute() {
+            return Err(LibraryError::RelativeRoot(path));
+        }
+        return Ok(path);
+    }
+    let home = env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .ok_or(LibraryError::HomeUnavailable)?;
+    let home = PathBuf::from(home);
+    if !home.is_absolute() {
+        return Err(LibraryError::RelativeRoot(home));
+    }
+    Ok(home.join(".cita"))
 }
 
 impl Library {
-    /// Create an empty registry, or load an existing valid registry.
-    pub fn create(directory: impl AsRef<Path>) -> Result<Self, LibraryError> {
-        let root = directory.as_ref();
-        if !root.is_dir() {
-            return Err(LibraryError::NotDirectory(root.to_path_buf()));
+    /// Open the global library, creating it and the default shelf when absent.
+    pub fn open_or_create(root: impl AsRef<Path>) -> Result<Self, LibraryError> {
+        let root = root.as_ref();
+        if !root.is_absolute() {
+            return Err(LibraryError::RelativeRoot(root.to_path_buf()));
         }
-        reject_root_shelf(root)?;
-        let path = root.join(LIBRARY_FILE);
-        if path.exists() {
-            return Self::load(path);
+        create_directory(root)?;
+        ensure_managed_directory(&root.join("locks"))?;
+        let _lock = lock_file(&root.join("locks/library.lock"))?;
+        ensure_managed_directory(&root.join("shelves"))?;
+        ensure_managed_directory(&root.join("files"))?;
+        let registry = root.join(LIBRARY_FILE);
+        match fs::symlink_metadata(&registry) {
+            Ok(_) => {
+                validate_managed_file(&registry)?;
+                return Self::load(root);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(LibraryError::Read {
+                    path: registry,
+                    source,
+                });
+            }
         }
+        ensure_shelf_manifest(root, DEFAULT_SHELF)?;
+        let shelves = BTreeSet::from([DEFAULT_SHELF.to_owned()]);
         let library = Self {
-            path,
-            shelves: BTreeMap::new(),
+            root: root.to_path_buf(),
+            shelves,
         };
         library.persist(&library.shelves)?;
         Ok(library)
     }
 
-    /// Search a directory and its ancestors for a registry, then load it.
-    pub fn discover(start: impl AsRef<Path>) -> Result<Self, LibraryError> {
-        let start = start.as_ref();
-        for directory in start.ancestors() {
-            let candidate = directory.join(LIBRARY_FILE);
-            if candidate.is_file() {
-                return Self::load(candidate);
-            }
+    /// Load and validate an existing global library.
+    pub fn load(root: impl AsRef<Path>) -> Result<Self, LibraryError> {
+        let root = root.as_ref().to_path_buf();
+        if !root.is_absolute() {
+            return Err(LibraryError::RelativeRoot(root));
         }
-        Err(LibraryError::NotFound {
-            start: start.to_path_buf(),
-        })
-    }
-
-    /// Load and validate a registry and all registered paths.
-    ///
-    /// Shelf manifests and generated bibliographies are deliberately not read.
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, LibraryError> {
-        let path = path.as_ref().to_path_buf();
+        for directory in ["locks", "shelves", "files"] {
+            validate_managed_directory(&root.join(directory))?;
+        }
+        let path = root.join(LIBRARY_FILE);
+        validate_managed_file(&path)?;
         let source = fs::read_to_string(&path).map_err(|source| LibraryError::Read {
             path: path.clone(),
             source,
@@ -195,153 +236,109 @@ impl Library {
             path: path.clone(),
             message: error.to_string(),
         })?;
-        reject_root_shelf(root_of(&path))?;
-        let shelves = data
-            .shelves
-            .into_iter()
-            .map(|(name, shelf)| {
-                (
-                    name,
-                    Shelf {
-                        path: shelf.path.into(),
-                    },
-                )
-            })
-            .collect();
-        let library = Self { path, shelves };
-        library
-            .validate_shelves(false)
-            .map_err(|error| LibraryError::InvalidShelf {
-                path: library.path.clone(),
-                source: Box::new(error),
-            })?;
-        Ok(library)
+        if value
+            .get("shelves")
+            .and_then(toml::Value::as_array)
+            .is_some_and(|values| values.len() != data.shelves.len())
+        {
+            return Err(LibraryError::Invalid {
+                path,
+                message: "registered shelf names must be unique".into(),
+            });
+        }
+        if data.default != DEFAULT_SHELF {
+            return Err(LibraryError::Invalid {
+                path,
+                message: format!("default shelf must be `{DEFAULT_SHELF}`"),
+            });
+        }
+        if !data.shelves.contains(DEFAULT_SHELF) {
+            return Err(LibraryError::Invalid {
+                path,
+                message: format!("registered shelves must contain `{DEFAULT_SHELF}`"),
+            });
+        }
+        for name in &data.shelves {
+            validate_shelf_name(name)?;
+            validate_shelf_manifest(&root, name)?;
+        }
+        validate_unique_shelf_paths(&root, &data.shelves)?;
+        Ok(Self {
+            root,
+            shelves: data.shelves,
+        })
+    }
+
+    /// Return the global store root.
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     /// Return the registry path.
-    pub fn path(&self) -> &Path {
-        &self.path
+    pub fn path(&self) -> PathBuf {
+        self.root.join(LIBRARY_FILE)
     }
 
-    /// Return the library root.
-    pub fn root(&self) -> &Path {
-        root_of(&self.path)
+    /// Return the shared document-cache root.
+    pub fn files_root(&self) -> PathBuf {
+        self.root.join("files")
     }
 
-    /// Return registered shelves in stable name order.
-    pub fn shelves(&self) -> &BTreeMap<String, Shelf> {
+    /// Return registered shelf names in stable order.
+    pub fn shelves(&self) -> &BTreeSet<String> {
         &self.shelves
     }
 
-    /// Return a shelf by its stable name.
-    pub fn shelf(&self, name: &str) -> Result<&Shelf, LibraryError> {
-        self.shelves
-            .get(name)
-            .ok_or_else(|| LibraryError::UnknownShelf(name.into()))
-    }
-
-    /// Resolve a registered shelf to its library-root-relative directory.
-    pub fn shelf_directory(&self, name: &str) -> Result<PathBuf, LibraryError> {
-        Ok(self.root().join(self.shelf(name)?.path()))
-    }
-
-    /// Validate a proposed registration before creating its directory.
-    pub fn validate_registration(
-        &self,
-        name: &str,
-        path: impl AsRef<Path>,
-    ) -> Result<(), LibraryError> {
-        validate_name(name)?;
-        match self.candidate_shelves(name, path)? {
-            Some(candidate) => validate_shelf_set(self.root(), &candidate, false),
-            None => Ok(()),
+    /// Return the deterministic manifest path for a registered shelf.
+    pub fn shelf_manifest(&self, name: &str) -> Result<PathBuf, LibraryError> {
+        if !self.shelves.contains(name) {
+            return Err(LibraryError::UnknownShelf(name.into()));
         }
+        validate_shelf_manifest(&self.root, name)
     }
 
-    /// Atomically register an initialized shelf.
-    pub fn register(
-        &mut self,
-        name: impl Into<String>,
-        path: impl AsRef<Path>,
-    ) -> Result<(), LibraryError> {
-        let name = name.into();
-        match self.candidate_shelves(&name, path)? {
-            Some(candidate) => {
-                validate_shelf_set(self.root(), &candidate, true)?;
-                self.persist(&candidate)?;
-                self.shelves = candidate;
-                Ok(())
-            }
-            None => Ok(()),
+    /// Create and register an empty shelf, or validate an existing registration.
+    pub fn create_shelf(&mut self, name: &str) -> Result<bool, LibraryError> {
+        validate_shelf_name(name)?;
+        let _lock = lock_file(&self.root.join("locks/library.lock"))?;
+        let current = Self::load(&self.root)?;
+        if current.shelves.contains(name) {
+            validate_shelf_manifest(&self.root, name)?;
+            self.shelves = current.shelves;
+            return Ok(false);
         }
+        ensure_shelf_manifest(&self.root, name)?;
+        let mut candidate = current.shelves;
+        candidate.insert(name.into());
+        validate_unique_shelf_paths(&self.root, &candidate)?;
+        self.persist(&candidate)?;
+        self.shelves = candidate;
+        Ok(true)
     }
 
-    /// Return the shelf map with `name`/`path` inserted, or `None` if that
-    /// exact name/path pair is already registered (a no-op registration).
-    fn candidate_shelves(
-        &self,
-        name: &str,
-        path: impl AsRef<Path>,
-    ) -> Result<Option<BTreeMap<String, Shelf>>, LibraryError> {
-        if let Some(existing) = self.shelves.get(name) {
-            if existing.path == path.as_ref() {
-                return Ok(None);
-            }
-            return Err(LibraryError::AlreadyRegistered {
-                name: name.into(),
-                path: existing.path.clone(),
-            });
-        }
-        let mut candidate = self.shelves.clone();
-        candidate.insert(
-            name.into(),
-            Shelf {
-                path: path.as_ref().to_path_buf(),
-            },
-        );
-        Ok(Some(candidate))
+    /// Acquire the exclusive advisory lock for a shelf mutation.
+    pub fn lock_shelf(&self, name: &str) -> Result<ShelfLock, LibraryError> {
+        self.shelf_manifest(name)?;
+        let file = lock_file(&self.root.join("locks").join(format!("{name}.lock")))?;
+        Ok(ShelfLock { _file: file })
     }
 
-    fn validate_shelves(&self, require_exists: bool) -> Result<(), LibraryError> {
-        validate_shelf_set(self.root(), &self.shelves, require_exists)
-    }
-
-    fn persist(&self, shelves: &BTreeMap<String, Shelf>) -> Result<(), LibraryError> {
+    fn persist(&self, shelves: &BTreeSet<String>) -> Result<(), LibraryError> {
         let data = LibraryData {
             schema: SCHEMA,
-            shelves: shelves
-                .iter()
-                .map(|(name, shelf)| {
-                    let path = shelf
-                        .path
-                        .to_str()
-                        .ok_or_else(|| LibraryError::InvalidPath {
-                            name: name.clone(),
-                            message: "path is not valid UTF-8".into(),
-                        })?;
-                    Ok((name.clone(), ShelfData { path: path.into() }))
-                })
-                .collect::<Result<_, LibraryError>>()?,
+            default: DEFAULT_SHELF.into(),
+            shelves: shelves.clone(),
         };
         let mut rendered = toml::to_string_pretty(&data)?;
         if !rendered.ends_with('\n') {
             rendered.push('\n');
         }
-        atomic_write(&self.path, rendered.as_bytes())
+        atomic_write(&self.path(), rendered.as_bytes())
     }
 }
 
-/// Return `path`'s parent directory, treating a missing or empty parent
-/// (as returned for a bare relative file name like `cita-library.toml`) as
-/// the current directory.
-fn root_of(path: &Path) -> &Path {
-    match path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent,
-        _ => Path::new("."),
-    }
-}
-
-fn validate_name(name: &str) -> Result<(), LibraryError> {
+/// Validate a stable shelf name.
+pub fn validate_shelf_name(name: &str) -> Result<(), LibraryError> {
     let mut bytes = name.bytes();
     if !bytes
         .next()
@@ -353,121 +350,177 @@ fn validate_name(name: &str) -> Result<(), LibraryError> {
     Ok(())
 }
 
-fn validate_shelf_set(
-    root: &Path,
-    shelves: &BTreeMap<String, Shelf>,
-    require_exists: bool,
-) -> Result<(), LibraryError> {
-    let canonical_root = fs::canonicalize(root).map_err(|source| LibraryError::Read {
-        path: root.to_path_buf(),
+fn shelf_directory(root: &Path, name: &str) -> PathBuf {
+    root.join("shelves").join(name)
+}
+
+fn ensure_shelf_manifest(root: &Path, name: &str) -> Result<PathBuf, LibraryError> {
+    validate_shelf_name(name)?;
+    let directory = shelf_directory(root, name);
+    match fs::symlink_metadata(&directory) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(LibraryError::InvalidShelf {
+                name: name.into(),
+                message: "shelf directory cannot be a symlink".into(),
+            });
+        }
+        Ok(metadata) if !metadata.is_dir() => {
+            return Err(LibraryError::InvalidShelf {
+                name: name.into(),
+                message: format!("{} is not a directory", directory.display()),
+            });
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            create_directory(&directory)?;
+        }
+        Err(source) => {
+            return Err(LibraryError::Read {
+                path: directory,
+                source,
+            });
+        }
+    }
+    let path = directory.join(MANIFEST_FILE);
+    match fs::symlink_metadata(&path) {
+        Ok(_) => {
+            validate_managed_file(&path)?;
+            Manifest::load(&path).map_err(|source| LibraryError::Manifest {
+                name: name.into(),
+                source,
+            })?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Manifest::create(&path).map_err(|source| LibraryError::Manifest {
+                name: name.into(),
+                source,
+            })?;
+        }
+        Err(source) => return Err(LibraryError::Read { path, source }),
+    }
+    Ok(path)
+}
+
+fn validate_shelf_manifest(root: &Path, name: &str) -> Result<PathBuf, LibraryError> {
+    let directory = shelf_directory(root, name);
+    let metadata = fs::symlink_metadata(&directory).map_err(|source| LibraryError::Read {
+        path: directory.clone(),
         source,
     })?;
-    let mut resolved = Vec::<(&str, PathBuf)>::new();
-    for (name, shelf) in shelves {
-        validate_name(name)?;
-        validate_relative_path(name, &shelf.path)?;
-        let target = root.join(&shelf.path);
-        if require_exists && !target.is_dir() {
-            return Err(LibraryError::InvalidPath {
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(LibraryError::InvalidShelf {
+            name: name.into(),
+            message: format!("{} must be a direct directory", directory.display()),
+        });
+    }
+    let path = directory.join(MANIFEST_FILE);
+    let metadata = fs::symlink_metadata(&path).map_err(|source| LibraryError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(LibraryError::InvalidShelf {
+            name: name.into(),
+            message: format!("{} must be a direct file", path.display()),
+        });
+    }
+    Ok(path)
+}
+
+fn validate_unique_shelf_paths(
+    root: &Path,
+    shelves: &BTreeSet<String>,
+) -> Result<(), LibraryError> {
+    let mut resolved = Vec::<(String, PathBuf)>::new();
+    for name in shelves {
+        let directory =
+            fs::canonicalize(shelf_directory(root, name)).map_err(|source| LibraryError::Read {
+                path: shelf_directory(root, name),
+                source,
+            })?;
+        if let Some((other, _)) = resolved.iter().find(|(_, existing)| existing == &directory) {
+            return Err(LibraryError::InvalidShelf {
                 name: name.clone(),
-                message: format!("{} is not an existing directory", shelf.path.display()),
+                message: format!("directory aliases registered shelf `{other}`"),
             });
         }
-        let canonical_target = resolve_with_existing_ancestor(&target).map_err(|source| {
-            LibraryError::InvalidPath {
-                name: name.clone(),
-                message: format!("could not resolve {}: {source}", shelf.path.display()),
-            }
+        resolved.push((name.clone(), directory));
+    }
+    Ok(())
+}
+
+fn create_directory(path: &Path) -> Result<(), LibraryError> {
+    fs::create_dir_all(path).map_err(|source| LibraryError::CreateDirectory {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+fn ensure_managed_directory(path: &Path) -> Result<(), LibraryError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => validate_managed_directory(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => create_directory(path),
+        Err(source) => Err(LibraryError::Read {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+fn validate_managed_directory(path: &Path) -> Result<(), LibraryError> {
+    let metadata = fs::symlink_metadata(path).map_err(|source| LibraryError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(LibraryError::InvalidDirectory {
+            path: path.to_path_buf(),
+            message: "must be a direct directory".into(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_managed_file(path: &Path) -> Result<(), LibraryError> {
+    let metadata = fs::symlink_metadata(path).map_err(|source| LibraryError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(LibraryError::InvalidFile {
+            path: path.to_path_buf(),
+            message: "must be a direct regular file".into(),
+        });
+    }
+    Ok(())
+}
+
+fn lock_file(path: &Path) -> Result<File, LibraryError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => validate_managed_file(path)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(LibraryError::Read {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    }
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|source| LibraryError::Lock {
+            path: path.to_path_buf(),
+            source,
         })?;
-        if canonical_target == canonical_root || !canonical_target.starts_with(&canonical_root) {
-            return Err(LibraryError::InvalidPath {
-                name: name.clone(),
-                message: "path resolves to or outside the library root".into(),
-            });
-        }
-        for (other_name, other_path) in &resolved {
-            if canonical_target == *other_path
-                || canonical_target.starts_with(other_path)
-                || other_path.starts_with(&canonical_target)
-            {
-                return Err(LibraryError::InvalidPath {
-                    name: name.clone(),
-                    message: format!(
-                        "path is equal to, nested within, contains, or aliases shelf `{other_name}`"
-                    ),
-                });
-            }
-        }
-        resolved.push((name, canonical_target));
-    }
-    Ok(())
-}
-
-fn validate_relative_path(name: &str, path: &Path) -> Result<(), LibraryError> {
-    if path.as_os_str().is_empty() || path == Path::new(".") || path.is_absolute() {
-        return Err(LibraryError::InvalidPath {
-            name: name.into(),
-            message: "path must be a non-empty relative path other than `.`".into(),
-        });
-    }
-    if path.to_str().is_none() {
-        return Err(LibraryError::InvalidPath {
-            name: name.into(),
-            message: "path is not valid UTF-8".into(),
-        });
-    }
-    if path.components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    }) {
-        return Err(LibraryError::InvalidPath {
-            name: name.into(),
-            message: "path cannot contain `..` components".into(),
-        });
-    }
-    Ok(())
-}
-
-fn resolve_with_existing_ancestor(path: &Path) -> std::io::Result<PathBuf> {
-    let mut ancestor = path;
-    let mut suffix = Vec::new();
-    loop {
-        match fs::symlink_metadata(ancestor) {
-            Ok(_) => break,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let name = ancestor.file_name().ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "path has no existing ancestor",
-                    )
-                })?;
-                suffix.push(name.to_owned());
-                ancestor = ancestor.parent().ok_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no parent")
-                })?;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    let mut resolved = fs::canonicalize(ancestor)?;
-    for component in suffix.into_iter().rev() {
-        resolved.push(component);
-    }
-    Ok(resolved)
-}
-
-fn reject_root_shelf(root: &Path) -> Result<(), LibraryError> {
-    for file in [MANIFEST_FILE, BIBLIOGRAPHY_FILE] {
-        let path = root.join(file);
-        match fs::symlink_metadata(&path) {
-            Ok(_) => return Err(LibraryError::RootShelf(path)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(source) => return Err(LibraryError::Read { path, source }),
-        }
-    }
-    Ok(())
+    file.lock_exclusive().map_err(|source| LibraryError::Lock {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(file)
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), LibraryError> {
@@ -502,107 +555,122 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), LibraryError> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn registry_is_sorted_and_load_is_idempotent() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut library = Library::create(directory.path()).unwrap();
-        fs::create_dir(directory.path().join("z")).unwrap();
-        fs::create_dir(directory.path().join("a")).unwrap();
-        library.register("z-shelf", "z").unwrap();
-        library.register("a-shelf", "a").unwrap();
-
-        let rendered = fs::read_to_string(directory.path().join(LIBRARY_FILE)).unwrap();
-        assert!(
-            rendered.find("[shelves.a-shelf]").unwrap()
-                < rendered.find("[shelves.z-shelf]").unwrap()
-        );
-        assert_eq!(
-            Library::create(directory.path()).unwrap().shelves(),
-            library.shelves()
-        );
+    fn root() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 
     #[test]
-    fn rejects_names_escapes_duplicates_nesting_and_unknown_data() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut library = Library::create(directory.path()).unwrap();
-        fs::create_dir(directory.path().join("one")).unwrap();
-        fs::create_dir(directory.path().join("one/nested")).unwrap();
+    fn initialization_creates_main_and_is_idempotent() {
+        let directory = root();
+        let mut path = directory.path().to_path_buf();
+        path.push("home");
+        let first = Library::open_or_create(&path).unwrap();
+        assert_eq!(first.shelves(), &BTreeSet::from(["main".into()]));
+        assert!(path.join("shelves/main/shelf.toml").is_file());
+        assert!(path.join("files").is_dir());
+        assert_eq!(
+            Library::open_or_create(&path).unwrap().shelves(),
+            first.shelves()
+        );
+        fs::remove_dir(path.join("files")).unwrap();
+        Library::open_or_create(&path).unwrap();
+        assert!(path.join("files").is_dir());
+    }
+
+    #[test]
+    fn registry_and_shelves_are_sorted_and_validated() {
+        let directory = root();
+        let path = directory.path().join("home");
+        let mut library = Library::open_or_create(&path).unwrap();
+        assert!(library.create_shelf("zeta").unwrap());
+        assert!(library.create_shelf("alpha").unwrap());
+        assert!(!library.create_shelf("alpha").unwrap());
+        assert_eq!(
+            library
+                .shelves()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["alpha", "main", "zeta"]
+        );
+        let rendered = fs::read_to_string(path.join(LIBRARY_FILE)).unwrap();
+        assert!(rendered.find("\"alpha\"").unwrap() < rendered.find("\"zeta\"").unwrap());
+    }
+
+    #[test]
+    fn invalid_names_and_registry_shapes_are_rejected() {
+        let directory = root();
+        let path = directory.path().join("home");
+        let mut library = Library::open_or_create(&path).unwrap();
         assert!(matches!(
-            library.validate_registration(".bad", "other"),
+            library.create_shelf(".bad"),
             Err(LibraryError::InvalidName(_))
         ));
-        assert!(
-            library
-                .validate_registration("escape", "../escape")
-                .is_err()
-        );
-        library.register("one", "one").unwrap();
-        assert!(library.validate_registration("duplicate", "one").is_err());
-        assert!(
-            library
-                .validate_registration("nested", "one/nested")
-                .is_err()
-        );
-
         fs::write(
-            directory.path().join(LIBRARY_FILE),
-            "schema = 1\nunknown = true\n",
+            path.join(LIBRARY_FILE),
+            "schema = 1\ndefault = \"other\"\nshelves = [\"main\"]\n",
         )
         .unwrap();
         assert!(matches!(
-            Library::load(directory.path().join(LIBRARY_FILE)),
+            Library::load(&path),
+            Err(LibraryError::Invalid { .. })
+        ));
+        fs::write(
+            path.join(LIBRARY_FILE),
+            "schema = 1\ndefault = \"main\"\nshelves = [\"main\", \"main\"]\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            Library::load(&path),
             Err(LibraryError::Invalid { .. })
         ));
     }
 
     #[test]
-    fn rejects_unsupported_schema_and_root_shelves() {
-        let directory = tempfile::tempdir().unwrap();
-        fs::write(directory.path().join(LIBRARY_FILE), "schema = 2\n").unwrap();
+    fn case_aliases_are_rejected_on_case_insensitive_filesystems() {
+        let directory = root();
+        let path = directory.path().join("home");
+        let mut library = Library::open_or_create(&path).unwrap();
+        library.create_shelf("paper").unwrap();
+        let aliases = path.join("shelves/PAPER").exists();
+        let result = library.create_shelf("PAPER");
+        if aliases {
+            assert!(matches!(result, Err(LibraryError::InvalidShelf { .. })));
+        } else {
+            assert!(result.unwrap());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn direct_shelf_directories_cannot_be_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let directory = root();
+        let path = directory.path().join("home");
+        let outside = root();
+        let mut library = Library::open_or_create(&path).unwrap();
+        symlink(outside.path(), path.join("shelves/alias")).unwrap();
         assert!(matches!(
-            Library::load(directory.path().join(LIBRARY_FILE)),
-            Err(LibraryError::UnsupportedSchema { found: 2 })
-        ));
-        fs::write(directory.path().join(LIBRARY_FILE), "schema = 1\n").unwrap();
-        fs::write(directory.path().join(MANIFEST_FILE), "schema = 1\n").unwrap();
-        assert!(matches!(
-            Library::load(directory.path().join(LIBRARY_FILE)),
-            Err(LibraryError::RootShelf(_))
+            library.create_shelf("alias"),
+            Err(LibraryError::InvalidShelf { .. })
         ));
     }
 
     #[cfg(unix)]
     #[test]
-    fn rejects_symlink_aliases_and_escapes() {
+    fn managed_parent_directories_cannot_be_symlinks() {
         use std::os::unix::fs::symlink;
 
-        let directory = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let mut library = Library::create(directory.path()).unwrap();
-        fs::create_dir(directory.path().join("real")).unwrap();
-        symlink("real", directory.path().join("alias")).unwrap();
-        symlink(outside.path(), directory.path().join("outside")).unwrap();
-        library.register("real", "real").unwrap();
-        assert!(library.validate_registration("alias", "alias").is_err());
-        assert!(library.validate_registration("outside", "outside").is_err());
-    }
-
-    #[test]
-    fn discovery_is_independent_and_walks_ancestors() {
-        let directory = tempfile::tempdir().unwrap();
-        Library::create(directory.path()).unwrap();
-        let nested = directory.path().join("a/b");
-        fs::create_dir_all(&nested).unwrap();
-        assert_eq!(Library::discover(&nested).unwrap().root(), directory.path());
-    }
-
-    #[test]
-    fn root_of_treats_a_bare_relative_name_as_the_current_directory() {
-        assert_eq!(root_of(Path::new(LIBRARY_FILE)), Path::new("."));
-        assert_eq!(
-            root_of(Path::new("dir").join(LIBRARY_FILE).as_path()),
-            Path::new("dir")
-        );
+        let directory = root();
+        let path = directory.path().join("home");
+        let outside = root();
+        fs::create_dir(&path).unwrap();
+        symlink(outside.path(), path.join("shelves")).unwrap();
+        assert!(matches!(
+            Library::open_or_create(&path),
+            Err(LibraryError::InvalidDirectory { .. })
+        ));
+        assert!(!outside.path().join("main").exists());
     }
 }

@@ -1,11 +1,10 @@
-use super::{find_manifest, inspire_client};
+use super::{Target, inspire_client};
 use anyhow::Result;
 use cita_core::MetadataProvider;
-use cita_manifest::Manifest;
-use std::{fmt, path::Path};
+use std::fmt;
 
-pub(crate) async fn sync(cwd: &Path) -> Result<()> {
-    println!("{}", sync_outcome(cwd).await?);
+pub(crate) async fn sync(target: &Target) -> Result<()> {
+    println!("{}", sync_outcome(target).await?);
     Ok(())
 }
 
@@ -61,8 +60,9 @@ impl fmt::Display for SyncOutcome {
     }
 }
 
-pub(crate) async fn sync_outcome(cwd: &Path) -> Result<SyncOutcome> {
-    let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
+pub(crate) async fn sync_outcome(target: &Target) -> Result<SyncOutcome> {
+    let _lock = target.lock()?;
+    let mut manifest = target.load()?;
     let ids = manifest.inspire_record_ids();
     let managed = ids.len();
     let imported = manifest.references().len() - managed;

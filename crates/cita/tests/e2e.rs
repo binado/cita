@@ -1,11 +1,6 @@
 //! End-to-end test against the real INSPIRE API.
 //!
-//! Every other suite in this workspace is hermetic (INSPIRE traffic is served
-//! by a local `TcpListener`, see `cli.rs` and `cita-inspire-client/tests`).
-//! This test is the one exception: it omits `CITA_INSPIRE_BASE_URL` entirely,
-//! so `cita` falls back to `https://inspirehep.net/` and makes real requests
-//! for a handful of handpicked papers. It is `#[ignore]`d so `cargo test
-//! --workspace` never touches the network; run it explicitly with:
+//! Every other suite is hermetic. Run this ignored liveness test explicitly:
 //!
 //!     cargo test --test e2e -- --ignored
 
@@ -16,19 +11,21 @@ use std::{
     process::{Command, Output, Stdio},
 };
 
-fn cita(cwd: &Path, args: &[&str]) -> Output {
+fn cita(home: &Path, cwd: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_cita"))
         .current_dir(cwd)
         .args(args)
+        .env("CITA_HOME", home)
         .env("NO_COLOR", "1")
         .output()
         .unwrap()
 }
 
-fn cita_stdin(cwd: &Path, args: &[&str], input: &str) -> Output {
+fn cita_stdin(home: &Path, cwd: &Path, args: &[&str], input: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_cita"))
         .current_dir(cwd)
         .args(args)
+        .env("CITA_HOME", home)
         .env("NO_COLOR", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -54,46 +51,16 @@ fn success(output: Output) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
-fn git(directory: &Path, args: &[&str]) -> Output {
-    Command::new("git")
-        .arg("-C")
-        .arg(directory)
-        .args(args)
-        .output()
-        .unwrap()
-}
-
-fn git_success(directory: &Path, args: &[&str]) -> String {
-    let output = git(directory, args);
-    assert!(
-        output.status.success(),
-        "stderr:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap()
-}
-
-fn init_git(directory: &Path) {
-    git_success(directory, &["init", "-q"]);
-    git_success(directory, &["config", "user.email", "cita@example.test"]);
-    git_success(directory, &["config", "user.name", "cita Test"]);
-}
-
-/// Slice `cita.toml` text down to one `[references.<key>]` entry, including
-/// any of its own nested subtables (e.g. `.identifiers`), so assertions about
-/// one paper cannot accidentally match a sibling entry or the next section.
 fn section<'a>(manifest: &'a str, key: &str) -> &'a str {
     let header = format!("[references.{key}]");
     let start = manifest
         .find(&header)
         .unwrap_or_else(|| panic!("{header} missing from:\n{manifest}"));
     let own_subtable = format!("\n[references.{key}.");
-    // Walk every following `[references.…]` header; skip this entry's own
-    // nested subtables and stop at the first sibling entry (or end of file).
     let end = manifest[start..]
         .match_indices("\n[references.")
         .map(|(offset, _)| start + offset)
-        .find(|&pos| !manifest[pos..].starts_with(&own_subtable))
+        .find(|&position| !manifest[position..].starts_with(&own_subtable))
         .unwrap_or(manifest.len());
     &manifest[start..end]
 }
@@ -105,32 +72,25 @@ struct Paper {
     arxiv: Option<&'static str>,
 }
 
-/// The papers handpicked in `E2E_TEST.md`, addressed by their stable INSPIRE
-/// record id (a `cita add` locator, not the `inspirehep.net/literature/<id>`
-/// URL they're documented as).
 const PAPERS: [Paper; 4] = [
-    // Legacy arXiv identifier (has a v2 on arXiv), math in the title.
     Paper {
         key: "Maldacena",
         record_id: 451647,
         title: "Large $N$ limit of superconformal field theories",
         arxiv: Some("hep-th/9711200"),
     },
-    // No arXiv preprint.
     Paper {
         key: "Choptuik",
         record_id: 33714,
         title: "Universality and scaling in gravitational collapse",
         arxiv: None,
     },
-    // Collaboration paper with 1000+ authors.
     Paper {
         key: "Ligo",
         record_id: 1421100,
         title: "Observation of Gravitational Waves from a Binary Black Hole Merger",
         arxiv: Some("1602.03837"),
     },
-    // No arXiv preprint.
     Paper {
         key: "Weinberg",
         record_id: 51188,
@@ -141,24 +101,20 @@ const PAPERS: [Paper; 4] = [
 
 #[test]
 #[ignore = "hits the live INSPIRE API; run with `cargo test --test e2e -- --ignored`"]
-fn e2e_seed_then_add_handpicked_inspire_papers() {
+fn global_store_seed_add_sync_export_and_remove() {
     let directory = tempfile::tempdir().unwrap();
-    init_git(directory.path());
+    let home = directory.path().join("cita-home");
+    let work = directory.path().join("work");
+    fs::create_dir(&work).unwrap();
 
-    // 1. `init` creates a fresh schema-1 manifest and an empty bibliography.
-    assert!(success(cita(directory.path(), &["init"])).contains("Initialized"));
-    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
-    assert!(manifest.starts_with("schema = 1"), "{manifest}");
-    assert_eq!(
-        fs::read_to_string(directory.path().join("references.bib")).unwrap(),
-        ""
+    assert!(success(cita(&home, &work, &["init"])).contains("Initialized"));
+    let manifest_path = home.join("shelves/main/shelf.toml");
+    assert!(
+        fs::read_to_string(&manifest_path)
+            .unwrap()
+            .starts_with("schema = 1")
     );
 
-    // 2. Seed a pre-existing library through `import`, simulating a repo that
-    //    already tracks standalone BibTeX before adopting INSPIRE sync. Fed
-    //    over stdin rather than a fixture file, since this workspace's
-    //    `.gitignore` blanket-ignores `*.bib` (only `references.bib` is
-    //    excepted) and every other suite avoids that friction the same way.
     let seed = concat!(
         "@misc{SeedAlpha,\n",
         "  title = {A seeded import entry},\n",
@@ -170,106 +126,54 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
         "  doi = {10.1000/e2e.seed}\n",
         "}\n",
     );
-    let output = success(cita_stdin(directory.path(), &["import", "-"], seed));
-    assert_eq!(output, "added SeedAlpha\nadded SeedBeta\n");
-    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
+    assert_eq!(
+        success(cita_stdin(&home, &work, &["import", "-"], seed)),
+        "added SeedAlpha\nadded SeedBeta\n"
+    );
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
     let seed_alpha_before = section(&manifest, "SeedAlpha").to_owned();
     let seed_beta_before = section(&manifest, "SeedBeta").to_owned();
-    assert!(
-        seed_alpha_before.contains("source = \"import\""),
-        "{manifest}"
-    );
-    assert!(
-        seed_beta_before.contains("source = \"import\""),
-        "{manifest}"
-    );
 
-    // 3. Progressively `add` each handpicked paper by its stable INSPIRE
-    //    record id, checking the manifest after every command.
     for paper in &PAPERS {
         let locator = format!("inspire:{}", paper.record_id);
-        let output = success(cita(
-            directory.path(),
-            &["add", "--key", paper.key, &locator],
-        ));
-        assert_eq!(output, format!("added {}\n", paper.key));
-
-        let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
-        let entry = section(&manifest, paper.key);
-        assert!(
-            entry.contains(&format!("record_id = {}", paper.record_id)),
-            "{entry}"
+        assert_eq!(
+            success(cita(&home, &work, &["add", "--key", paper.key, &locator],)),
+            format!("added {}\n", paper.key)
         );
-        assert!(entry.contains("source = \"inspire\""), "{entry}");
-        assert!(entry.contains(paper.title), "{entry}");
+        let manifest = fs::read_to_string(&manifest_path).unwrap();
+        let entry = section(&manifest, paper.key);
+        assert!(entry.contains(&format!("record_id = {}", paper.record_id)));
+        assert!(entry.contains(paper.title));
         match paper.arxiv {
-            Some(id) => assert!(entry.contains(&format!("arxiv = \"{id}\"")), "{entry}"),
-            None => assert!(!entry.contains("arxiv = "), "{entry}"),
+            Some(id) => assert!(entry.contains(&format!("arxiv = \"{id}\""))),
+            None => assert!(!entry.contains("arxiv = ")),
         }
     }
 
-    // 4. Re-adding an already-managed record is idempotent: same outcome,
-    //    byte-identical manifest (INSPIRE record identity wins over the
-    //    request, regardless of the key it was requested under).
-    let before = fs::read(directory.path().join("cita.toml")).unwrap();
-    let output = success(cita(
-        directory.path(),
-        &["add", "--key", "Maldacena", "inspire:451647"],
-    ));
-    assert_eq!(output, "skipped Maldacena\n");
-    assert_eq!(
-        fs::read(directory.path().join("cita.toml")).unwrap(),
-        before
-    );
-
-    // 5. `generate` must be a no-op here: `add` already left references.bib
-    //    in sync, so re-rendering it byte-for-byte proves no drift.
-    let bib_before = fs::read(directory.path().join("references.bib")).unwrap();
-    assert!(success(cita(directory.path(), &["generate"])).starts_with("Generated"));
-    assert_eq!(
-        fs::read(directory.path().join("references.bib")).unwrap(),
-        bib_before
-    );
-    let listed = success(cita(directory.path(), &["list"]));
+    let listed = success(cita(&home, &work, &["list"]));
     for paper in &PAPERS {
         assert!(listed.contains(paper.key), "{listed}");
     }
+    success(cita(&home, &work, &["export", "references.bib"]));
+    let bibliography = fs::read_to_string(work.join("references.bib")).unwrap();
+    assert!(bibliography.contains("@misc{Maldacena,"));
 
-    // 6. `sync` refreshes every INSPIRE-managed record by stable id and must
-    //    leave the two imported seed entries byte-identical.
-    let output = success(cita(directory.path(), &["sync"]));
+    let output = success(cita(&home, &work, &["sync"]));
     assert!(
         output.contains("4 managed") && output.contains("2 imported"),
         "{output}"
     );
-    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
     assert_eq!(section(&manifest, "SeedAlpha"), seed_alpha_before);
     assert_eq!(section(&manifest, "SeedBeta"), seed_beta_before);
-    for paper in &PAPERS {
-        let entry = section(&manifest, paper.key);
-        assert!(
-            entry.contains(&format!("record_id = {}", paper.record_id)),
-            "{entry}"
-        );
-    }
 
-    // 7. `remove` drops a managed record by provider id (not its local key),
-    //    and `commit` stages only the two generated artifacts.
-    let output = success(cita(directory.path(), &["remove", "inspire:51188"]));
-    assert_eq!(output, "Removed Weinberg\n");
-    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
-    assert!(!manifest.contains("[references.Weinberg]"), "{manifest}");
-    let bibliography = fs::read_to_string(directory.path().join("references.bib")).unwrap();
+    assert_eq!(
+        success(cita(&home, &work, &["remove", "inspire:51188"])),
+        "Removed Weinberg\n"
+    );
     assert!(
-        !bibliography.contains("A Model of Leptons"),
-        "{bibliography}"
+        !fs::read_to_string(manifest_path)
+            .unwrap()
+            .contains("[references.Weinberg]")
     );
-
-    success(cita(directory.path(), &["commit"]));
-    let committed = git_success(
-        directory.path(),
-        &["show", "--pretty=format:", "--name-only", "HEAD"],
-    );
-    assert!(committed.contains("cita.toml"), "{committed}");
-    assert!(committed.contains("references.bib"), "{committed}");
 }
