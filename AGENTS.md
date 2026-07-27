@@ -2,7 +2,7 @@
 
 ## What this is
 
-cita is a Git-friendly bibliography CLI. Authoritative BibTeX (plus curated
+bibi is a Git-friendly bibliography CLI. Authoritative BibTeX (plus curated
 INSPIRE identifiers) lives in schema-1 `cita.toml`; `references.bib` is a
 deterministic, tracked generated artifact. A schema-1 `cita-library.toml` can
 register multiple independent shelf projects by stable name and safe relative
@@ -13,23 +13,23 @@ path. Rust edition 2024, MSRV 1.88.
 ```bash
 cargo build --workspace
 cargo test --workspace
-cargo test -p cita-bibliography
+cargo test -p bibi-bibliography
 cargo test --test cli
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo run -p cita -- add 1207.7214
-cargo run -p cita -- import local.bib
-cargo run -p cita -- generate
-cargo run -p cita -- export
-cargo run -p cita -- library list
-cargo run -p cita -- sync --shelf paper   # one registered shelf
-cargo run -p cita -- sync --all-shelves   # every registered shelf
+cargo run -p bibi -- add 1207.7214
+cargo run -p bibi -- import local.bib
+cargo run -p bibi -- generate
+cargo run -p bibi -- export
+cargo run -p bibi -- library list
+cargo run -p bibi -- sync --shelf paper   # one registered shelf
+cargo run -p bibi -- sync --all-shelves   # every registered shelf
 cargo test --test e2e -- --ignored  # live INSPIRE, network required
 ```
 
 CI runs format, clippy-as-errors, test, and build on 1.88 and stable. Tests are
 hermetic; INSPIRE and arXiv suites use local `TcpListener`s. The exception is
-`crates/cita/tests/e2e.rs`, a single `#[ignore]`d end-to-end test that hits the
+`crates/bibi/tests/e2e.rs`, a single `#[ignore]`d end-to-end test that hits the
 real INSPIRE API; CI runs it on every push and pull request, plus a weekly
 schedule as a standalone liveness check.
 
@@ -40,27 +40,27 @@ Use Conventional Commits: `<type>: <description>`.
 ## Workspace architecture
 
 ```text
-cita-core
+bibi-core
    ↑                ↑                      ↑
-cita-bibliography ← cita-inspire-client   cita-documents
+bibi-bibliography ← bibi-inspire-client   bibi-documents
    └──────────┬────────┘                   │
-        cita-manifest ─────────────────────┤
-              └──────── cita ──────────────┘
+        bibi-manifest ─────────────────────┤
+              └──────── bibi ──────────────┘
 ```
 
-- `cita-core`: `Reference`, provider traits, locators, and normalization.
-- `cita-bibliography`: strict standalone BibTeX snapshots, projections,
+- `bibi-core`: `Reference`, provider traits, locators, and normalization.
+- `bibi-bibliography`: strict standalone BibTeX snapshots, projections,
   and raw-entry re-keying and field insertion.
-- `cita-inspire-client`: lean `InspireRecord`s (authoritative BibTeX plus
+- `bibi-inspire-client`: lean `InspireRecord`s (authoritative BibTeX plus
   record id, timestamp, and canonical arXiv/DOI), stable-record-ID refresh
   batches, bounded queries, and 429 retries; cross-checks its BibTeX against the
-  selected JSON through `cita-bibliography`.
-- `cita-manifest`: schema-1 shelf authority, library registry/path validation,
+  selected JSON through `bibi-bibliography`.
+- `bibi-manifest`: schema-1 shelf authority, library registry/path validation,
   identity indexes, deterministic TOML, generated bibliography verification,
   and coordinated writes.
-- `cita-documents`: accepts a validated arXiv ID and atomically caches PDFs and
-  safely extracts gzip-compressed TeX source packages beneath `.cita/files/arxiv`.
-- `cita`: CLI, parent discovery, sync reconciliation, derived-export policy, and
+- `bibi-documents`: accepts a validated arXiv ID and atomically caches PDFs and
+  safely extracts gzip-compressed TeX source packages beneath `.bibi/files/arxiv`.
+- `bibi`: CLI, parent discovery, sync reconciliation, derived-export policy, and
   scoped Git commits.
 
 ## Key decisions
@@ -84,10 +84,10 @@ content, malformed or duplicate entries, missing titles, texkeys outside
 
 ### Derived exports
 
-`cita export` writes a separate artifact and never touches `references.bib`.
-Layout stays in `cita-manifest::Manifest::render_derived`, so every rendered
+`bibi export` writes a separate artifact and never touches `references.bib`.
+Layout stays in `bibi-manifest::Manifest::render_derived`, so every rendered
 bibliography shares one set of rules; only field-level policy lives in the CLI.
-Fields are added through `cita-bibliography::insert_field`, which splices after
+Fields are added through `bibi-bibliography::insert_field`, which splices after
 an entry's last field value using scanner-owned spans, before any trailing
 whitespace or inline comment, so comma placement is exact and the field cannot
 be swallowed by a comment. An entry that already defines the field is returned
@@ -106,7 +106,7 @@ registered shelf name, not the shelf directory.
 Add, import, remove, and sync validate a complete candidate before writing.
 Persist and sync `references.bib` first, then persist and sync `cita.toml` as the
 commit point. The old manifest remains authoritative after an interrupted
-second write, and `cita generate` repairs detectable drift.
+second write, and `bibi generate` repairs detectable drift.
 
 Library registration is a separate atomic write. Shelf initialization completes
 before registration, so a failed registry write leaves a valid standalone shelf.
@@ -115,14 +115,14 @@ there is no crash-atomic transaction across shelves.
 
 ### Libraries and shelves
 
-Each registered shelf is an independent cita project with its own manifest,
+Each registered shelf is an independent bibi project with its own manifest,
 bibliography, identities, cache, and Git commits. `cita-library.toml` only maps
 stable names to library-relative paths. Paths cannot escape the root, overlap,
 nest, or alias through symlinks. The library root cannot itself contain
 `cita.toml` or `references.bib`. There is no aggregate bibliography, shared
 cache, cross-shelf uniqueness, or library-wide commit.
 
-Scope is an argument, not a command level. `cita library` covers shelf lifecycle
+Scope is an argument, not a command level. `bibi library` covers shelf lifecycle
 only (`init`, `list`, `new`); every operation *inside* a shelf is the ordinary
 command with `-s/--shelf`, and `--all-shelves` on `generate`, `export`, and
 `sync` is the batch form. So there is no second command list to keep in step
@@ -157,7 +157,7 @@ are versionless and cache paths retain legacy arXiv archive directories.
 
 ### Git
 
-`cita commit` validates consistency and stages only `cita.toml` and
+`bibi commit` validates consistency and stages only `cita.toml` and
 `references.bib`. Commit messages derive added, removed, and modified local keys
 and projected titles. If the HEAD manifest exists but is unreadable, warn on
 stderr and use `references: update bibliography`. A path missing from HEAD is

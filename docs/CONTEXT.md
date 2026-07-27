@@ -3,7 +3,7 @@
 ## Library and shelf
 
 A library is a `cita-library.toml` registry that maps stable shelf names to
-library-root-relative paths. A shelf is a completely independent cita project
+library-root-relative paths. A shelf is a completely independent bibi project
 with its own authoritative manifest, generated bibliography, document cache,
 identities, and Git commits. The registry routes commands; it does not aggregate
 or share bibliographic state.
@@ -18,7 +18,7 @@ transaction.
 
 ## Reference
 
-A `Reference` is Cita's provider-neutral semantic projection: title, authors,
+A `Reference` is Bibi's provider-neutral semantic projection: title, authors,
 collaborations, display year, publication, URL, primary category, and normalized
 identifiers. Commands consume references; they do not inspect provider payloads
 or parse tracked output.
@@ -41,7 +41,7 @@ id. Projections are derived and are never stored as a second authority.
 
 ## Local citation key
 
-The sorted key in `references` is Cita's local identity for citation and Git
+The sorted key in `references` is Bibi's local identity for citation and Git
 review. It may differ from a provider texkey. Refreshing a source snapshot never
 changes it; bibliography generation changes only the raw entry's key token.
 
@@ -57,11 +57,11 @@ conflict, including across source kinds.
 `references.bib` is a tracked generated artifact, analogous to a lockfile. Its
 bytes are completely derived from the manifest: local-key order, preserved raw
 entry fields, one blank line between entries, and a final newline. Drift is an
-error; `cita generate` repairs it.
+error; `bibi generate` repairs it.
 
 ## Derived export
 
-The `cita export` output is a derived artifact, not a generated one. It shares
+The `bibi export` output is a derived artifact, not a generated one. It shares
 the generated bibliography's layout and ordering but adds resolvable `url`
 fields for downstream reference managers. Unlike `references.bib` it is not
 tracked, not verified, never read back, and never authoritative — it is written
@@ -69,7 +69,7 @@ for other tools to consume and regenerated rather than edited.
 
 ## Managed and imported references
 
-INSPIRE snapshots are managed: `cita sync` refreshes them by stable record ID.
+INSPIRE snapshots are managed: `bibi sync` refreshes them by stable record ID.
 BibTeX snapshots are imported/unmanaged and remain byte-for-byte unchanged until
-explicitly removed. Cita does not merge provenance or adopt one source as
+explicitly removed. Bibi does not merge provenance or adopt one source as
 another.

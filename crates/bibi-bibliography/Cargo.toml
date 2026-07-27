@@ -1,0 +1,18 @@
+[package]
+name = "bibi-bibliography"
+description = "Canonical BibTeX storage for Bibi"
+readme = "README.md"
+keywords = ["bibliography", "bibtex", "citations"]
+categories = ["command-line-utilities", "science"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+biblatex.workspace = true
+bibi-core.workspace = true
+serde.workspace = true
+thiserror.workspace = true

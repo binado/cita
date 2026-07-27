@@ -1,0 +1,31 @@
+[package]
+name = "bibi"
+description = "A Git-friendly bibliography database"
+readme = "../../README.md"
+keywords = ["bibliography", "bibtex", "citations", "inspirehep"]
+categories = ["command-line-utilities", "science"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "bibi"
+path = "src/main.rs"
+
+[dependencies]
+anstyle.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+bibi-core.workspace = true
+bibi-documents.workspace = true
+bibi-inspire-client.workspace = true
+bibi-bibliography.workspace = true
+bibi-manifest.workspace = true
+opener.workspace = true
+tempfile.workspace = true
+terminal_size.workspace = true
+tokio.workspace = true

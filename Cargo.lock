@@ -77,6 +77,86 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "bibi"
+version = "0.4.0"
+dependencies = [
+ "anstyle",
+ "anyhow",
+ "bibi-bibliography",
+ "bibi-core",
+ "bibi-documents",
+ "bibi-inspire-client",
+ "bibi-manifest",
+ "clap",
+ "clap_complete",
+ "opener",
+ "tempfile",
+ "terminal_size",
+ "tokio",
+]
+
+[[package]]
+name = "bibi-bibliography"
+version = "0.4.0"
+dependencies = [
+ "bibi-core",
+ "biblatex",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "bibi-core"
+version = "0.4.0"
+dependencies = [
+ "percent-encoding",
+ "thiserror",
+ "url",
+]
+
+[[package]]
+name = "bibi-documents"
+version = "0.4.0"
+dependencies = [
+ "bibi-core",
+ "flate2",
+ "reqwest",
+ "tar",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "bibi-inspire-client"
+version = "0.4.0"
+dependencies = [
+ "bibi-bibliography",
+ "bibi-core",
+ "httpdate",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "bibi-manifest"
+version = "0.4.0"
+dependencies = [
+ "bibi-bibliography",
+ "bibi-core",
+ "bibi-inspire-client",
+ "serde",
+ "tempfile",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "biblatex"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -149,86 +229,6 @@ dependencies = [
  "cfg-if",
  "cpufeatures",
  "rand_core",
-]
-
-[[package]]
-name = "cita"
-version = "0.4.0"
-dependencies = [
- "anstyle",
- "anyhow",
- "cita-bibliography",
- "cita-core",
- "cita-documents",
- "cita-inspire-client",
- "cita-manifest",
- "clap",
- "clap_complete",
- "opener",
- "tempfile",
- "terminal_size",
- "tokio",
-]
-
-[[package]]
-name = "cita-bibliography"
-version = "0.4.0"
-dependencies = [
- "biblatex",
- "cita-core",
- "serde",
- "thiserror",
-]
-
-[[package]]
-name = "cita-core"
-version = "0.4.0"
-dependencies = [
- "percent-encoding",
- "thiserror",
- "url",
-]
-
-[[package]]
-name = "cita-documents"
-version = "0.4.0"
-dependencies = [
- "cita-core",
- "flate2",
- "reqwest",
- "tar",
- "tempfile",
- "thiserror",
- "tokio",
- "url",
-]
-
-[[package]]
-name = "cita-inspire-client"
-version = "0.4.0"
-dependencies = [
- "cita-bibliography",
- "cita-core",
- "httpdate",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "url",
-]
-
-[[package]]
-name = "cita-manifest"
-version = "0.4.0"
-dependencies = [
- "cita-bibliography",
- "cita-core",
- "cita-inspire-client",
- "serde",
- "tempfile",
- "thiserror",
- "toml",
 ]
 
 [[package]]
