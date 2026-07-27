@@ -96,6 +96,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bibi-bibfile"
+version = "0.4.0"
+dependencies = [
+ "bibi-bibliography",
+ "bibi-core",
+ "bibi-inspire-client",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "bibi-bibliography"
 version = "0.4.0"
 dependencies = [

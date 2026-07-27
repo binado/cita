@@ -5,6 +5,7 @@ members = [
     "crates/bibi-documents",
     "crates/bibi-inspire-client",
     "crates/bibi-bibliography",
+    "crates/bibi-bibfile",
     "crates/bibi-manifest",
 ]
 resolver = "2"
@@ -23,6 +24,7 @@ anyhow = "1.0.94"
 biblatex = "0.12"
 clap = { version = "4.5.23", features = ["derive"] }
 clap_complete = "4"
+bibi-bibfile = { path = "crates/bibi-bibfile", version = "0.4.0" }
 bibi-bibliography = { path = "crates/bibi-bibliography", version = "0.4.0" }
 bibi-core = { path = "crates/bibi-core", version = "0.4.0" }
 bibi-documents = { path = "crates/bibi-documents", version = "0.4.0" }
