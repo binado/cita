@@ -91,6 +91,18 @@ pub fn parse(source: &str) -> Result<BTreeMap<String, BibtexSnapshot>, Error> {
     Ok(entries)
 }
 
+/// Isolate syntactically valid standalone entry blocks without semantic validation.
+///
+/// This retains the file-level guarantees enforced by the raw scanner, including
+/// rejecting directives, non-entry content, unsafe keys, and duplicate keys. Each
+/// returned block can then be semantically validated independently.
+pub fn split_entries(source: &str) -> Result<Vec<(String, String)>, Error> {
+    Ok(scan_raw_entries(source)?
+        .into_iter()
+        .map(|entry| (entry.key, source[entry.entry_range].to_owned()))
+        .collect())
+}
+
 /// Project one standalone entry into cita's source-neutral reference fields.
 pub fn project_bibtex(source: &str) -> Result<Reference, Error> {
     let raw = scan_raw_entries(source)?;
@@ -444,6 +456,15 @@ mod tests {
         let parsed = parse(&source).unwrap();
         assert_eq!(parsed["Z"].bibtex, first);
         assert_eq!(parsed["A"].bibtex, second);
+    }
+
+    #[test]
+    fn raw_split_allows_independent_semantic_validation() {
+        let source = "@misc{Bad,\n note={no title}\n}\n\n@misc{Good,\n title={Good}\n}";
+        let entries = split_entries(source).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(BibtexSnapshot::new(entries[0].1.clone()).is_err());
+        assert!(BibtexSnapshot::new(entries[1].1.clone()).is_ok());
     }
 
     #[test]

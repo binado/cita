@@ -9,39 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- add a lazily initialized global personal library with named shelves and a
-  shared document cache
-- add deterministic positional and all-shelf BibTeX exports
-- add advisory locks that prevent concurrent shelf mutations from losing data
+- add a SQLite-backed global library with shared references and shelf-local keys
+- add lossless JSON/TOML exports and `init --from-file`
+- add import canonicalization, sync-time promotion, and `import --skip-errors`
 
 ### Changed
 
+- **breaking**: replace `library.toml` and shelf manifests with
+  `$CITA_HOME/library.sqlite3`
+- **breaking**: rename the persistence crate from `cita-manifest` to `cita-store`
+- sync deduplicates shared references and applies the selected set atomically
+- `--overwrite` replaces only local shelf membership collisions
 - **breaking**: `cita export` takes its destination as a positional argument;
   the `-o`/`--output` flag was removed
 - **breaking**: `cita init` no longer accepts `--path`; the store location is
   set with `CITA_HOME`
-- batch `export` and `sync` report per-shelf failures and an aggregate summary on
-  stderr instead of stdout, so redirecting stdout no longer hides why the command
-  exited non-zero
-- `cita init` reports whether it created, repaired, or found the store intact
+- all-shelf JSON/TOML export writes one lossless library document
+- `cita init` reports whether it created or found the store intact
 - `cita shelf list` pads its columns so they stay aligned for longer shelf names
-
-### Fixed
-
-- recreate a deleted `main` shelf when opening the store; previously `cita init`
-  reported success while repairing nothing and every command failed with no way
-  to recover
-- allow `cita shelf new` to succeed when an unrelated registered shelf is damaged,
-  and stop leaving an unregistered shelf directory behind when creation is
-  rejected
-- give a shelf named `library` its own lock instead of reusing the registry's, so
-  it can no longer block every other command
-- report the cause of a filesystem error once rather than twice, and describe a
-  registered-but-missing shelf as such instead of as a bare `No such file or
-  directory`
 
 ### Removed
 
+- remove filesystem manifests and advisory lock files
 - remove local project discovery, generated `references.bib`, `generate`,
   `commit`, and the path-based `library` command tree
 

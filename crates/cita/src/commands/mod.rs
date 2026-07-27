@@ -12,16 +12,16 @@ pub(crate) use export::{batch_export, export};
 pub(crate) use fetch::{FetchOptions, fetch};
 pub(crate) use import::import;
 pub(crate) use library::{
-    Target, batch_sync, init_global, list_shelves, new_shelf, open_library, report_shelf_failure,
+    Target, init_global, list_shelves, new_shelf, open_library, report_shelf_failure,
     resolve_target, summarize_batch, target_in,
 };
 pub(crate) use list::list;
 pub(crate) use remove::remove;
-pub(crate) use sync::{sync, sync_outcome};
+pub(crate) use sync::{sync, sync_all};
 
 use anyhow::Result;
 use cita_inspire_client::{Client, RetryEvent};
-use cita_manifest::{AddOutcome, global_library_root};
+use cita_store::{AddOutcome, global_library_root};
 use std::{
     env,
     io::{self, IsTerminal},

@@ -1,6 +1,6 @@
 [package]
-name = "cita-manifest"
-description = "Global library and authoritative shelf storage for Cita"
+name = "cita-store"
+description = "SQLite-backed global bibliography storage for Cita"
 readme = "README.md"
 keywords = ["bibliography", "bibtex", "citations"]
 categories = ["command-line-utilities", "science"]
@@ -15,8 +15,11 @@ authors.workspace = true
 cita-bibliography.workspace = true
 cita-core.workspace = true
 cita-inspire-client.workspace = true
-fs2.workspace = true
+rusqlite.workspace = true
 serde.workspace = true
-tempfile.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

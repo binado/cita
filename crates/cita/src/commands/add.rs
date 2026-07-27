@@ -1,7 +1,7 @@
 use super::{Target, inspire_client, print_add_outcomes};
 use anyhow::{Result, bail};
 use cita_core::{Locator, MetadataProvider};
-use cita_manifest::{ConflictPolicy, KeyRequest, PendingReference, SourceSnapshot};
+use cita_store::{ConflictPolicy, KeyRequest, PendingReference, SourceSnapshot};
 
 pub(crate) async fn add(
     target: &Target<'_>,
@@ -34,9 +34,7 @@ pub(crate) async fn add(
     } else {
         ConflictPolicy::Skip
     };
-    let lock = target.lock()?;
-    let mut manifest = lock.manifest()?;
-    let outcomes = manifest.add_batch(pending, policy)?;
+    let outcomes = target.library().add_batch(target.name(), pending, policy)?;
     print_add_outcomes(&outcomes);
     Ok(())
 }

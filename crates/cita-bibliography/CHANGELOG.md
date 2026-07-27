@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- add raw entry splitting for per-entry semantic validation during lenient imports
+
 ## [0.3.2](https://github.com/binado/cita/compare/cita-bibliography-v0.3.1...cita-bibliography-v0.3.2) - 2026-07-25
 
 ### Added

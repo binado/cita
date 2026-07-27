@@ -14,7 +14,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Initialize the global cita store and its main shelf
-    Init,
+    Init(InitArgs),
     /// Manage global shelves
     Shelf {
         #[command(subcommand)]
@@ -24,13 +24,13 @@ enum Command {
     Import(ImportArgs),
     /// Resolve and add one or more references through INSPIRE
     Add(AddArgs),
-    /// Refresh INSPIRE-managed source snapshots
+    /// Refresh managed sources and retry canonicalizing imports
     Sync(ScopeArgs),
     /// Remove references by local key or provider/DOI/arXiv identity
     Remove(RemoveArgs),
     /// List stored references
     List(ListArgs),
-    /// Write a URL-enriched BibTeX export
+    /// Export BibTeX or lossless JSON/TOML
     Export(ExportArgs),
     /// Fetch or resolve a reference's arXiv PDF or source package
     Fetch(FetchArgs),
@@ -39,6 +39,16 @@ enum Command {
         /// Shell to generate completions for
         shell: clap_complete::Shell,
     },
+}
+
+#[derive(Debug, Args)]
+struct InitArgs {
+    /// Initialize from a lossless .json or .toml export
+    #[arg(long, value_name = "PATH")]
+    from_file: Option<PathBuf>,
+    /// Replace an existing database (requires --from-file)
+    #[arg(long, requires = "from_file")]
+    overwrite: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -79,16 +89,19 @@ struct ScopeArgs {
     /// Use this global shelf instead of `main`
     #[arg(short = 's', long, value_name = "NAME", conflicts_with = "all_shelves")]
     shelf: Option<String>,
-    /// Run in every global shelf, in name order
+    /// Select the complete global library
     #[arg(long)]
     all_shelves: bool,
 }
 
 #[derive(Debug, Args)]
 struct ImportArgs {
-    /// Replace colliding existing entries instead of skipping them
+    /// Replace colliding memberships only in the selected shelf
     #[arg(long)]
     overwrite: bool,
+    /// Skip isolatable invalid entries and commit the valid subset
+    #[arg(long)]
+    skip_errors: bool,
     #[command(flatten)]
     scope: ShelfArg,
     /// BibTeX file to import, or `-` to read from standard input
@@ -100,7 +113,7 @@ struct AddArgs {
     /// Keep this local citation key (one locator only)
     #[arg(long)]
     key: Option<String>,
-    /// Replace colliding existing entries instead of skipping them
+    /// Replace colliding memberships only in the selected shelf
     #[arg(long)]
     overwrite: bool,
     #[command(flatten)]
@@ -138,8 +151,19 @@ struct ListArgs {
 struct ExportArgs {
     #[command(flatten)]
     scope: ScopeArgs,
-    /// Output file, or output directory with --all-shelves
+    /// Export encoding
+    #[arg(long, value_enum, default_value_t = OutputFormat::Bib)]
+    format: OutputFormat,
+    /// Output file; for all-shelf BibTeX, an existing directory
     output: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+enum OutputFormat {
+    #[default]
+    Bib,
+    Json,
+    Toml,
 }
 
 #[derive(Debug, Args)]
@@ -229,17 +253,17 @@ async fn run() -> Result<RunOutcome> {
             Cli::command().print_help()?;
             println!();
         }
-        Some(Command::Init) => commands::init_global()?,
+        Some(Command::Init(args)) => {
+            commands::init_global(&cwd, args.from_file.as_deref(), args.overwrite)?
+        }
         Some(Command::Shelf { command }) => match command {
             ShelfCommand::List => commands::list_shelves(&commands::open_library()?)?,
-            ShelfCommand::New { name } => {
-                commands::new_shelf(&mut commands::open_library()?, &name)?
-            }
+            ShelfCommand::New { name } => commands::new_shelf(&commands::open_library()?, &name)?,
         },
         Some(Command::Import(args)) => {
             let library = commands::open_library()?;
             let target = commands::resolve_target(&library, args.scope.shelf.as_deref())?;
-            commands::import(&target, &cwd, &args.path, args.overwrite)?
+            commands::import(&target, &cwd, &args.path, args.overwrite, args.skip_errors).await?
         }
         Some(Command::Add(AddArgs {
             key,
@@ -254,7 +278,7 @@ async fn run() -> Result<RunOutcome> {
         Some(Command::Sync(scope)) => {
             let library = commands::open_library()?;
             if scope.all_shelves {
-                batch_failed = commands::batch_sync(&library).await?;
+                commands::sync_all(&library).await?;
             } else {
                 let target = commands::resolve_target(&library, scope.shelf.as_deref())?;
                 commands::sync(&target).await?;
@@ -278,10 +302,11 @@ async fn run() -> Result<RunOutcome> {
         Some(Command::Export(args)) => {
             let library = commands::open_library()?;
             if args.scope.all_shelves {
-                batch_failed = commands::batch_export(&library, &cwd, args.output.as_deref())?;
+                batch_failed =
+                    commands::batch_export(&library, &cwd, args.format, args.output.as_deref())?;
             } else {
                 let target = commands::resolve_target(&library, args.scope.shelf.as_deref())?;
-                commands::export(&target, &cwd, args.output.as_deref())?;
+                commands::export(&target, &cwd, args.format, args.output.as_deref())?;
             }
         }
         Some(Command::Fetch(args)) => {
@@ -311,17 +336,27 @@ mod tests {
     fn new_command_matrix_is_accepted() {
         for args in [
             vec!["cita", "init"],
+            vec!["cita", "init", "--from-file", "cita.toml", "--overwrite"],
             vec!["cita", "shelf", "list"],
             vec!["cita", "shelf", "ls"],
             vec!["cita", "shelf", "new", "paper"],
             vec!["cita", "shelf", "create", "paper"],
             vec!["cita", "add", "-s", "paper", "1207.7214"],
             vec!["cita", "import", "-s", "paper", "-"],
+            vec!["cita", "import", "--skip-errors", "-"],
             vec!["cita", "remove", "-s", "paper", "Key"],
             vec!["cita", "list", "-s", "paper"],
             vec!["cita", "sync", "--all-shelves"],
             vec!["cita", "export", "-s", "paper", "references.bib"],
             vec!["cita", "export", "--all-shelves", "exports"],
+            vec![
+                "cita",
+                "export",
+                "--all-shelves",
+                "--format",
+                "json",
+                "cita.json",
+            ],
             vec!["cita", "fetch", "-s", "paper", "Key"],
         ] {
             assert!(Cli::try_parse_from(args.clone()).is_ok(), "{args:?}");
@@ -338,6 +373,7 @@ mod tests {
             vec!["cita", "export", "--output", "x.bib"],
             vec!["cita", "sync", "-s", "paper", "--all-shelves"],
             vec!["cita", "export", "-s", "paper", "--all-shelves"],
+            vec!["cita", "init", "--overwrite"],
         ] {
             assert!(Cli::try_parse_from(args.clone()).is_err(), "{args:?}");
         }

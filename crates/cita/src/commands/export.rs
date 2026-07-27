@@ -1,64 +1,82 @@
 use super::{Target, report_shelf_failure, summarize_batch, target_in};
+use crate::OutputFormat;
 use anyhow::{Context, Result, bail};
-use cita_bibliography::insert_field;
-use cita_core::ReferenceSource;
+use cita_bibliography::{insert_field, rename_entry};
 use cita_documents::arxiv_pdf_url;
-use cita_manifest::{Library, SourceSnapshot, atomic_write};
+use cita_store::{Library, ShelfEntry};
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
 };
+use tempfile::NamedTempFile;
 
 const URL_FIELD: &str = "url";
 
-/// Write one URL-enriched bibliography export.
-pub(crate) fn export(target: &Target<'_>, caller: &Path, output: Option<&Path>) -> Result<()> {
-    let path = export_outcome(target, caller, output)?;
+pub(crate) fn export(
+    target: &Target<'_>,
+    caller: &Path,
+    format: OutputFormat,
+    output: Option<&Path>,
+) -> Result<()> {
+    let path = output_path(
+        caller,
+        output,
+        &format!("{}.{}", target.name(), extension(format)),
+    );
+    ensure_outside_store(&path, target.store_root())?;
+    let rendered = match format {
+        OutputFormat::Bib => render_bibtex(target.entries()?)?,
+        OutputFormat::Json => target.library().export_shelf(target.name())?.to_json()?,
+        OutputFormat::Toml => target.library().export_shelf(target.name())?.to_toml()?,
+    };
+    atomic_write(&path, rendered.as_bytes())?;
     println!("Exported {}", path.display());
     Ok(())
 }
 
-fn export_outcome(target: &Target<'_>, caller: &Path, output: Option<&Path>) -> Result<PathBuf> {
-    let manifest = target.load()?;
-    let path = match output {
-        Some(output) if output.is_absolute() => output.to_path_buf(),
-        Some(output) => caller.join(output),
-        None => caller.join(format!("{}.bib", target.name())),
-    };
-    ensure_outside_store(&path, target.store_root())?;
-    let rendered = manifest.render_derived(derive_entry)?;
-    atomic_write(&path, rendered.as_bytes())?;
-    Ok(path)
-}
-
-/// Export every shelf into an existing directory, continuing after failures.
-///
-/// Like every batch form this is a sequence of independent exports, not one
-/// transaction; successes go to stdout and failures to stderr so redirecting the
-/// data stream still surfaces the errors.
 pub(crate) fn batch_export(
     library: &Library,
     caller: &Path,
+    format: OutputFormat,
     output: Option<&Path>,
 ) -> Result<bool> {
-    let directory = match output {
-        Some(path) if path.is_absolute() => path.to_path_buf(),
-        Some(path) => caller.join(path),
-        None => caller.to_path_buf(),
-    };
+    match format {
+        OutputFormat::Json | OutputFormat::Toml => {
+            let path = output_path(caller, output, &format!("cita.{}", extension(format)));
+            ensure_outside_store(&path, library.root())?;
+            let value = library.export_library()?;
+            let rendered = match format {
+                OutputFormat::Json => value.to_json()?,
+                OutputFormat::Toml => value.to_toml()?,
+                OutputFormat::Bib => unreachable!(),
+            };
+            atomic_write(&path, rendered.as_bytes())?;
+            println!("Exported {}", path.display());
+            Ok(false)
+        }
+        OutputFormat::Bib => batch_bibtex(library, caller, output),
+    }
+}
+
+fn batch_bibtex(library: &Library, caller: &Path, output: Option<&Path>) -> Result<bool> {
+    let directory = output_path(caller, output, ".");
     if !directory.is_dir() {
         bail!(
             "batch export destination {} is not an existing directory",
             directory.display()
         );
     }
+    let shelves = library.shelves()?;
     let mut failed = 0usize;
-    for name in library.shelves() {
+    for name in &shelves {
         let outcome = target_in(library, name)
             .map_err(Into::into)
             .and_then(|target| {
-                let output = directory.join(format!("{name}.bib"));
-                export_outcome(&target, caller, Some(&output))
+                let path = directory.join(format!("{name}.bib"));
+                ensure_outside_store(&path, library.root())?;
+                atomic_write(&path, render_bibtex(target.entries()?)?.as_bytes())?;
+                Ok(path)
             });
         match outcome {
             Ok(path) => println!("Shelf {name}: exported {}", path.display()),
@@ -68,34 +86,70 @@ pub(crate) fn batch_export(
             }
         }
     }
-    Ok(summarize_batch(failed, library.shelves().len()))
+    Ok(summarize_batch(failed, shelves.len()))
 }
 
-/// Add the derived arXiv PDF URL to one re-keyed entry that has an arXiv ID.
-///
-/// Only entries without an authored `url` are touched; `insert_field` enforces that.
-fn derive_entry(key: &str, source: &SourceSnapshot, entry: String) -> Result<String> {
-    let reference = source
-        .project()
-        .with_context(|| format!("could not project `{key}`"))?;
-    // The projected identity already carries INSPIRE's curated arXiv ID, so one
-    // rule covers imported and INSPIRE snapshots alike and no per-source match is
-    // needed here.
-    let Some(arxiv) = reference.identifiers.arxiv.first() else {
-        return Ok(entry);
+fn render_bibtex(entries: Vec<ShelfEntry>) -> Result<String> {
+    let mut rendered = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let rekeyed = rename_entry(entry.source.raw_bibtex(), &entry.key)?;
+        rendered.push(derive_entry(&entry, rekeyed)?);
+    }
+    if rendered.is_empty() {
+        return Ok(String::new());
+    }
+    Ok(format!("{}\n", rendered.join("\n\n")))
+}
+
+fn derive_entry(entry: &ShelfEntry, raw: String) -> Result<String> {
+    let Some(arxiv) = entry.reference.identifiers.arxiv.first() else {
+        return Ok(raw);
     };
     let url = arxiv_pdf_url(arxiv)
-        .with_context(|| format!("could not build an arXiv URL for `{key}`"))?;
-    Ok(insert_field(&entry, URL_FIELD, url.as_str())?)
+        .with_context(|| format!("could not build an arXiv URL for `{}`", entry.key))?;
+    Ok(insert_field(&raw, URL_FIELD, url.as_str())?)
 }
 
-/// Refuse a destination inside the global store, including through a symlink.
+fn extension(format: OutputFormat) -> &'static str {
+    match format {
+        OutputFormat::Bib => "bib",
+        OutputFormat::Json => "json",
+        OutputFormat::Toml => "toml",
+    }
+}
+
+fn output_path(caller: &Path, output: Option<&Path>, default: &str) -> PathBuf {
+    match output {
+        Some(path) if path.is_absolute() => path.into(),
+        Some(path) => caller.join(path),
+        None => caller.join(default),
+    }
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("output path has no parent: {}", path.display()))?;
+    let mut temporary = NamedTempFile::new_in(parent)
+        .with_context(|| format!("could not create a temporary file in {}", parent.display()))?;
+    temporary
+        .write_all(bytes)
+        .with_context(|| format!("could not write {}", path.display()))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .with_context(|| format!("could not sync {}", path.display()))?;
+    temporary
+        .persist(path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("could not replace {}", path.display()))?;
+    Ok(())
+}
+
 fn ensure_outside_store(path: &Path, store: &Path) -> Result<()> {
     let target = resolved(path)?;
     let store = fs::canonicalize(store)
         .with_context(|| format!("could not resolve cita home {}", store.display()))?;
-    // `starts_with` is component-wise and already true for equal paths, so a
-    // sibling like `~/.cita-backup.bib` is correctly left alone.
     if target.starts_with(&store) {
         bail!(
             "refusing to write an export inside the global cita store {}",
@@ -105,15 +159,6 @@ fn ensure_outside_store(path: &Path, store: &Path) -> Result<()> {
     Ok(())
 }
 
-/// An absolute, canonical path for comparing against the store.
-///
-/// An existing target is canonicalized outright, so a case-insensitive filesystem
-/// reports the on-disk name and `References.bib` cannot alias `references.bib`. A
-/// target that does not exist yet cannot alias an existing file, so only its parent
-/// is canonicalized, which still collapses `..` segments and symlinked directories.
-/// Only `NotFound` justifies that fallback: every other error means the path could
-/// not be resolved at all, and treating it as "absent" would compare a path whose
-/// final component was never resolved.
 fn resolved(path: &Path) -> Result<PathBuf> {
     let absolute = std::path::absolute(path)
         .with_context(|| format!("could not resolve {}", path.display()))?;
@@ -145,13 +190,9 @@ mod tests {
     }
 
     #[test]
-    fn a_sibling_sharing_the_store_prefix_is_allowed() {
-        // Guards the component-wise comparison: a textual prefix check would
-        // wrongly reject `<store>-backup.bib`.
-        let root = tempfile::tempdir().unwrap();
-        let store = root.path().join("cita");
-        fs::create_dir(&store).unwrap();
-        let sibling = root.path().join("cita-backup.bib");
-        ensure_outside_store(&sibling, &store).unwrap();
+    fn extensions_match_formats() {
+        assert_eq!(extension(OutputFormat::Bib), "bib");
+        assert_eq!(extension(OutputFormat::Json), "json");
+        assert_eq!(extension(OutputFormat::Toml), "toml");
     }
 }

@@ -17,8 +17,7 @@ pub(crate) fn list(
     order: Order,
     wrap_title: bool,
 ) -> Result<()> {
-    let manifest = target.load()?;
-    let mut rows = manifest
+    let mut rows = target
         .projected()?
         .into_iter()
         .map(|item| {

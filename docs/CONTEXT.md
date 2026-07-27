@@ -1,76 +1,70 @@
 # Domain context
 
-## Global library and shelf
+## Global library and shelves
 
 Cita owns one user-global library rooted at `$CITA_HOME`, or `$HOME/.cita` by
-default. `library.toml` contains a sorted set of stable shelf names and records
-the fixed `main` default. Shelf locations are deterministic:
-`shelves/<name>/shelf.toml`. Commands never discover local project files.
+default. `$CITA_HOME/library.sqlite3` is the sole authority and the fixed
+default shelf is `main`. Commands never discover local project files.
 
-Every data command lazily initializes the library and `main`, and recreates the
-`main` shelf if it has been deleted, so a partially removed store heals rather
-than wedging. An explicit shelf must already exist; selection never creates.
-Shelf mutations are independent, atomically replace one manifest, and hold a
-per-shelf advisory lock across the read-modify-write operation. Batch sync and
-export run in shelf-name order and continue after failures, reporting successes
-on stdout and failures on stderr.
+Every data command lazily initializes the database and `main`. An explicit shelf
+must already exist; selection never creates it. SQLite WAL transactions
+coordinate processes, and every write revalidates global identities inside a
+`BEGIN IMMEDIATE` transaction.
 
-A registered shelf whose directory is missing is a tolerated state, not a fatal
-one: the registry still lists it, batch operations report it and continue, and
-only operations on that specific shelf fail.
+## Global reference and membership
 
-## Reference
+A reference is stored once globally. Shelves contain memberships pairing that
+reference with a shelf-local citation key, so the same source can use different
+keys in different shelves. Removing the final membership deletes the orphaned
+global reference.
 
-A `Reference` is Cita's provider-neutral view of one bibliographic record:
-authors, title, publication metadata, and a set of normalized identifiers. It is
-always *projected* from a source snapshot rather than stored directly, so the
-snapshot's BibTeX remains the single authority and the projection can be
-recomputed.
+DOI, versionless arXiv, and namespaced provider identities are globally unique.
+Title and author similarity are never identity. Incoming identifiers that point
+to different global references are a conflict and never cause an implicit merge.
 
-## Provider identity
+## Source snapshot and semantic projection
 
-A provider identity is a namespaced key pairing a provider with its stable record
-identifier, written `<provider>:<id>` — for example `inspire:1124337`. It is
-distinct from the local citation key and from DOI or arXiv identities. Selectors
-resolve against it, and it participates in the per-shelf uniqueness check that
-rejects the same record being added twice under different keys.
+Every reference stores an exact standalone UTF-8 BibTeX string. This raw snapshot
+is authoritative for bibliographic content. Cita also persists its structured
+projection—title, year, ordered authors/collaborations, and normalized
+identities—for SQL queries. The projection is recomputed from BibTeX and written
+in the same transaction; it is never independently edited.
 
-## Source snapshot
+- INSPIRE sources additionally store the stable record ID, update timestamp,
+  and canonical arXiv/DOI identities.
+- Imported sources retain exact BibTeX. Import and sync attempt to canonicalize
+  imports through INSPIRE using arXiv and then DOI identities.
 
-A source snapshot is authoritative provider-specific evidence stored under a
-local citation key in `shelf.toml`. Every snapshot contains standalone BibTeX
-and is tagged by its refresh lifecycle.
+The provider texkey remains inside raw BibTeX. A shelf-local citation key may
+differ, is selected by `--key` or import, and is substituted only while
+rendering.
 
-- `source = "inspire"` stores authoritative INSPIRE BibTeX, stable record ID,
-  update timestamp, and canonical normalized arXiv/DOI values selected from and
-  cross-checked against that BibTeX.
-- `source = "import"` stores one exact standalone imported entry.
+## Sync
 
-Snapshots project to provider-neutral `Reference` values. INSPIRE's curated
-arXiv/DOI values override projected identities and add the namespaced provider
-identity. Duplicate normalized identities are rejected within a shelf.
+Sync selects unique global references from one shelf or the whole library.
+Managed records refresh by stable provider ID; imported records retry
+canonicalization. Network work happens before the database write, and the
+complete selected result set is applied atomically after checking that sources
+did not change concurrently. Shared shelves immediately observe the update.
 
-## Local citation key
+## Export and interchange
 
-The sorted manifest key is Cita's local citation identity and may differ from a
-provider texkey. Refreshing a source snapshot never changes it. Rendering changes
-only the raw BibTeX key token.
+BibTeX export is a deterministic citation projection: entries are sorted by
+local key, re-keyed without rewriting their fields, separated by one blank line,
+and terminated by one newline. An arXiv PDF URL is added only when no authored
+URL exists.
 
-## Export
+JSON and TOML exports are versioned, deterministic, lossless logical-library
+documents. They preserve global sharing, shelves, local keys, raw source
+snapshots, identities, and provider metadata, and are accepted by
+`cita init --from-file`. SQLite row IDs and derived projection fields are
+private and are not serialized.
 
-There is no managed `references.bib`. `cita export` deterministically materializes
-an untracked, unverified, one-way BibTeX artifact from a selected shelf. Entries
-are sorted by local key, separated by one blank line, and end with one newline.
-The CLI adds an arXiv PDF URL when an entry has an arXiv identity but no authored
-URL.
-
-Relative outputs resolve from the caller's directory. An omitted output becomes
-`<shelf>.bib`; exports cannot target the global store. Cita never reads exports
-back.
+Exports are caller-relative and cannot target the global store.
 
 ## Documents
 
-PDFs and safely extracted source packages live under the library-wide `files/`
-cache and are shared across shelves by normalized, versionless arXiv ID.
-Transient `fetch` resolves INSPIRE JSON only unless `--save` stores the complete
-record in the selected shelf.
+PDFs and safely extracted source packages live under `$CITA_HOME/files` and are
+shared by normalized, versionless arXiv ID. They are not part of lossless
+library exports. Transient `fetch` resolves INSPIRE JSON unless `--save` stores
+the complete provider snapshot.

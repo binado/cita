@@ -4,7 +4,7 @@ use cita_core::{Locator, MetadataProvider, Reference, ReferenceSource};
 use cita_documents::{
     ArtifactKind, DocumentStore, Error as DocumentError, FetchOutcome, FetchPolicy, arxiv_pdf_url,
 };
-use cita_manifest::{AddOutcome, ConflictPolicy, KeyRequest, PendingReference, SourceSnapshot};
+use cita_store::{AddOutcome, ConflictPolicy, KeyRequest, PendingReference, SourceSnapshot};
 use std::{
     fmt,
     io::{self, IsTerminal},
@@ -20,14 +20,7 @@ struct Selected {
 }
 
 async fn select(target: &Target<'_>, selector: &str, save: bool) -> Result<Selected> {
-    // Only `--save` mutates, so only `--save` locks; the lock must outlive the
-    // `add_batch` below, which is why it is bound here rather than inside the branch.
-    let lock = save.then(|| target.lock()).transpose()?;
-    let mut manifest = match &lock {
-        Some(lock) => lock.manifest()?,
-        None => target.load()?,
-    };
-    if let Some(item) = manifest.find(selector)? {
+    if let Some(item) = target.find(selector)? {
         let save_outcome = save.then(|| AddOutcome::Existing(item.key.clone()));
         return Ok(Selected {
             key: item.key,
@@ -44,8 +37,10 @@ async fn select(target: &Target<'_>, selector: &str, save: bool) -> Result<Selec
         let record = client.resolve(&locator).await?;
         let key = record.texkey.clone();
         let reference = record.project()?;
-        let outcome = manifest
+        let outcome = target
+            .library()
             .add_batch(
+                target.name(),
                 vec![PendingReference {
                     key: KeyRequest::Suggested(key),
                     source: SourceSnapshot::inspire(record),
