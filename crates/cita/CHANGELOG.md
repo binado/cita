@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- make INSPIRE the explicit sole remote metadata authority
 - **breaking**: replace `library.toml` and shelf manifests with
   `$CITA_HOME/library.sqlite3`
 - **breaking**: rename the persistence crate from `cita-manifest` to `cita-store`

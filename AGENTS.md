@@ -46,7 +46,7 @@ cita-bibliography ← cita-inspire-client   cita-documents
               └──────── cita ──────────────┘
 ```
 
-- `cita-core`: `Reference`, provider traits, locators, and normalization.
+- `cita-core`: `Reference`, source projection, locators, and normalization.
 - `cita-bibliography`: strict BibTeX snapshots, semantic projection, raw-entry
   re-keying, and field insertion.
 - `cita-inspire-client`: lean `InspireSnapshot`s (authoritative BibTeX plus
@@ -89,7 +89,7 @@ and appends one newline. Do not add a handwritten writer.
 
 Only entries and whitespace are accepted. Reject directives, comments or other
 non-entry content, malformed or duplicate entries, missing titles, invalid
-texkeys, and globally duplicate normalized DOI/eprint/provider identities.
+texkeys, and globally duplicate normalized DOI/eprint/INSPIRE record identities.
 
 ### Exports
 
@@ -111,10 +111,10 @@ global reference set atomically; shared shelves observe the same update.
 
 ### Selectors and documents
 
-Exact local key wins, followed by provider ID, normalized DOI, and normalized
-arXiv ID. `fetch` resolves transient INSPIRE JSON unless `--save` also stores
-authoritative BibTeX. It returns an absolute shared-cache path or URL;
-`--source` and `--url` conflict, and `--open` launches the result.
+Exact local key wins, followed by INSPIRE record ID, normalized DOI, and
+normalized arXiv ID. `fetch` resolves transient INSPIRE JSON unless `--save`
+also stores authoritative BibTeX. It returns an absolute shared-cache path or
+URL; `--source` and `--url` conflict, and `--open` launches the result.
 
 Documents live under `$CITA_HOME/files/arxiv` and are shared across shelves.
 Stored arXiv IDs are versionless and cache paths retain legacy archive

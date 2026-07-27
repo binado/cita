@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **breaking**: project INSPIRE snapshots without embedding record IDs in the
+  source-neutral reference
+
+### Removed
+
+- **breaking**: remove the generic metadata-provider adapter in favor of the
+  concrete INSPIRE client APIs
+
 ## [0.5.0](https://github.com/binado/cita/compare/cita-inspire-client-v0.4.0...cita-inspire-client-v0.5.0) - 2026-07-28
 
 ### Other

@@ -153,11 +153,7 @@ pub fn project_bibtex(source: &str) -> Result<Reference, Error> {
         authors,
         collaborations: chunks(entry, "collaboration").into_iter().collect(),
         year,
-        identifiers: Identifiers {
-            dois,
-            arxiv,
-            providers: BTreeMap::new(),
-        },
+        identifiers: Identifiers { dois, arxiv },
     })
 }
 

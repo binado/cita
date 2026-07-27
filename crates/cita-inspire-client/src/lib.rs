@@ -1,4 +1,4 @@
-//! INSPIRE JSON metadata provider with authoritative BibTeX snapshots.
+//! INSPIRE JSON client with authoritative BibTeX snapshots.
 #![warn(missing_docs)]
 
 mod client;

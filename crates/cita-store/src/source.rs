@@ -19,7 +19,7 @@ pub enum SourceSnapshot {
 pub struct InspireEntry {
     /// Stable INSPIRE record identifier.
     pub record_id: u64,
-    /// Provider update timestamp.
+    /// INSPIRE update timestamp.
     pub updated: String,
     /// Complete authoritative standalone BibTeX entry.
     pub bibtex: String,
@@ -56,7 +56,7 @@ impl HepIdentifiers {
 }
 
 impl SourceSnapshot {
-    /// Convert a durable provider result into a stored snapshot.
+    /// Convert a durable INSPIRE result into a stored snapshot.
     pub fn inspire(record: InspireSnapshot) -> Self {
         Self::Inspire(InspireEntry {
             record_id: record.record_id,

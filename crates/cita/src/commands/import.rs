@@ -1,7 +1,8 @@
 use super::{Target, inspire_client, print_add_outcomes};
 use anyhow::{Context, Result};
 use cita_bibliography::{BibtexSnapshot, split_entries};
-use cita_core::{Locator, MetadataProvider, ProviderError, ReferenceSource};
+use cita_core::{Locator, ReferenceSource};
+use cita_inspire_client::Error as InspireError;
 use cita_store::{ConflictPolicy, KeyRequest, PendingReference, SourceSnapshot};
 use std::{
     fs,
@@ -27,7 +28,7 @@ pub(crate) async fn import(
             .with_context(|| format!("could not read {}", path.display()))?;
     }
     // A file-level parse error cannot be recovered because entry boundaries are
-    // not trustworthy. Per-entry provider/projection errors below are isolatable.
+    // not trustworthy. Per-entry INSPIRE/projection errors below are isolatable.
     let parsed = split_entries(&source)?;
     let client = inspire_client()?;
     let mut pending = Vec::with_capacity(parsed.len());
@@ -95,16 +96,16 @@ async fn canonicalize(
         .map(Locator::Arxiv)
         .chain(reference.identifiers.dois.into_iter().map(Locator::Doi));
     for locator in locators {
-        match client.resolve(&locator).await {
+        match client.resolve_snapshot(&locator).await {
             Ok(record) => return Ok(SourceSnapshot::inspire(record)),
-            Err(ProviderError::NotFound(_)) => continue,
-            Err(ProviderError::Request(message)) => {
+            Err(InspireError::NotFound(_)) => continue,
+            Err(error @ (InspireError::Transport(_) | InspireError::HttpStatus { .. })) => {
                 eprintln!(
-                    "Could not canonicalize {key} through INSPIRE ({message}); kept imported BibTeX"
+                    "Could not canonicalize {key} through INSPIRE ({error}); kept imported BibTeX"
                 );
                 return Ok(imported.clone());
             }
-            Err(error @ (ProviderError::Malformed(_) | ProviderError::InvalidLocator(_))) => {
+            Err(error @ (InspireError::Malformed(_) | InspireError::InvalidBaseUrl(_))) => {
                 return Err(
                     anyhow::Error::from(error).context(format!("could not canonicalize `{key}`"))
                 );

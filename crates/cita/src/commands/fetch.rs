@@ -1,6 +1,6 @@
 use super::{Target, add_message, highlight_style, inspire_client};
 use anyhow::{Context, Result};
-use cita_core::{Locator, MetadataProvider, Reference, ReferenceSource};
+use cita_core::{Locator, Reference, ReferenceSource};
 use cita_documents::{
     ArtifactKind, DocumentStore, Error as DocumentError, FetchOutcome, FetchPolicy, arxiv_pdf_url,
 };
@@ -34,7 +34,7 @@ async fn select(target: &Target<'_>, selector: &str, save: bool) -> Result<Selec
     })?;
     let client = inspire_client()?;
     if save {
-        let record = client.resolve(&locator).await?;
+        let record = client.resolve_snapshot(&locator).await?;
         let key = record.texkey.clone();
         let reference = record.project()?;
         let outcome = target

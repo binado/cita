@@ -26,7 +26,7 @@ enum Command {
     Add(AddArgs),
     /// Refresh managed sources and retry canonicalizing imports
     Sync(ScopeArgs),
-    /// Remove references by local key or provider/DOI/arXiv identity
+    /// Remove references by local key or INSPIRE/DOI/arXiv identity
     Remove(RemoveArgs),
     /// List stored references
     List(ListArgs),
@@ -127,7 +127,7 @@ struct AddArgs {
 struct RemoveArgs {
     #[command(flatten)]
     scope: ShelfArg,
-    /// Local key, provider ID, DOI, arXiv ID, or canonical URL to remove
+    /// Local key, INSPIRE ID, DOI, arXiv ID, or canonical URL to remove
     #[arg(required = true)]
     selectors: Vec<String>,
 }
@@ -188,7 +188,7 @@ struct FetchArgs {
     save: bool,
     #[command(flatten)]
     scope: ShelfArg,
-    /// Local key, provider ID, DOI, arXiv ID, canonical URL, or unmatched INSPIRE locator
+    /// Local key, INSPIRE ID, DOI, arXiv ID, canonical URL, or unmatched INSPIRE locator
     selector: String,
 }
 

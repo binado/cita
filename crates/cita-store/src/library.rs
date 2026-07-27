@@ -4,11 +4,9 @@ use crate::{
 };
 use cita_bibliography::{BibtexSnapshot, validate_key};
 use cita_core::{Identifiers, Locator, Reference, normalize_arxiv, normalize_doi};
-use rusqlite::{
-    Connection, OptionalExtension, Transaction, TransactionBehavior, params, types::Type,
-};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     env, fs,
     path::{Path, PathBuf},
     time::Duration,
@@ -43,13 +41,10 @@ CREATE TABLE identities (
 );
 CREATE UNIQUE INDEX one_canonical_identity
     ON identities(reference_id, kind) WHERE canonical = 1;
-CREATE TABLE provider_records (
-    reference_id INTEGER NOT NULL REFERENCES bibliography_references(id) ON DELETE CASCADE,
-    provider     TEXT NOT NULL,
-    provider_id  TEXT NOT NULL,
-    updated      TEXT NOT NULL,
-    PRIMARY KEY (reference_id, provider),
-    UNIQUE (provider, provider_id)
+CREATE TABLE inspire_records (
+    reference_id INTEGER PRIMARY KEY REFERENCES bibliography_references(id) ON DELETE CASCADE,
+    record_id    INTEGER NOT NULL UNIQUE CHECK (record_id > 0),
+    updated      TEXT NOT NULL
 );
 CREATE TABLE shelves (
     id   INTEGER PRIMARY KEY,
@@ -209,7 +204,7 @@ pub enum LibraryError {
         value: String,
     },
     /// A sync result raced another mutation.
-    #[error("reference changed while provider data was being fetched")]
+    #[error("reference changed while INSPIRE data was being fetched")]
     ConcurrentChange,
     /// Source data is malformed.
     #[error("invalid source metadata: {0}")]
@@ -289,7 +284,7 @@ pub struct ShelfEntry {
     pub reference: Reference,
 }
 
-/// A reference selected for provider synchronization.
+/// A reference selected for INSPIRE synchronization.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SyncCandidate {
     /// Private database reference ID.
@@ -298,7 +293,7 @@ pub struct SyncCandidate {
     pub source: SourceSnapshot,
 }
 
-/// A provider result guarded by its previously observed snapshot.
+/// An INSPIRE result guarded by its previously observed snapshot.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SyncUpdate {
     /// Private database reference ID.
@@ -421,7 +416,7 @@ impl Library {
             .collect())
     }
 
-    /// Find within one shelf by exact key, provider ID, DOI, or arXiv ID.
+    /// Find within one shelf by exact key, INSPIRE ID, DOI, or arXiv ID.
     pub fn find(
         &self,
         shelf: &ShelfName,
@@ -448,15 +443,7 @@ impl Library {
             Err(_) => return Ok(None),
         };
         let id = match locator {
-            Locator::Inspire(value) => connection
-                .query_row(
-                    "SELECT sr.reference_id FROM shelf_references sr
-                     JOIN provider_records p ON p.reference_id = sr.reference_id
-                     WHERE sr.shelf_id = ?1 AND p.provider = 'inspire' AND p.provider_id = ?2",
-                    params![shelf_id, value.to_string()],
-                    |row| row.get(0),
-                )
-                .optional()?,
+            Locator::Inspire(value) => inspire_record_in_shelf(&connection, shelf_id, value)?,
             Locator::Doi(value) => {
                 identity_in_shelf(&connection, shelf_id, "doi", &normalize_doi(&value))?
             }
@@ -614,7 +601,7 @@ impl Library {
             .collect()
     }
 
-    /// Apply a complete provider result set atomically.
+    /// Apply a complete INSPIRE result set atomically.
     pub fn apply_sync(&self, updates: Vec<SyncUpdate>) -> Result<usize, LibraryError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -731,6 +718,25 @@ fn identity_in_shelf(
         .optional()?)
 }
 
+fn inspire_record_in_shelf(
+    connection: &Connection,
+    shelf_id: i64,
+    record_id: u64,
+) -> Result<Option<i64>, LibraryError> {
+    let Ok(record_id) = i64::try_from(record_id) else {
+        return Ok(None);
+    };
+    Ok(connection
+        .query_row(
+            "SELECT sr.reference_id FROM shelf_references sr
+             JOIN inspire_records ir ON ir.reference_id = sr.reference_id
+             WHERE sr.shelf_id = ?1 AND ir.record_id = ?2",
+            params![shelf_id, record_id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
 pub(crate) fn source_identities(
     source: &SourceSnapshot,
 ) -> Result<Vec<(String, String)>, LibraryError> {
@@ -755,6 +761,30 @@ pub(crate) fn source_identities(
     Ok(identities)
 }
 
+fn sql_record_id(record_id: u64) -> Result<i64, LibraryError> {
+    if record_id == 0 {
+        return Err(LibraryError::InvalidSource(
+            "INSPIRE record id is zero".into(),
+        ));
+    }
+    i64::try_from(record_id).map_err(|_| {
+        LibraryError::InvalidSource(format!(
+            "INSPIRE record id {record_id} exceeds SQLite's integer range"
+        ))
+    })
+}
+
+fn source_record_id(record_id: i64) -> Result<u64, LibraryError> {
+    u64::try_from(record_id)
+        .ok()
+        .filter(|id| *id > 0)
+        .ok_or_else(|| {
+            LibraryError::InvalidSource(format!(
+                "stored INSPIRE record id {record_id} is not positive"
+            ))
+        })
+}
+
 fn matching_reference_ids(
     connection: &Connection,
     source: &SourceSnapshot,
@@ -777,9 +807,8 @@ fn matching_reference_ids(
     if let Some(entry) = source.inspire_entry()
         && let Some(id) = connection
             .query_row(
-                "SELECT reference_id FROM provider_records
-                 WHERE provider = 'inspire' AND provider_id = ?1",
-                [entry.record_id.to_string()],
+                "SELECT reference_id FROM inspire_records WHERE record_id = ?1",
+                [sql_record_id(entry.record_id)?],
                 |row| row.get(0),
             )
             .optional()?
@@ -862,9 +891,9 @@ fn insert_details(
     }
     if let Some(entry) = source.inspire_entry() {
         transaction.execute(
-            "INSERT INTO provider_records(reference_id, provider, provider_id, updated)
-             VALUES (?1, 'inspire', ?2, ?3)",
-            params![id, entry.record_id.to_string(), entry.updated],
+            "INSERT INTO inspire_records(reference_id, record_id, updated)
+             VALUES (?1, ?2, ?3)",
+            params![id, sql_record_id(entry.record_id)?, entry.updated],
         )?;
     }
     Ok(())
@@ -880,7 +909,7 @@ fn replace_reference(
         .map_err(|error| LibraryError::InvalidSource(error.to_string()))?;
     transaction.execute("DELETE FROM contributors WHERE reference_id = ?1", [id])?;
     transaction.execute("DELETE FROM identities WHERE reference_id = ?1", [id])?;
-    transaction.execute("DELETE FROM provider_records WHERE reference_id = ?1", [id])?;
+    transaction.execute("DELETE FROM inspire_records WHERE reference_id = ?1", [id])?;
     transaction.execute(
         "UPDATE bibliography_references
          SET source_kind = ?2, bibtex = ?3, title = ?4, year = ?5 WHERE id = ?1",
@@ -1070,19 +1099,13 @@ fn load_source(connection: &Connection, id: i64) -> Result<SourceSnapshot, Libra
     match kind.as_str() {
         "import" => Ok(SourceSnapshot::Import(BibtexSnapshot::new(bibtex)?)),
         "inspire" => {
-            let (provider_id, updated) = connection.query_row(
-                "SELECT provider_id, updated FROM provider_records
-                 WHERE reference_id = ?1 AND provider = 'inspire'",
+            let (record_id, updated) = connection.query_row(
+                "SELECT record_id, updated FROM inspire_records
+                 WHERE reference_id = ?1",
                 [id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
             )?;
-            let record_id = provider_id.parse().map_err(|error| {
-                LibraryError::Sql(rusqlite::Error::FromSqlConversionFailure(
-                    0,
-                    Type::Text,
-                    Box::new(error),
-                ))
-            })?;
+            let record_id = source_record_id(record_id)?;
             let mut statement = connection.prepare(
                 "SELECT kind, value FROM identities
                  WHERE reference_id = ?1 AND canonical = 1",
@@ -1149,30 +1172,12 @@ fn load_reference(connection: &Connection, id: i64) -> Result<Reference, Library
             arxiv.push(value);
         }
     }
-    let mut providers = BTreeMap::new();
-    let mut provider_statement = connection.prepare(
-        "SELECT provider, provider_id FROM provider_records
-         WHERE reference_id = ?1 ORDER BY provider, provider_id",
-    )?;
-    for row in provider_statement.query_map([id], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })? {
-        let (provider, value) = row?;
-        providers
-            .entry(provider)
-            .or_insert_with(Vec::new)
-            .push(value);
-    }
     Ok(Reference {
         title,
         authors,
         collaborations,
         year,
-        identifiers: Identifiers {
-            dois,
-            arxiv,
-            providers,
-        },
+        identifiers: Identifiers { dois, arxiv },
     })
 }
 
@@ -1197,15 +1202,7 @@ fn find_in_connection(
             Err(_) => return Ok(None),
         };
         let id = match locator {
-            Locator::Inspire(value) => connection
-                .query_row(
-                    "SELECT sr.reference_id FROM shelf_references sr
-                     JOIN provider_records p ON p.reference_id = sr.reference_id
-                     WHERE sr.shelf_id = ?1 AND p.provider = 'inspire' AND p.provider_id = ?2",
-                    params![shelf_id, value.to_string()],
-                    |row| row.get(0),
-                )
-                .optional()?,
+            Locator::Inspire(value) => inspire_record_in_shelf(connection, shelf_id, value)?,
             Locator::Doi(value) => {
                 identity_in_shelf(connection, shelf_id, "doi", &normalize_doi(&value))?
             }
@@ -1375,6 +1372,70 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, LibraryError::IdentityConflict));
         assert_eq!(library.entries(&main).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn inspire_records_use_integer_ids_and_round_trip() {
+        let root = tempfile::tempdir().unwrap();
+        let library = Library::open_or_create(root.path().canonicalize().unwrap()).unwrap();
+        let main = ShelfName::default_shelf();
+        let source = SourceSnapshot::Inspire(InspireEntry {
+            record_id: 42,
+            updated: "2026-01-01".into(),
+            bibtex: "@article{Provider,\n title={Managed},\n doi={10.1/managed}\n}".into(),
+            identifiers: HepIdentifiers::new(None, Some("10.1/managed".into())),
+        });
+        library
+            .add_batch(
+                &main,
+                vec![PendingReference {
+                    key: KeyRequest::Suggested("Managed".into()),
+                    source: source.clone(),
+                }],
+                ConflictPolicy::Skip,
+            )
+            .unwrap();
+
+        let connection = library.connection().unwrap();
+        let (record_id, storage_class): (i64, String) = connection
+            .query_row(
+                "SELECT record_id, typeof(record_id) FROM inspire_records",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(record_id, 42);
+        assert_eq!(storage_class, "integer");
+        assert_eq!(library.entries(&main).unwrap()[0].source, source);
+        assert_eq!(
+            library.find(&main, "inspire:42").unwrap().unwrap().key,
+            "Managed"
+        );
+    }
+
+    #[test]
+    fn inspire_record_ids_outside_sqlite_range_are_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let library = Library::open_or_create(root.path().canonicalize().unwrap()).unwrap();
+        let source = SourceSnapshot::Inspire(InspireEntry {
+            record_id: u64::MAX,
+            updated: "2026-01-01".into(),
+            bibtex: "@article{Provider,\n title={Managed}\n}".into(),
+            identifiers: HepIdentifiers::default(),
+        });
+        let error = library
+            .add_batch(
+                &ShelfName::default_shelf(),
+                vec![PendingReference {
+                    key: KeyRequest::Suggested("Managed".into()),
+                    source,
+                }],
+                ConflictPolicy::Skip,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error, LibraryError::InvalidSource(message) if message.contains("SQLite"))
+        );
     }
 
     #[test]

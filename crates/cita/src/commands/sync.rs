@@ -1,6 +1,7 @@
 use super::{Target, inspire_client};
 use anyhow::{Context, Result};
-use cita_core::{Locator, MetadataProvider, ProviderError, ReferenceSource};
+use cita_core::{Locator, ReferenceSource};
+use cita_inspire_client::Error as InspireError;
 use cita_store::{Library, SourceSnapshot, SyncCandidate, SyncUpdate};
 use std::collections::BTreeMap;
 
@@ -50,17 +51,17 @@ async fn sync_candidates(library: &Library, candidates: Vec<SyncCandidate>) -> R
         .filter(|candidate| candidate.source.inspire_entry().is_some())
         .count();
     let imported = candidates.len() - managed;
-    let provider_ids = candidates
+    let record_ids = candidates
         .iter()
         .filter_map(|candidate| {
             candidate
                 .source
                 .inspire_entry()
-                .map(|entry| entry.record_id.to_string())
+                .map(|entry| entry.record_id)
         })
         .collect::<Vec<_>>();
     let refreshed = client
-        .refresh(&provider_ids)
+        .refresh_records(&record_ids)
         .await?
         .into_iter()
         .map(|record| (record.record_id, record))
@@ -113,16 +114,16 @@ async fn canonicalize_import(
         .map(Locator::Arxiv)
         .chain(reference.identifiers.dois.into_iter().map(Locator::Doi));
     for locator in locators {
-        match client.resolve(&locator).await {
+        match client.resolve_snapshot(&locator).await {
             Ok(record) => return Ok(Some(SourceSnapshot::inspire(record))),
-            Err(ProviderError::NotFound(_)) => continue,
-            Err(ProviderError::Request(message)) => {
+            Err(InspireError::NotFound(_)) => continue,
+            Err(error @ (InspireError::Transport(_) | InspireError::HttpStatus { .. })) => {
                 eprintln!(
-                    "Could not canonicalize imported reference through INSPIRE ({message}); left unchanged"
+                    "Could not canonicalize imported reference through INSPIRE ({error}); left unchanged"
                 );
                 return Ok(None);
             }
-            Err(error @ (ProviderError::Malformed(_) | ProviderError::InvalidLocator(_))) => {
+            Err(error @ (InspireError::Malformed(_) | InspireError::InvalidBaseUrl(_))) => {
                 return Err(anyhow::Error::from(error)
                     .context("could not canonicalize imported reference during sync"));
             }

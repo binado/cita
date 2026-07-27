@@ -99,7 +99,7 @@ impl Interchange {
         }
         let mut handles: BTreeMap<&str, &ExportReference> = BTreeMap::new();
         let mut identity_owners = BTreeMap::new();
-        let mut provider_owners = BTreeMap::new();
+        let mut inspire_owners = BTreeMap::new();
         for reference in &self.references {
             if handles
                 .insert(reference.handle.as_str(), reference)
@@ -129,7 +129,7 @@ impl Interchange {
             }
             if let Some(entry) = reference.source.inspire_entry()
                 && let Some(owner) =
-                    provider_owners.insert(entry.record_id, reference.handle.as_str())
+                    inspire_owners.insert(entry.record_id, reference.handle.as_str())
             {
                 return Err(LibraryError::InvalidInterchange(format!(
                     "INSPIRE record {} belongs to both `{owner}` and `{}`",

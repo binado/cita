@@ -18,7 +18,7 @@ reference with a shelf-local citation key, so the same source can use different
 keys in different shelves. Removing the final membership deletes the orphaned
 global reference.
 
-DOI, versionless arXiv, and namespaced provider identities are globally unique.
+DOI, versionless arXiv, and INSPIRE record identities are globally unique.
 Title and author similarity are never identity. Incoming identifiers that point
 to different global references are a conflict and never cause an implicit merge.
 
@@ -35,14 +35,14 @@ in the same transaction; it is never independently edited.
 - Imported sources retain exact BibTeX. Import and sync attempt to canonicalize
   imports through INSPIRE using arXiv and then DOI identities.
 
-The provider texkey remains inside raw BibTeX. A shelf-local citation key may
+The INSPIRE texkey remains inside raw BibTeX. A shelf-local citation key may
 differ, is selected by `--key` or import, and is substituted only while
 rendering.
 
 ## Sync
 
 Sync selects unique global references from one shelf or the whole library.
-Managed records refresh by stable provider ID; imported records retry
+Managed records refresh by stable INSPIRE record ID; imported records retry
 canonicalization. Network work happens before the database write, and the
 complete selected result set is applied atomically after checking that sources
 did not change concurrently. Shared shelves immediately observe the update.
@@ -56,7 +56,7 @@ URL exists.
 
 JSON and TOML exports are versioned, deterministic, lossless logical-library
 documents. They preserve global sharing, shelves, local keys, raw source
-snapshots, identities, and provider metadata, and are accepted by
+snapshots, identities, and INSPIRE metadata, and are accepted by
 `cita init --from-file`. SQLite row IDs and derived projection fields are
 private and are not serialized.
 
@@ -67,4 +67,4 @@ Exports are caller-relative and cannot target the global store.
 PDFs and safely extracted source packages live under `$CITA_HOME/files` and are
 shared by normalized, versionless arXiv ID. They are not part of lossless
 library exports. Transient `fetch` resolves INSPIRE JSON unless `--save` stores
-the complete provider snapshot.
+the complete INSPIRE snapshot.

@@ -35,7 +35,8 @@ cita sync --all-shelves
 
 Supported locators are bare arXiv IDs; explicit `arxiv:`, `doi:`, or `inspire:`
 locators; and canonical arXiv, INSPIRE, or DOI URLs. Selectors match an exact
-local key first, then a provider ID, normalized DOI, or normalized arXiv ID.
+local key first, then an INSPIRE record ID, normalized DOI, or normalized arXiv
+ID.
 
 ## Commands
 
@@ -80,9 +81,9 @@ $HOME/.cita/
 
 `library.sqlite3` is the sole authority. References are global and shelves hold
 memberships with shelf-local citation keys, so syncing a shared reference affects
-every shelf that contains it. DOI, arXiv, and provider identities are globally
-unique. Exact UTF-8 BibTeX is stored alongside its structured title, contributor,
-year, identity, and provider projection.
+every shelf that contains it. DOI, arXiv, and INSPIRE record identities are
+globally unique. Exact UTF-8 BibTeX is stored alongside its structured title,
+contributor, year, identities, and INSPIRE refresh metadata.
 
 BibTeX exports are deterministic citation projections. Entries are sorted and
 re-keyed by local key, separated by one blank line, and terminated by one

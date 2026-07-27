@@ -1,6 +1,6 @@
 use super::{Target, inspire_client, print_add_outcomes};
 use anyhow::{Result, bail};
-use cita_core::{Locator, MetadataProvider};
+use cita_core::Locator;
 use cita_store::{ConflictPolicy, KeyRequest, PendingReference, SourceSnapshot};
 
 pub(crate) async fn add(
@@ -19,7 +19,7 @@ pub(crate) async fn add(
     let client = inspire_client()?;
     let mut pending = Vec::with_capacity(locators.len());
     for locator in &locators {
-        let record = client.resolve(locator).await?;
+        let record = client.resolve_snapshot(locator).await?;
         let key = match explicit_key {
             Some(key) => KeyRequest::Exact(key.to_owned()),
             None => KeyRequest::Suggested(record.texkey.clone()),

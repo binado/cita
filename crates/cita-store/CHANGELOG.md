@@ -8,3 +8,7 @@ All notable changes to `cita-store` will be documented in this file.
 
 - add a SQLite-backed global bibliography with shared shelf memberships
 - add deterministic lossless JSON and TOML interchange documents
+
+### Changed
+
+- store typed INSPIRE refresh records instead of generic provider records
