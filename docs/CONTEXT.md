@@ -1,24 +1,8 @@
 # Domain context
 
-## Library and shelf
-
-A library is a `cita-library.toml` registry that maps stable shelf names to
-library-root-relative paths. A shelf is a completely independent bibi project
-with its own authoritative manifest, generated bibliography, document cache,
-identities, and Git commits. The registry routes commands; it does not aggregate
-or share bibliographic state.
-
-Shelf names are stable identifiers; the registered path is fixed at
-registration time, and registering an existing name under a different path is
-rejected. Paths must remain beneath the library root and cannot be equal,
-nested, or symlink aliases. Library discovery walks ancestors independently of
-nearest-project `cita.toml` discovery. Library-wide sync and generation are
-ordered collections of independent shelf mutations, not one crash-atomic
-transaction.
-
 ## Reference
 
-A `Reference` is Bibi's provider-neutral semantic projection: title, authors,
+A `Reference` is bibi's provider-neutral semantic projection: title, authors,
 collaborations, display year, publication, URL, primary category, and normalized
 identifiers. Commands consume references; they do not inspect provider payloads
 or parse tracked output.
@@ -41,7 +25,7 @@ id. Projections are derived and are never stored as a second authority.
 
 ## Local citation key
 
-The sorted key in `references` is Bibi's local identity for citation and Git
+The sorted key in `references` is bibi's local identity for citation and Git
 review. It may differ from a provider texkey. Refreshing a source snapshot never
 changes it; bibliography generation changes only the raw entry's key token.
 
@@ -57,7 +41,7 @@ conflict, including across source kinds.
 `references.bib` is a tracked generated artifact, analogous to a lockfile. Its
 bytes are completely derived from the manifest: local-key order, preserved raw
 entry fields, one blank line between entries, and a final newline. Drift is an
-error; `bibi generate` repairs it.
+error that blocks reads until the next mutation rewrites the file.
 
 ## Derived export
 
@@ -71,5 +55,5 @@ for other tools to consume and regenerated rather than edited.
 
 INSPIRE snapshots are managed: `bibi sync` refreshes them by stable record ID.
 BibTeX snapshots are imported/unmanaged and remain byte-for-byte unchanged until
-explicitly removed. Bibi does not merge provenance or adopt one source as
+explicitly removed. bibi does not merge provenance or adopt one source as
 another.

@@ -1,27 +1,18 @@
 mod add;
 mod export;
 mod fetch;
-mod generate;
 mod import;
-mod init;
-mod library;
 mod list;
 mod remove;
 mod sync;
 
 pub(crate) use add::add;
-pub(crate) use export::{export, export_outcome};
+pub(crate) use export::export;
 pub(crate) use fetch::{FetchOptions, fetch};
-pub(crate) use generate::{generate, generate_outcome};
 pub(crate) use import::import;
-pub(crate) use init::init;
-pub(crate) use library::{
-    batch_export as library_export, batch_generate as library_generate, batch_sync as library_sync,
-    init_library, init_shelf, list_shelves, resolve_target,
-};
 pub(crate) use list::list;
 pub(crate) use remove::remove;
-pub(crate) use sync::{sync, sync_outcome};
+pub(crate) use sync::sync;
 
 use anyhow::{Context, Result, bail};
 use bibi_inspire_client::{Client, RetryEvent};

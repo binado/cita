@@ -3,9 +3,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use bibi_bibliography::insert_field;
 use bibi_core::ReferenceSource;
 use bibi_documents::arxiv_pdf_url;
-use bibi_manifest::{
-    BIBLIOGRAPHY_FILE, LIBRARY_FILE, MANIFEST_FILE, Manifest, SourceSnapshot, atomic_write,
-};
+use bibi_manifest::{BIBLIOGRAPHY_FILE, MANIFEST_FILE, Manifest, SourceSnapshot, atomic_write};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -94,7 +92,7 @@ fn ensure_not_managed(path: &Path, manifest: &Manifest) -> Result<()> {
     ensure_not_owned_elsewhere(&target)
 }
 
-/// Refuse a target that some other project or library manages.
+/// Refuse a target that some other project manages.
 ///
 /// A managed name is only managed inside the directory that owns it, so a
 /// `references.bib` in a plain LaTeX directory remains a legal export target;
@@ -103,14 +101,12 @@ fn ensure_not_owned_elsewhere(target: &Path) -> Result<()> {
     let (Some(name), Some(parent)) = (target.file_name(), target.parent()) else {
         return Ok(());
     };
-    let (owner, kind) = match name.to_str() {
-        Some(MANIFEST_FILE | BIBLIOGRAPHY_FILE) => (MANIFEST_FILE, "project"),
-        Some(LIBRARY_FILE) => (LIBRARY_FILE, "library"),
-        _ => return Ok(()),
-    };
-    if parent.join(owner).is_file() {
+    if !matches!(name.to_str(), Some(MANIFEST_FILE | BIBLIOGRAPHY_FILE)) {
+        return Ok(());
+    }
+    if parent.join(MANIFEST_FILE).is_file() {
         bail!(
-            "refusing to write the export over the managed file {}, which belongs to the {kind} at {}",
+            "refusing to write the export over the managed file {}, which belongs to the project at {}",
             target.display(),
             parent.display()
         );

@@ -54,29 +54,10 @@ fn success(output: Output) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
-fn git(directory: &Path, args: &[&str]) -> Output {
-    Command::new("git")
-        .arg("-C")
-        .arg(directory)
-        .args(args)
-        .output()
-        .unwrap()
-}
-
-fn git_success(directory: &Path, args: &[&str]) -> String {
-    let output = git(directory, args);
-    assert!(
-        output.status.success(),
-        "stderr:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap()
-}
-
-fn init_git(directory: &Path) {
-    git_success(directory, &["init", "-q"]);
-    git_success(directory, &["config", "user.email", "bibi@example.test"]);
-    git_success(directory, &["config", "user.name", "bibi Test"]);
+/// An empty schema-1 project, written directly now that `init` is gone.
+fn project(directory: &Path) {
+    fs::write(directory.join("cita.toml"), "schema = 1\n").unwrap();
+    fs::write(directory.join("references.bib"), "").unwrap();
 }
 
 /// Slice `cita.toml` text down to one `[references.<key>]` entry, including
@@ -143,10 +124,9 @@ const PAPERS: [Paper; 4] = [
 #[ignore = "hits the live INSPIRE API; run with `cargo test --test e2e -- --ignored`"]
 fn e2e_seed_then_add_handpicked_inspire_papers() {
     let directory = tempfile::tempdir().unwrap();
-    init_git(directory.path());
 
-    // 1. `init` creates a fresh schema-1 manifest and an empty bibliography.
-    assert!(success(bibi(directory.path(), &["init"])).contains("Initialized"));
+    // 1. A fresh schema-1 manifest and an empty bibliography.
+    project(directory.path());
     let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
     assert!(manifest.starts_with("schema = 1"), "{manifest}");
     assert_eq!(
@@ -222,14 +202,7 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
         before
     );
 
-    // 5. `generate` must be a no-op here: `add` already left references.bib
-    //    in sync, so re-rendering it byte-for-byte proves no drift.
-    let bib_before = fs::read(directory.path().join("references.bib")).unwrap();
-    assert!(success(bibi(directory.path(), &["generate"])).starts_with("Generated"));
-    assert_eq!(
-        fs::read(directory.path().join("references.bib")).unwrap(),
-        bib_before
-    );
+    // 5. Every added paper is listed.
     let listed = success(bibi(directory.path(), &["list"]));
     for paper in &PAPERS {
         assert!(listed.contains(paper.key), "{listed}");
@@ -253,8 +226,7 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
         );
     }
 
-    // 7. `remove` drops a managed record by provider id (not its local key),
-    //    and `commit` stages only the two generated artifacts.
+    // 7. `remove` drops a managed record by provider id, not its local key.
     let output = success(bibi(directory.path(), &["remove", "inspire:51188"]));
     assert_eq!(output, "Removed Weinberg\n");
     let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
@@ -264,12 +236,4 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
         !bibliography.contains("A Model of Leptons"),
         "{bibliography}"
     );
-
-    success(bibi(directory.path(), &["commit"]));
-    let committed = git_success(
-        directory.path(),
-        &["show", "--pretty=format:", "--name-only", "HEAD"],
-    );
-    assert!(committed.contains("cita.toml"), "{committed}");
-    assert!(committed.contains("references.bib"), "{committed}");
 }

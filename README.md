@@ -17,22 +17,11 @@ cargo install bibi
 ## Quick start
 
 ```bash
-bibi init
 bibi add https://arxiv.org/abs/1207.7214 doi:10.1016/j.physletb.2012.08.020
 bibi import local-references.bib
 bibi list
 bibi sync
 bibi fetch 1207.7214
-```
-
-Several independent projects can also be registered as shelves in one library:
-
-```bash
-bibi library init
-bibi library new paper-one --path papers/paper-one
-bibi add 1207.7214 --shelf paper-one
-bibi library list
-bibi sync --all-shelves
 ```
 
 Supported locators are bare arXiv IDs; explicit `arxiv:`, `doi:`, or `inspire:`
@@ -43,15 +32,6 @@ work as selectors.
 
 ## Commands
 
-- `bibi init [--path <directory>]` creates an empty schema-1 project in the
-  current directory, or in the specified existing directory. Initialization
-  does not run Git, so malformed repository metadata or an unavailable Git
-  executable cannot prevent it. Commands run inside a nested project discover
-  its nearest `cita.toml`. If only `references.bib` exists at the chosen
-  location, initialization imports every standalone entry. Existing schema-1
-  projects are validated; any other schema is explicitly unsupported. The
-  target directory must already exist, and invalid existing content is rejected
-  without rewriting the managed files.
 - `bibi import <path|->` atomically imports all standalone entries from a file
   or stdin.
 - `bibi add [--key K] <locator>...` resolves INSPIRE JSON and authoritative
@@ -61,49 +41,21 @@ work as selectors.
 - `bibi remove <selector>...` removes a batch atomically.
 - `bibi list [--sort-by key|title|author|year] [--order asc|desc]` displays
   source-neutral projections.
-- `bibi generate` repairs a missing or edited `references.bib` from the
-  authoritative manifest.
 - `bibi export [-o/--output <file>]` writes a derived BibTeX file for tools that
   want a resolvable link, such as Zotero. It renders the same entries as
   `references.bib` and adds `url = {https://arxiv.org/pdf/<id>}` to each entry
   with an arXiv ID, leaving entries that already define a `url` untouched. The
   default file is named for the project directory; a relative `--output` is
   relative to the directory where bibi was invoked. The export never overwrites
-  a managed file — not this project's, and not a `cita.toml`, `references.bib`,
-  or `cita-library.toml` belonging to any other project or library — and it
-  refuses to run while `references.bib` has drifted.
+  a managed file — not this project's, and not a `cita.toml` or `references.bib`
+  belonging to any other project — and it refuses to run while `references.bib`
+  has drifted.
 - `bibi fetch [--force | --cache-only | --url] [--source] [--open] [--save]
   <selector>` returns an absolute cached PDF path by default, the arXiv PDF URL
   with `-u/--url`, or an absolute extracted source directory with `--source`.
   `--source` and `--url` are mutually exclusive. `--open` launches the returned
   target with the system default application. Without `--save`, an unmatched
   locator uses INSPIRE JSON only.
-- `bibi commit` is an optional Git helper. It validates consistency and commits
-  only `cita.toml` and `references.bib`, leaving unrelated staged changes
-  intact. It refuses to run if either managed file is already staged.
-- `bibi library init [--path <directory>]` creates an idempotent
-  `cita-library.toml` registry in an existing directory. A library root cannot
-  itself be a bibi project.
-- `bibi library list` (alias `ls`) lists stable shelf names and their
-  library-relative paths in deterministic order.
-- `bibi library new <name> [--path <relative-directory>]` (alias `create`)
-  creates and registers an independent shelf. It can create an empty project,
-  import an existing standalone `references.bib`, or adopt an existing verified
-  bibi project. Initialization completes before registration, so a registry
-  write failure leaves a usable standalone shelf for a safe retry.
-- `-s/--shelf <name>` runs any of `add`, `import`, `remove`, `list`, `generate`,
-  `export`, `sync`, `fetch`, and `commit` in that registered shelf instead of
-  the project discovered from the current directory. Import and export paths
-  remain relative to the directory where the user invoked bibi, not to the
-  shelf. A shelf export is named for the stable registered shelf name rather
-  than the shelf directory, so importing each file into Zotero yields one
-  collection per shelf.
-- `--all-shelves` runs `generate`, `export`, or `sync` in every shelf in name
-  order, continuing after shelf-specific failures, printing one result per
-  shelf, and exiting unsuccessfully if any shelf failed. It is mutually
-  exclusive with `--shelf`, and with `export --output`, which cannot name a file
-  for each shelf. The remaining commands are deliberately excluded: there is no
-  library-wide commit, and mutations stay per-shelf.
 - `bibi completions <bash|elvish|fish|powershell|zsh>` prints a shell completion
   script to stdout, e.g. `bibi completions zsh > ~/.zfunc/_bibi`.
 
@@ -137,15 +89,9 @@ updating the previous import.
 
 Mutations validate and render the complete candidate in memory, atomically
 persist `references.bib` first, and persist `cita.toml` as the commit point.
-Downloaded PDFs and extracted source packages live under `.bibi/files`;
-initialization adds
-`/.bibi/files/` to the project root's `.gitignore` so the cache is not tracked.
-
-A library is only a sorted registry of shelf names and relative paths. Each
-shelf has its own `cita.toml`, `references.bib`, `.bibi/files` cache, identities,
-and optional Git history. There is no aggregate bibliography, shared cache, or
-cross-shelf citation-key/identifier uniqueness. Registered paths cannot escape
-the library root, overlap or nest, or alias one another through symlinks.
+Downloaded PDFs and extracted source packages live under `.bibi/files`, and
+`/.bibi/files/` is added to the project root's `.gitignore` so the cache is not
+tracked.
 
 ## Workspace
 
@@ -154,11 +100,11 @@ the library root, overlap or nest, or alias one another through symlinks.
   preservation, re-keying, and `biblatex`-based generic rendering.
 - `bibi-inspire-client`: typed INSPIRE JSON metadata, authoritative BibTeX
   snapshots, and stable-ID refreshes.
-- `bibi-manifest`: schema-1 shelf and library validation, identity indexes,
-  deterministic TOML, path safety, output verification, and coordinated writes.
+- `bibi-manifest`: schema-1 project validation, identity indexes, deterministic
+  TOML, output verification, and coordinated writes.
 - `bibi-documents`: validated arXiv PDF/source downloads, safe source
   extraction, and atomic caching.
-- `bibi`: CLI wiring, discovery, selectors, and scoped Git commits.
+- `bibi`: CLI wiring, discovery, and selectors.
 
 ## Development
 
