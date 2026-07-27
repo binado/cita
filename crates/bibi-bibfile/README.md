@@ -13,5 +13,4 @@ Because the file is hand-edited, writes are byte-preserving: a mutation replaces
 only the entries it touches and copies every other byte through unchanged,
 including comments, `@string` directives, and whatever spacing the author chose.
 
-This crate is published for reuse by the bibi workspace. Its public API is
-unstable while the version is 0.x and may change between minor releases.
+This crate is published for reuse by the bibi workspace.

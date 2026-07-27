@@ -460,9 +460,8 @@ pub fn remove_field(source: &str, name: &str) -> Result<String, Error> {
 /// Remove every field whose name begins with `prefix` from each entry.
 ///
 /// The prefix is matched case-insensitively. This is the exact inverse of
-/// [`insert_field`] over a whole bibliography, so a stripped export of a file
-/// this crate wrote is byte-identical to the same file before the fields were
-/// added.
+/// [`insert_field`] over a whole bibliography: after inserting prefixed fields
+/// with `insert_field`, stripping that prefix recovers the prior bytes.
 pub fn strip_fields_with_prefix(source: &str, prefix: &str) -> Result<String, Error> {
     let prefix = prefix.to_ascii_lowercase();
     let mut output = String::with_capacity(source.len());

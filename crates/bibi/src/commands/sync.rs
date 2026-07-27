@@ -130,8 +130,9 @@ async fn reconcile(file: &mut Bibfile) -> Result<SyncReport> {
     for (key, locator) in unmanaged {
         match client.resolve_snapshot(&locator).await {
             Ok(record) => {
-                file.adopt(&key, &record)?;
-                report.adopted.push(key);
+                if file.adopt(&key, &record)? {
+                    report.adopted.push(key);
+                }
             }
             // A bibliography legitimately holds work INSPIRE has never seen.
             // That is a fact to report, not a failure to abort on.

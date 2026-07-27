@@ -3,8 +3,8 @@
 ## Reference
 
 A `Reference` is bibi's provider-neutral semantic projection: title, authors,
-collaborations, display year, publication, URL, primary category, and normalized
-identifiers. Commands consume references; they do not inspect provider payloads.
+collaborations, display year, and normalized identifiers (DOI, arXiv, provider
+ids). Commands consume references; they do not inspect provider payloads.
 
 ## Bibliography
 
@@ -23,12 +23,14 @@ an entry is self-contained — everything needed to refresh it travels with it.
 
 ## Managed and unmanaged
 
-An entry is *managed* when it carries `x-bibi-inspire-id`. That is the whole
-definition: there is no separate tag that could disagree with the data. Managed
-entries refresh by stable record ID. Unmanaged entries with a DOI or arXiv id
-are candidates for *adoption* — `bibi sync` resolves them and attaches
-bookkeeping while leaving their content alone, since resolving answers "what is
-this thing I have", not "replace it".
+An entry is *managed* when it carries a present and parseable non-zero
+`x-bibi-inspire-id`. That is the whole definition: there is no separate tag that
+could disagree with the data. A malformed or zero id reads as unmanaged so a
+hand-edit cannot make the file unreadable. Managed entries refresh by stable
+record ID. Unmanaged entries with a DOI or arXiv id are candidates for
+*adoption* — `bibi sync` resolves them and attaches bookkeeping while leaving
+their content alone, since resolving answers "what is this thing I have", not
+"replace it".
 
 `x-bibi-frozen` removes an entry from both halves. It covers the entry you
 corrected by hand and the textbook INSPIRE will never have, because both mean

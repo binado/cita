@@ -8,5 +8,4 @@ atomic local artifact caching for [bibi](https://github.com/binado/bibi).
 source packages, which are validated and extracted into a temporary sibling
 directory before publication.
 
-This crate is published for reuse by the bibi workspace. Its public API is
-unstable while the version is 0.x and may change between minor releases.
+This crate is published for reuse by the bibi workspace.

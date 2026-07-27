@@ -148,12 +148,19 @@ impl Entry {
     /// this thing I already have", not "replace it with the provider's copy".
     /// Recording the provider's current timestamp is what makes that stick —
     /// the next sync sees them agree and writes nothing.
-    pub fn adopt(&mut self, record: &InspireRecord) -> Result<(), Error> {
-        let mut bibtex = insert_field(
-            &self.bibtex,
-            INSPIRE_ID_FIELD,
-            &record.record_id.to_string(),
-        )?;
+    ///
+    /// A malformed `x-bibi-inspire-id` is cleared before the real id is written:
+    /// [`insert_field`] leaves an existing field alone, so without that step a
+    /// hand-typed `{oops}` would keep the entry unmanaged forever. Returns
+    /// whether the entry bytes changed.
+    pub fn adopt(&mut self, record: &InspireRecord) -> Result<bool, Error> {
+        let before = self.bibtex.clone();
+        let mut bibtex = before.clone();
+        // Broken tool id: remove so insert_field can write the real one.
+        if self.tool_field(INSPIRE_ID_FIELD).is_some() && self.inspire_record_id().is_none() {
+            bibtex = remove_field(&bibtex, INSPIRE_ID_FIELD)?;
+        }
+        bibtex = insert_field(&bibtex, INSPIRE_ID_FIELD, &record.record_id.to_string())?;
         bibtex = insert_field(&bibtex, INSPIRE_UPDATED_FIELD, &record.updated)?;
         if let Some(arxiv) = &record.arxiv {
             bibtex = insert_field(&bibtex, ARXIV_FIELD, &normalize_arxiv(arxiv))?;
@@ -161,8 +168,9 @@ impl Entry {
         if let Some(doi) = &record.doi {
             bibtex = insert_field(&bibtex, DOI_FIELD, &normalize_doi(doi))?;
         }
+        let changed = bibtex != before;
         self.bibtex = bibtex;
-        Ok(())
+        Ok(changed)
     }
 
     /// Drop one tool-owned field, if present.

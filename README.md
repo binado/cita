@@ -141,14 +141,14 @@ Provider and document tests are hermetic and use local TCP listeners.
 
 ## Publishing
 
-All five crates share one version. Releases are automated with
+All six crates share one version. Releases are automated with
 [release-plz](https://release-plz.dev) (`release-plz.toml`,
 `.github/workflows/release-plz.yml`):
 
 1. Merge Conventional-Commit PRs to `main`.
 2. release-plz opens (or updates) a "release PR" that bumps the shared version
    and updates every crate's `CHANGELOG.md`.
-3. Merging that release PR publishes all five crates in dependency order and
+3. Merging that release PR publishes all six crates in dependency order and
    tags them.
 
 After a release, smoke-test with `cargo install bibi --locked`.

@@ -482,6 +482,29 @@ fn export_strips_bibi_fields_and_adds_the_arxiv_url() {
     assert!(kept.contains("x-bibi-inspire-id"), "{kept}");
 }
 
+/// Curated `x-bibi-arxiv` still decides the PDF link after the namespace is
+/// stripped — projecting the stripped text would lose the id.
+#[test]
+fn export_uses_curated_arxiv_when_eprint_is_absent() {
+    let directory = tempfile::tempdir().unwrap();
+    bib(directory.path());
+    fs::write(
+        directory.path().join("references.bib"),
+        format!(
+            "{}\n",
+            entry("Curated", "Curated title", "x-bibi-arxiv = {2401.00042},")
+        ),
+    )
+    .unwrap();
+
+    let exported = success(bibi(directory.path(), &["export", "-o", "-"]));
+    assert!(!exported.contains("x-bibi-"), "{exported}");
+    assert!(
+        exported.contains("url = {https://arxiv.org/pdf/2401.00042}"),
+        "{exported}"
+    );
+}
+
 #[test]
 fn export_defaults_beside_the_bibliography_and_refuses_to_overwrite_it() {
     let directory = tempfile::tempdir().unwrap();

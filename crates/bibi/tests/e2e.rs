@@ -206,9 +206,10 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
     let before = read_bib(directory.path());
     let output = success(bibi(directory.path(), &["sync"]));
     assert!(
-        output.contains("refreshed 0 of 4 managed entries; 2 unmanaged"),
+        output.contains("refreshed 0 of 4 managed entries"),
         "{output}"
     );
+    assert!(output.contains("2 entries not on INSPIRE"), "{output}");
     assert_eq!(read_bib(directory.path()), before);
     let bibliography = read_bib(directory.path());
     assert_eq!(section(&bibliography, "SeedAlpha"), seed_alpha_before);

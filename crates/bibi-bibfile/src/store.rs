@@ -551,7 +551,9 @@ impl Bibfile {
     /// keys tracking one upstream paper is a duplicate the user has to settle:
     /// `import` dedupes on DOI and arXiv id, so it cannot catch a pair that
     /// only turns out to be the same paper once INSPIRE resolves both.
-    pub fn adopt(&mut self, key: &str, record: &InspireRecord) -> Result<(), Error> {
+    ///
+    /// Returns whether the entry bytes changed.
+    pub fn adopt(&mut self, key: &str, record: &InspireRecord) -> Result<bool, Error> {
         if let Some(other) = self
             .entries
             .iter()
@@ -593,6 +595,14 @@ impl Bibfile {
             return;
         };
         self.entries.remove(at);
+        // Sole entry: the preamble lived in leading[0] ahead of it. Fold that
+        // into the tail so removing the last (or only) entry does not discard
+        // authored header bytes — the same byte-preservation rule as below.
+        if self.entries.is_empty() {
+            let preamble = self.leading.remove(at);
+            self.tail.insert_str(0, &preamble);
+            return;
+        }
         // Take the gap that separated this entry from its neighbour. For the
         // first entry that is the gap *after* it, so a leading file comment is
         // not dropped along with the entry it happened to precede. Authored
@@ -742,6 +752,16 @@ mod tests {
         assert_eq!(file.render(), "% header\n@article{A,\n  title = {T},\n}\n");
     }
 
+    /// Removing the sole entry must keep the preamble and any trailing bytes.
+    #[test]
+    fn removing_the_sole_entry_keeps_the_preamble() {
+        let mut file = load("% header\n@article{A,\n  title = {T},\n}\n% footer\n");
+        file.drop_key("A");
+        // The newline that followed the entry lives in the tail and stays.
+        assert_eq!(file.render(), "% header\n\n% footer\n");
+        assert!(file.entries().is_empty());
+    }
+
     /// A comment between the first and second entry belongs to the gap, not the
     /// removed entry — discarding separator whitespace must leave it behind.
     #[test]
@@ -813,6 +833,95 @@ mod tests {
         assert!(!file.entries()[0].is_managed());
         // Still readable rather than fatal.
         assert_eq!(file.projected().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn adopt_repairs_a_malformed_record_id_and_is_idempotent() {
+        let mut file = load(&entry(
+            "A",
+            "T",
+            "  doi = {10.1/A},\n  x-bibi-inspire-id = {oops},\n",
+        ));
+        let record = InspireRecord {
+            record_id: 42,
+            updated: "2024-01-01T00:00:00+00:00".into(),
+            texkey: "A".into(),
+            bibtex: entry("A", "T", "  doi = {10.1/A},\n"),
+            arxiv: None,
+            doi: Some("10.1/A".into()),
+        };
+        assert!(file.adopt("A", &record).unwrap());
+        assert_eq!(file.managed(), vec![("A".to_owned(), 42)]);
+        assert!(
+            file.entries()[0]
+                .bibtex
+                .contains("x-bibi-inspire-id = {42}"),
+            "{}",
+            file.entries()[0].bibtex
+        );
+        assert!(!file.entries()[0].bibtex.contains("{oops}"));
+
+        let before = file.render();
+        assert!(!file.adopt("A", &record).unwrap());
+        assert_eq!(file.render(), before);
+    }
+
+    fn inspire_record(id: u64, updated: &str, key: &str, title: &str) -> InspireRecord {
+        InspireRecord {
+            record_id: id,
+            updated: updated.into(),
+            texkey: key.into(),
+            bibtex: entry(key, title, ""),
+            arxiv: None,
+            doi: None,
+        }
+    }
+
+    #[test]
+    fn apply_records_refuses_a_missing_managed_id() {
+        let mut file = load(&entry(
+            "A",
+            "T",
+            "  x-bibi-inspire-id = {42},\n  x-bibi-inspire-updated = {old},\n",
+        ));
+        assert!(matches!(
+            file.apply_records(&[]),
+            Err(Error::MissingRecord { record_id: 42, .. })
+        ));
+    }
+
+    #[test]
+    fn apply_records_refuses_an_unexpected_record() {
+        let mut file = load(&entry(
+            "A",
+            "T",
+            "  x-bibi-inspire-id = {42},\n  x-bibi-inspire-updated = {old},\n",
+        ));
+        let records = [
+            inspire_record(42, "new", "A", "Fresh"),
+            inspire_record(99, "new", "Extra", "Extra"),
+        ];
+        assert!(matches!(
+            file.apply_records(&records),
+            Err(Error::UnexpectedRecord(99))
+        ));
+    }
+
+    #[test]
+    fn apply_records_refuses_duplicate_ids_in_the_response() {
+        let mut file = load(&entry(
+            "A",
+            "T",
+            "  x-bibi-inspire-id = {42},\n  x-bibi-inspire-updated = {old},\n",
+        ));
+        let records = [
+            inspire_record(42, "new", "A", "Fresh"),
+            inspire_record(42, "newer", "A", "Again"),
+        ];
+        assert!(matches!(
+            file.apply_records(&records),
+            Err(Error::UnexpectedRecord(42))
+        ));
     }
 
     #[test]

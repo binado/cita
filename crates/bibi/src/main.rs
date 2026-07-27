@@ -140,7 +140,7 @@ struct FetchArgs {
     /// Open the returned path or URL with the system default application
     #[arg(long)]
     open: bool,
-    /// Save an unmatched INSPIRE locator to the manifest before fetching
+    /// Save an unmatched INSPIRE locator into the bibliography before fetching
     #[arg(long)]
     save: bool,
     /// Local key, provider ID, DOI, arXiv ID, canonical URL, or unmatched INSPIRE locator
