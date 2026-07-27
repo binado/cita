@@ -595,12 +595,18 @@ impl Bibfile {
         self.entries.remove(at);
         // Take the gap that separated this entry from its neighbour. For the
         // first entry that is the gap *after* it, so a leading file comment is
-        // not dropped along with the entry it happened to precede.
-        self.leading.remove(if at == 0 && self.leading.len() > 1 {
-            1
+        // not dropped along with the entry it happened to precede. Authored
+        // bytes in that following gap (comments, @string) stay; only the
+        // separator whitespace that glued the removed entry on is discarded.
+        if at == 0 && self.leading.len() > 1 {
+            let after = self.leading.remove(1);
+            let retained = after.trim_start();
+            if !retained.is_empty() {
+                self.leading[0].push_str(retained);
+            }
         } else {
-            at
-        });
+            self.leading.remove(at);
+        }
     }
 
     fn ensure_valid(&self) -> Result<(), Error> {
@@ -734,6 +740,28 @@ mod tests {
         let mut file = load(source);
         file.drop_key("B");
         assert_eq!(file.render(), "% header\n@article{A,\n  title = {T},\n}\n");
+    }
+
+    /// A comment between the first and second entry belongs to the gap, not the
+    /// removed entry — discarding separator whitespace must leave it behind.
+    #[test]
+    fn removing_the_first_entry_keeps_authored_gap_bytes() {
+        let source =
+            "@article{A,\n  title = {T},\n}\n% note for B\n@article{B,\n  title = {U},\n}\n";
+        let mut file = load(source);
+        file.drop_key("A");
+        assert_eq!(
+            file.render(),
+            "% note for B\n@article{B,\n  title = {U},\n}\n"
+        );
+
+        let source = "% header\n@article{A,\n  title = {T},\n}\n% note for B\n@article{B,\n  title = {U},\n}\n";
+        let mut file = load(source);
+        file.drop_key("A");
+        assert_eq!(
+            file.render(),
+            "% header\n% note for B\n@article{B,\n  title = {U},\n}\n"
+        );
     }
 
     #[test]
