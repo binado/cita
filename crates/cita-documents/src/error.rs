@@ -93,3 +93,22 @@ pub enum Error {
         source: std::io::Error,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_errors_are_policy_neutral() {
+        let path = PathBuf::from("cache/paper.pdf");
+
+        assert_eq!(
+            Error::InvalidCachedPdf(path.clone()).to_string(),
+            "cached file cache/paper.pdf is not a valid PDF"
+        );
+        assert_eq!(
+            Error::NotCached(path).to_string(),
+            "PDF is not cached at cache/paper.pdf"
+        );
+    }
+}

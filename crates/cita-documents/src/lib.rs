@@ -54,20 +54,16 @@ impl FetchOutcome {
 mod tests {
     use super::*;
     use crate::source::{
-        LimitedReader, MAX_COMPRESSED_SOURCE_BYTES, MAX_DECOMPRESSED_SOURCE_BYTES,
-        MAX_SOURCE_ARCHIVE_FILES, SourceArchiveLimits, extract_source_archive_with_limits,
-        publish_source,
+        MAX_DECOMPRESSED_SOURCE_BYTES, MAX_SOURCE_ARCHIVE_FILES, SourceArchiveLimits,
     };
     use flate2::{Compression, write::GzEncoder};
     use reqwest::StatusCode;
     use std::{
         fs,
-        io::{self, Read, Write},
+        io::{Read, Write},
         net::TcpListener,
-        path::PathBuf,
         thread,
     };
-    use tempfile::TempDir;
 
     fn server(status: &str, body: &[u8]) -> (String, thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -322,6 +318,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejects_unsafe_source_entries_without_escaping_staging() {
+        let cases = [
+            gzip_raw_tar_entry(b"../escape.tex", tar::EntryType::Regular, b"escape"),
+            gzip_raw_tar_entry(b"/absolute.tex", tar::EntryType::Regular, b"absolute"),
+            gzip_raw_tar_entry(b"link", tar::EntryType::Symlink, b""),
+            gzip_raw_tar_entry(b"hardlink", tar::EntryType::Link, b""),
+            gzip_raw_tar_entry(b"device", tar::EntryType::Char, b""),
+            gzip_raw_tar_entry(b"block", tar::EntryType::Block, b""),
+            gzip_raw_tar_entry(b"fifo", tar::EntryType::Fifo, b""),
+        ];
+
+        for archive in cases {
+            let directory = tempfile::tempdir().unwrap();
+            let (base_url, handle) = server("200 OK", &archive);
+            let store = DocumentStore::builder(directory.path())
+                .base_url(base_url)
+                .build()
+                .unwrap();
+            assert!(matches!(
+                store
+                    .fetch_artifact("1207.7214", ArtifactKind::Source, FetchPolicy::UseCache)
+                    .await,
+                Err(Error::InvalidSourceArchive { .. })
+            ));
+            handle.join().unwrap();
+            assert!(!directory.path().join("escape.tex").exists());
+            assert!(!directory.path().join("arxiv/1207.7214/source").exists());
+        }
+    }
+
+    #[tokio::test]
     async fn rejects_unavailable_and_malformed_source_responses() {
         type ErrorPredicate = fn(&Error) -> bool;
         let cases: Vec<(&str, Vec<u8>, ErrorPredicate)> = vec![
@@ -372,107 +399,6 @@ mod tests {
             handle.join().unwrap();
             assert!(!directory.path().join("arxiv/1207.7214/source").exists());
         }
-    }
-
-    #[tokio::test]
-    async fn rejects_unsafe_source_entries_without_escaping_staging() {
-        let cases = [
-            gzip_raw_tar_entry(b"../escape.tex", tar::EntryType::Regular, b"escape"),
-            gzip_raw_tar_entry(b"/absolute.tex", tar::EntryType::Regular, b"absolute"),
-            gzip_raw_tar_entry(b"link", tar::EntryType::Symlink, b""),
-            gzip_raw_tar_entry(b"hardlink", tar::EntryType::Link, b""),
-            gzip_raw_tar_entry(b"device", tar::EntryType::Char, b""),
-            gzip_raw_tar_entry(b"block", tar::EntryType::Block, b""),
-            gzip_raw_tar_entry(b"fifo", tar::EntryType::Fifo, b""),
-        ];
-
-        for archive in cases {
-            let directory = tempfile::tempdir().unwrap();
-            let (base_url, handle) = server("200 OK", &archive);
-            let store = DocumentStore::builder(directory.path())
-                .base_url(base_url)
-                .build()
-                .unwrap();
-            assert!(matches!(
-                store
-                    .fetch_artifact("1207.7214", ArtifactKind::Source, FetchPolicy::UseCache)
-                    .await,
-                Err(Error::InvalidSourceArchive { .. })
-            ));
-            handle.join().unwrap();
-            assert!(!directory.path().join("escape.tex").exists());
-            assert!(!directory.path().join("arxiv/1207.7214/source").exists());
-        }
-    }
-
-    #[test]
-    fn rejects_source_archives_that_exceed_size_limits() {
-        let oversized = gzip_tar(&[("main.tex", b"hello world")]);
-        let directory = tempfile::tempdir().unwrap();
-        let error = extract_source_archive_with_limits(
-            &oversized,
-            directory.path(),
-            "1207.7214",
-            SourceArchiveLimits {
-                max_compressed_bytes: oversized.len() - 1,
-                max_decompressed_bytes: MAX_DECOMPRESSED_SOURCE_BYTES,
-                max_files: MAX_SOURCE_ARCHIVE_FILES,
-            },
-        )
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            Error::InvalidSourceArchive { reason, .. } if reason.contains("compressed source exceeds size limit")
-        ));
-
-        let large = vec![b'a'; 8 * 1024];
-        let archive = gzip_tar(&[("main.tex", large.as_slice())]);
-        let directory = tempfile::tempdir().unwrap();
-        let error = extract_source_archive_with_limits(
-            &archive,
-            directory.path(),
-            "1207.7214",
-            SourceArchiveLimits {
-                max_compressed_bytes: MAX_COMPRESSED_SOURCE_BYTES,
-                max_decompressed_bytes: 1024,
-                max_files: MAX_SOURCE_ARCHIVE_FILES,
-            },
-        )
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            Error::InvalidSourceArchive { reason, .. } if reason.contains("extracted source exceeds size limit")
-        ));
-        assert!(directory.path().read_dir().unwrap().next().is_none());
-
-        let archive = gzip_tar(&[("a.tex", b"a"), ("b.tex", b"b"), ("c.tex", b"c")]);
-        let directory = tempfile::tempdir().unwrap();
-        let error = extract_source_archive_with_limits(
-            &archive,
-            directory.path(),
-            "1207.7214",
-            SourceArchiveLimits {
-                max_compressed_bytes: MAX_COMPRESSED_SOURCE_BYTES,
-                max_decompressed_bytes: MAX_DECOMPRESSED_SOURCE_BYTES,
-                max_files: 2,
-            },
-        )
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            Error::InvalidSourceArchive { reason, .. } if reason.contains("too many files")
-        ));
-    }
-
-    #[test]
-    fn limited_reader_enforces_decompressed_budget() {
-        let data = vec![1_u8; 32];
-        let mut reader = LimitedReader::new(data.as_slice(), 8);
-        let mut buffer = [0_u8; 16];
-        assert_eq!(reader.read(&mut buffer).unwrap(), 8);
-        assert_eq!(&buffer[..8], &[1_u8; 8]);
-        let error = reader.read(&mut buffer).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
 
     #[tokio::test]
@@ -620,124 +546,5 @@ mod tests {
                 .await,
             Err(Error::InvalidCachedPdf(path)) if path == destination
         ));
-    }
-
-    #[test]
-    fn cache_errors_are_policy_neutral() {
-        let path = PathBuf::from("cache/paper.pdf");
-
-        assert_eq!(
-            Error::InvalidCachedPdf(path.clone()).to_string(),
-            "cached file cache/paper.pdf is not a valid PDF"
-        );
-        assert_eq!(
-            Error::NotCached(path).to_string(),
-            "PDF is not cached at cache/paper.pdf"
-        );
-    }
-
-    #[test]
-    fn failed_source_publication_restores_the_previous_cache() {
-        let directory = tempfile::tempdir().unwrap();
-        let destination = directory.path().join("source");
-        fs::create_dir(&destination).unwrap();
-        fs::write(destination.join("old.tex"), b"old").unwrap();
-        let staging = TempDir::new_in(directory.path()).unwrap();
-        fs::write(staging.path().join("new.tex"), b"new").unwrap();
-        fs::remove_dir_all(staging.path()).unwrap();
-
-        assert!(matches!(
-            publish_source(staging, &destination),
-            Err(Error::PublishSource { .. })
-        ));
-        assert_eq!(fs::read(destination.join("old.tex")).unwrap(), b"old");
-    }
-
-    #[test]
-    fn publish_source_installs_and_replaces_through_a_symlink() {
-        let directory = tempfile::tempdir().unwrap();
-        let destination = directory.path().join("source");
-
-        let staging = tempfile::Builder::new()
-            .prefix(".source-")
-            .tempdir_in(directory.path())
-            .unwrap();
-        fs::write(staging.path().join("first.tex"), b"first").unwrap();
-        publish_source(staging, &destination).unwrap();
-        assert!(
-            fs::symlink_metadata(&destination)
-                .unwrap()
-                .file_type()
-                .is_symlink()
-        );
-        assert_eq!(fs::read(destination.join("first.tex")).unwrap(), b"first");
-        let first_target = fs::read_link(&destination).unwrap();
-
-        let staging = tempfile::Builder::new()
-            .prefix(".source-")
-            .tempdir_in(directory.path())
-            .unwrap();
-        fs::write(staging.path().join("second.tex"), b"second").unwrap();
-        publish_source(staging, &destination).unwrap();
-        assert!(
-            fs::symlink_metadata(&destination)
-                .unwrap()
-                .file_type()
-                .is_symlink()
-        );
-        assert_eq!(fs::read(destination.join("second.tex")).unwrap(), b"second");
-        assert!(!destination.join("first.tex").exists());
-        let second_target = fs::read_link(&destination).unwrap();
-        assert_ne!(first_target, second_target);
-        assert!(!directory.path().join(&first_target).exists());
-    }
-
-    #[test]
-    fn publish_source_upgrades_a_legacy_directory_cache() {
-        let directory = tempfile::tempdir().unwrap();
-        let destination = directory.path().join("source");
-        fs::create_dir(&destination).unwrap();
-        fs::write(destination.join("old.tex"), b"old").unwrap();
-
-        let staging = tempfile::Builder::new()
-            .prefix(".source-")
-            .tempdir_in(directory.path())
-            .unwrap();
-        fs::write(staging.path().join("new.tex"), b"new").unwrap();
-        publish_source(staging, &destination).unwrap();
-
-        assert!(
-            fs::symlink_metadata(&destination)
-                .unwrap()
-                .file_type()
-                .is_symlink()
-        );
-        assert_eq!(fs::read(destination.join("new.tex")).unwrap(), b"new");
-        assert!(!destination.join("old.tex").exists());
-    }
-
-    #[test]
-    fn failed_symlink_replace_keeps_the_previous_published_cache() {
-        let directory = tempfile::tempdir().unwrap();
-        let destination = directory.path().join("source");
-        let staging = tempfile::Builder::new()
-            .prefix(".source-")
-            .tempdir_in(directory.path())
-            .unwrap();
-        fs::write(staging.path().join("old.tex"), b"old").unwrap();
-        publish_source(staging, &destination).unwrap();
-
-        let staging = tempfile::Builder::new()
-            .prefix(".source-")
-            .tempdir_in(directory.path())
-            .unwrap();
-        fs::write(staging.path().join("new.tex"), b"new").unwrap();
-        fs::remove_dir_all(staging.path()).unwrap();
-
-        assert!(matches!(
-            publish_source(staging, &destination),
-            Err(Error::PublishSource { .. })
-        ));
-        assert_eq!(fs::read(destination.join("old.tex")).unwrap(), b"old");
     }
 }
