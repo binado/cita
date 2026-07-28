@@ -1,6 +1,6 @@
 # bibi-bibliography
 
-Strict standalone BibTeX parsing, source-preserving snapshots, reference
+Strict standalone BibTeX parsing, validated entry text, reference
 projection, and citation-key rewriting for
 [bibi](https://github.com/binado/bibi).
 

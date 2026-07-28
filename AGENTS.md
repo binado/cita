@@ -46,7 +46,7 @@ bibi-bibliography ← bibi-inspire-client   bibi-documents
 ```
 
 - `bibi-core`: `Reference`, provider traits, locators, and normalization.
-- `bibi-bibliography`: standalone BibTeX snapshots and projections, whole-file
+- `bibi-bibliography`: standalone BibTeX strings and projections, whole-file
   span scanning, and raw-entry re-keying plus field insertion and removal.
 - `bibi-inspire-client`: lean `InspireRecord`s (authoritative BibTeX plus
   record id, timestamp, and canonical arXiv/DOI), stable-record-ID refresh
@@ -92,7 +92,7 @@ trailing newlines, and directives — keep it passing.
 
 New entries append at the end; the user owns the ordering, so nothing re-sorts.
 `bibi-bibliography::scan_entries` is the lenient whole-file scanner; `parse` and
-every single-entry helper stay strict, because a standalone snapshot is rendered
+every single-entry helper stay strict, because a standalone entry is rendered
 from scratch and would lose anything unmodelled.
 
 Reject malformed or duplicate entries, missing titles, keys outside

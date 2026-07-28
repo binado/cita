@@ -13,14 +13,14 @@ use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-/// One validated, standalone BibTeX entry with its source bytes preserved.
-pub struct BibtexSnapshot {
+/// Validated standalone BibTeX entry text.
+pub struct BibtexString {
     /// The complete raw BibTeX entry.
     pub bibtex: String,
 }
 
-impl BibtexSnapshot {
-    /// Validate and construct a snapshot containing exactly one entry.
+impl BibtexString {
+    /// Validate and construct entry text containing exactly one entry.
     pub fn new(bibtex: String) -> Result<Self, Error> {
         let entries = parse(&bibtex)?;
         if entries.len() != 1 {
@@ -38,11 +38,11 @@ impl BibtexSnapshot {
             .into_iter()
             .map(|entry| entry.key)
             .next()
-            .expect("snapshot validation requires one entry"))
+            .expect("BibtexString validation requires one entry"))
     }
 }
 
-impl ReferenceSource for BibtexSnapshot {
+impl ReferenceSource for BibtexString {
     fn project(&self) -> Result<Reference, ProjectionError> {
         project_bibtex(&self.bibtex).map_err(|error| ProjectionError::Invalid(error.to_string()))
     }
@@ -66,7 +66,7 @@ pub enum Error {
 }
 
 /// Parse every standalone entry while retaining its exact raw entry block.
-pub fn parse(source: &str) -> Result<BTreeMap<String, BibtexSnapshot>, Error> {
+pub fn parse(source: &str) -> Result<BTreeMap<String, BibtexString>, Error> {
     let raw_entries = scan_raw_entries(source)?;
     let semantic =
         Bibliography::parse(source).map_err(|error| Error::InvalidBibtex(error.to_string()))?;
@@ -77,10 +77,10 @@ pub fn parse(source: &str) -> Result<BTreeMap<String, BibtexSnapshot>, Error> {
             .get(&key)
             .ok_or_else(|| Error::InvalidBibtex(format!("could not parse entry `{key}`")))?;
         validate_semantic(parsed)?;
-        let snapshot = BibtexSnapshot {
+        let entry = BibtexString {
             bibtex: source[raw_entry.entry_range].to_owned(),
         };
-        let previous = entries.insert(key, snapshot);
+        let previous = entries.insert(key, entry);
         debug_assert!(previous.is_none(), "scanner rejects duplicate keys");
     }
     if semantic.len() != entries.len() {
@@ -181,7 +181,7 @@ impl RawEntry {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Leniency {
     /// Reject directives, comments, and any other non-entry content. Standalone
-    /// snapshots are rendered from scratch, so anything unmodelled would be lost.
+    /// entries are rendered from scratch, so anything unmodelled would be lost.
     Strict,
     /// Ignore whatever sits between entries. A caller that only ever splices
     /// entry spans copies those bytes through untouched, so it can afford to
@@ -328,7 +328,7 @@ pub fn rename_entry(source: &str, new_key: &str) -> Result<String, Error> {
     }
     let mut renamed = source.to_owned();
     renamed.replace_range(raw[0].key_range.clone(), new_key);
-    BibtexSnapshot::new(renamed.clone())?;
+    BibtexString::new(renamed.clone())?;
     Ok(renamed)
 }
 
@@ -379,7 +379,7 @@ pub fn insert_field(source: &str, name: &str, value: &str) -> Result<String, Err
     extended.push_str(value);
     extended.push('}');
     extended.push_str(&source[insert..]);
-    BibtexSnapshot::new(extended.clone())?;
+    BibtexString::new(extended.clone())?;
     Ok(extended)
 }
 
@@ -522,7 +522,7 @@ fn remove_fields(source: &str, discard: impl Fn(&str) -> bool) -> Result<String,
         };
         trimmed.replace_range(cut, "");
     }
-    BibtexSnapshot::new(trimmed.clone())?;
+    BibtexString::new(trimmed.clone())?;
     Ok(trimmed)
 }
 

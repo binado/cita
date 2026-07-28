@@ -88,8 +88,8 @@ impl Client {
                 entries.len()
             )));
         }
-        let (key, snapshot) = entries.pop_first().expect("length checked");
-        cross_check(record, key, snapshot.bibtex)
+        let (key, entry) = entries.pop_first().expect("length checked");
+        cross_check(record, key, entry.bibtex)
     }
 
     /// Resolve several locators with bounded concurrency.
