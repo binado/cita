@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `DocumentError` variants no longer repeat their underlying cause in `Display`,
+  which `anyhow`'s `{:#}` was printing twice
+
 ## [0.3.0](https://github.com/binado/cita/compare/cita-documents-v0.2.1...cita-documents-v0.3.0) - 2026-07-23
 
 ### Added

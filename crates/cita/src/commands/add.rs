@@ -1,11 +1,10 @@
-use super::{find_manifest, inspire_client, print_add_outcomes};
+use super::{Target, inspire_client, print_add_outcomes};
 use anyhow::{Result, bail};
-use cita_core::{Locator, MetadataProvider};
-use cita_manifest::{ConflictPolicy, KeyRequest, Manifest, PendingReference, SourceSnapshot};
-use std::path::Path;
+use cita_core::Locator;
+use cita_store::{ConflictPolicy, KeyRequest, PendingReference, SourceSnapshot};
 
 pub(crate) async fn add(
-    cwd: &Path,
+    target: &Target<'_>,
     explicit_key: Option<&str>,
     values: &[String],
     overwrite: bool,
@@ -20,7 +19,7 @@ pub(crate) async fn add(
     let client = inspire_client()?;
     let mut pending = Vec::with_capacity(locators.len());
     for locator in &locators {
-        let record = client.resolve(locator).await?;
+        let record = client.resolve_snapshot(locator).await?;
         let key = match explicit_key {
             Some(key) => KeyRequest::Exact(key.to_owned()),
             None => KeyRequest::Suggested(record.texkey.clone()),
@@ -35,8 +34,7 @@ pub(crate) async fn add(
     } else {
         ConflictPolicy::Skip
     };
-    let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
-    let outcomes = manifest.add_batch(pending, policy)?;
+    let outcomes = target.library().add_batch(target.name(), pending, policy)?;
     print_add_outcomes(&outcomes);
     Ok(())
 }

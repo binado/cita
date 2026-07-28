@@ -1,6 +1,6 @@
 use crate::{ApiLiteratureRecord, InspireSnapshot, wire::SearchResponse};
 use cita_bibliography::parse as parse_bibtex;
-use cita_core::{Locator, MetadataProvider, ProviderError, Reference, ReferenceSource};
+use cita_core::{Locator, Reference, ReferenceSource};
 use reqwest::{StatusCode, header::RETRY_AFTER};
 use std::{
     fmt,
@@ -241,33 +241,6 @@ impl Client {
             }
             return response.text().await.map_err(Error::Transport);
         }
-    }
-}
-
-impl MetadataProvider for Client {
-    type Snapshot = InspireSnapshot;
-
-    async fn resolve(&self, locator: &Locator) -> Result<Self::Snapshot, ProviderError> {
-        self.resolve_snapshot(locator).await.map_err(provider_error)
-    }
-
-    async fn refresh(&self, provider_ids: &[String]) -> Result<Vec<Self::Snapshot>, ProviderError> {
-        let ids = provider_ids
-            .iter()
-            .map(|id| {
-                id.parse::<u64>()
-                    .map_err(|_| ProviderError::InvalidLocator(format!("inspire:{id}")))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        self.refresh_records(&ids).await.map_err(provider_error)
-    }
-}
-
-fn provider_error(error: Error) -> ProviderError {
-    match error {
-        Error::NotFound(value) => ProviderError::NotFound(value),
-        Error::Malformed(value) => ProviderError::Malformed(value),
-        error => ProviderError::Request(error.to_string()),
     }
 }
 

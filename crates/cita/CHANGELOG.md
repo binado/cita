@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- add a SQLite-backed global library with shared references and shelf-local keys
+- add lossless JSON/TOML exports and `init --from-file`
+- add import canonicalization, sync-time promotion, and `import --skip-errors`
+
+### Changed
+
+- make INSPIRE the explicit sole remote metadata authority
+- **breaking**: replace `library.toml` and shelf manifests with
+  `$CITA_HOME/library.sqlite3`
+- **breaking**: rename the persistence crate from `cita-manifest` to `cita-store`
+- sync deduplicates shared references and applies the selected set atomically
+- `--overwrite` replaces only local shelf membership collisions
+- **breaking**: `cita export` takes its destination as a positional argument;
+  the `-o`/`--output` flag was removed
+- **breaking**: `cita init` no longer accepts `--path`; the store location is
+  set with `CITA_HOME`
+- all-shelf JSON/TOML export writes one lossless library document
+- `cita init` reports whether it created or found the store intact
+- `cita shelf list` pads its columns so they stay aligned for longer shelf names
+
+### Removed
+
+- remove filesystem manifests and advisory lock files
+- remove local project discovery, generated `references.bib`, `generate`,
+  `commit`, and the path-based `library` command tree
+
 ## [0.4.0](https://github.com/binado/cita/compare/cita-v0.3.2...cita-v0.4.0) - 2026-07-25
 
 ### Added

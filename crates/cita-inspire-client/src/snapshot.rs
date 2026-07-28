@@ -10,7 +10,7 @@ use cita_core::{ProjectionError, Reference, ReferenceSource, normalize_arxiv, no
 pub struct InspireSnapshot {
     /// Stable numeric INSPIRE record identifier used for refresh.
     pub record_id: u64,
-    /// Provider update timestamp.
+    /// INSPIRE update timestamp.
     pub updated: String,
     /// The INSPIRE texkey used as the suggested local citation key.
     pub texkey: String,
@@ -22,13 +22,11 @@ pub struct InspireSnapshot {
     pub doi: Option<String>,
 }
 
-/// Project authoritative INSPIRE BibTeX, then overlay curated arXiv/DOI and the
-/// stable provider record id.
+/// Project authoritative INSPIRE BibTeX, then overlay curated arXiv/DOI.
 pub fn project_inspire(
     bibtex: &str,
     arxiv: Option<&str>,
     doi: Option<&str>,
-    record_id: u64,
 ) -> Result<Reference, ProjectionError> {
     let mut reference =
         project_bibtex(bibtex).map_err(|error| ProjectionError::Invalid(error.to_string()))?;
@@ -38,21 +36,12 @@ pub fn project_inspire(
     if let Some(doi) = doi {
         reference.identifiers.dois = vec![normalize_doi(doi)];
     }
-    reference
-        .identifiers
-        .providers
-        .insert("inspire".to_owned(), vec![record_id.to_string()]);
     Ok(reference)
 }
 
 impl ReferenceSource for InspireSnapshot {
     fn project(&self) -> Result<Reference, ProjectionError> {
-        project_inspire(
-            &self.bibtex,
-            self.arxiv.as_deref(),
-            self.doi.as_deref(),
-            self.record_id,
-        )
+        project_inspire(&self.bibtex, self.arxiv.as_deref(), self.doi.as_deref())
     }
 }
 
@@ -76,9 +65,5 @@ mod tests {
         assert_eq!(reference.year, Some(2024));
         assert_eq!(reference.identifiers.arxiv, ["2401.00001"]);
         assert_eq!(reference.identifiers.dois, ["10.1/x"]);
-        assert_eq!(
-            reference.identifiers.providers.get("inspire").unwrap(),
-            &["42".to_owned()]
-        );
     }
 }

@@ -22,7 +22,7 @@ name = "cita-inspire-client"
 version_group = "cita"
 
 [[package]]
-name = "cita-manifest"
+name = "cita-store"
 version_group = "cita"
 
 [[package]]

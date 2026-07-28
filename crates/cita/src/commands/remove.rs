@@ -1,11 +1,8 @@
-use super::find_manifest;
+use super::Target;
 use anyhow::Result;
-use cita_manifest::Manifest;
-use std::path::Path;
 
-pub(crate) fn remove(cwd: &Path, selectors: &[String]) -> Result<()> {
-    let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
-    for item in manifest.remove_batch(selectors)? {
+pub(crate) fn remove(target: &Target<'_>, selectors: &[String]) -> Result<()> {
+    for item in target.library().remove_batch(target.name(), selectors)? {
         println!("Removed {}", item.key);
     }
     Ok(())

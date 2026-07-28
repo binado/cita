@@ -12,7 +12,7 @@ pub enum Error {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-/// A normalized identifier accepted by a metadata provider.
+/// A normalized identifier accepted by INSPIRE.
 pub enum Locator {
     /// A numeric INSPIRE literature record identifier.
     Inspire(u64),

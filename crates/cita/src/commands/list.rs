@@ -1,11 +1,7 @@
-use super::{find_manifest, highlight_style};
+use super::{Target, highlight_style};
 use crate::{Order, SortBy};
 use anyhow::Result;
-use cita_manifest::Manifest;
-use std::{
-    io::{self, IsTerminal},
-    path::Path,
-};
+use std::io::{self, IsTerminal};
 
 struct Row {
     key: String,
@@ -15,9 +11,13 @@ struct Row {
     year: String,
 }
 
-pub(crate) fn list(cwd: &Path, sort_by: SortBy, order: Order, wrap_title: bool) -> Result<()> {
-    let manifest = Manifest::load_verified(find_manifest(cwd)?)?;
-    let mut rows = manifest
+pub(crate) fn list(
+    target: &Target<'_>,
+    sort_by: SortBy,
+    order: Order,
+    wrap_title: bool,
+) -> Result<()> {
+    let mut rows = target
         .projected()?
         .into_iter()
         .map(|item| {

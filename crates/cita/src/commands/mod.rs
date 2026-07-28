@@ -1,90 +1,34 @@
 mod add;
 mod export;
 mod fetch;
-mod generate;
 mod import;
-mod init;
 mod library;
 mod list;
 mod remove;
 mod sync;
 
 pub(crate) use add::add;
-pub(crate) use export::{export, export_outcome};
+pub(crate) use export::{batch_export, export};
 pub(crate) use fetch::{FetchOptions, fetch};
-pub(crate) use generate::{generate, generate_outcome};
 pub(crate) use import::import;
-pub(crate) use init::init;
 pub(crate) use library::{
-    batch_export as library_export, batch_generate as library_generate, batch_sync as library_sync,
-    init_library, init_shelf, list_shelves, resolve_target,
+    Target, init_global, list_shelves, new_shelf, open_library, report_shelf_failure,
+    resolve_target, summarize_batch, target_in,
 };
 pub(crate) use list::list;
 pub(crate) use remove::remove;
-pub(crate) use sync::{sync, sync_outcome};
+pub(crate) use sync::{sync, sync_all};
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use cita_inspire_client::{Client, RetryEvent};
-use cita_manifest::{AddOutcome, MANIFEST_FILE};
+use cita_store::{AddOutcome, global_library_root};
 use std::{
-    env, fs,
-    fs::OpenOptions,
-    io::{self, IsTerminal, Write},
-    path::{Path, PathBuf},
+    env,
+    io::{self, IsTerminal},
 };
 
-const CACHE_IGNORE_COMMENT: &str = "# cita document cache";
-const CACHE_IGNORE_RULE: &str = "/.cita/files/";
-
-pub(crate) fn find_manifest(start: &Path) -> Result<PathBuf> {
-    for directory in start.ancestors() {
-        let candidate = directory.join(MANIFEST_FILE);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-    bail!(
-        "no cita.toml found in {} or its parents; run `cita init`",
-        start.display()
-    )
-}
-
-pub(crate) fn ensure_cache_layout(directory: &Path) -> Result<()> {
-    let cache = directory.join(".cita/files");
-    fs::create_dir_all(&cache)
-        .with_context(|| format!("could not create document cache {}", cache.display()))?;
-    let ignore_path = directory.join(".gitignore");
-    let existing = match fs::read_to_string(&ignore_path) {
-        Ok(v) => v,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
-        Err(e) => {
-            return Err(e).with_context(|| format!("could not read {}", ignore_path.display()));
-        }
-    };
-    if existing
-        .lines()
-        .any(|line| line.trim() == CACHE_IGNORE_RULE)
-    {
-        return Ok(());
-    }
-    let separator = if existing.is_empty() || existing.ends_with("\n\n") {
-        ""
-    } else if existing.ends_with('\n') {
-        "\n"
-    } else {
-        "\n\n"
-    };
-    let mut ignore = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&ignore_path)
-        .with_context(|| format!("could not open {}", ignore_path.display()))?;
-    write!(
-        ignore,
-        "{separator}{CACHE_IGNORE_COMMENT}\n{CACHE_IGNORE_RULE}\n"
-    )
-    .with_context(|| format!("could not update {}", ignore_path.display()))?;
-    Ok(())
+pub(crate) fn global_root() -> Result<std::path::PathBuf> {
+    Ok(global_library_root()?)
 }
 
 pub(crate) fn inspire_client() -> Result<Client> {
@@ -101,7 +45,8 @@ pub(crate) fn inspire_client() -> Result<Client> {
 }
 
 /// Bold-cyan identifier style, or None when the target stream should stay plain.
-/// Matches the header styling in `list::print_rows` and honors NO_COLOR.
+///
+/// Matches the header styling in `list::print_rows` and honors `NO_COLOR`.
 pub(crate) fn highlight_style(stream_is_terminal: bool) -> Option<anstyle::Style> {
     (stream_is_terminal && env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())).then(|| {
         anstyle::Style::new()

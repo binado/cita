@@ -4,7 +4,7 @@ use cita_core::{
     Identifiers, ProjectionError, Reference, ReferenceSource, normalize_arxiv, normalize_doi,
 };
 use serde::{Deserialize, Deserializer};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 /// The supported subset of an INSPIRE literature JSON record.
 ///
@@ -100,17 +100,13 @@ impl ReferenceSource for ApiLiteratureRecord {
             .find(|value| !value.is_empty())
             .ok_or(ProjectionError::MissingTitle)?
             .to_owned();
-        let record_id = self
-            .record_id()
+        self.record_id()
             .ok_or_else(|| ProjectionError::Invalid("INSPIRE record has no numeric id".into()))?;
-        let mut providers = BTreeMap::new();
-        providers.insert("inspire".to_owned(), vec![record_id.to_string()]);
         Ok(Reference {
             title,
             identifiers: Identifiers {
                 dois: self.normalized_dois(),
                 arxiv: self.normalized_arxiv(),
-                providers,
             },
             ..Reference::default()
         })
@@ -256,15 +252,7 @@ mod tests {
                 }
             }));
             assert_eq!(record.record_id(), Some(42));
-            assert_eq!(
-                record
-                    .project()
-                    .unwrap()
-                    .identifiers
-                    .providers
-                    .get("inspire"),
-                Some(&vec!["42".to_owned()])
-            );
+            assert!(record.project().is_ok());
         }
     }
 

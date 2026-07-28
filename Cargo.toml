@@ -5,7 +5,7 @@ members = [
     "crates/cita-documents",
     "crates/cita-inspire-client",
     "crates/cita-bibliography",
-    "crates/cita-manifest",
+    "crates/cita-store",
 ]
 resolver = "2"
 
@@ -27,9 +27,11 @@ cita-bibliography = { path = "crates/cita-bibliography", version = "0.5.0" }
 cita-core = { path = "crates/cita-core", version = "0.5.0" }
 cita-documents = { path = "crates/cita-documents", version = "0.5.0" }
 cita-inspire-client = { path = "crates/cita-inspire-client", version = "0.5.0" }
-cita-manifest = { path = "crates/cita-manifest", version = "0.5.0" }
+cita-store = { path = "crates/cita-store", version = "0.5.0" }
+diesel = { version = "~2.3.11", default-features = false, features = ["sqlite", "returning_clauses_for_sqlite_3_35"] }
 flate2 = "1"
 httpdate = "1"
+libsqlite3-sys = { version = "0.30.1", features = ["bundled"] }
 opener = "0.8.5"
 percent-encoding = "2.3.2"
 reqwest = { version = "0.12.9", default-features = false, features = ["json", "rustls-tls"] }

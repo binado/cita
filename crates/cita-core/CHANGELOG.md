@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **breaking**: limit reference identities to DOI and arXiv values
+
+### Removed
+
+- **breaking**: remove the unused multi-provider traits and errors
+
 ## [0.2.1](https://github.com/binado/cita/compare/cita-core-v0.2.0...cita-core-v0.2.1) - 2026-07-22
 
 ### Added
