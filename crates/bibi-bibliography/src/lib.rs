@@ -34,7 +34,7 @@ impl BibtexString {
 
     /// Return the entry's citation key.
     pub fn key(&self) -> Result<String, Error> {
-        Ok(scan_raw_entries(&self.bibtex)?
+        Ok(scan(&self.bibtex, Leniency::Strict)?
             .into_iter()
             .map(|entry| entry.key)
             .next()
@@ -67,7 +67,7 @@ pub enum Error {
 
 /// Parse every standalone entry while retaining its exact raw entry block.
 pub fn parse(source: &str) -> Result<BTreeMap<String, BibtexString>, Error> {
-    let raw_entries = scan_raw_entries(source)?;
+    let raw_entries = scan(source, Leniency::Strict)?;
     let semantic =
         Bibliography::parse(source).map_err(|error| Error::InvalidBibtex(error.to_string()))?;
     let mut entries = BTreeMap::new();
@@ -93,7 +93,7 @@ pub fn parse(source: &str) -> Result<BTreeMap<String, BibtexString>, Error> {
 
 /// Project one standalone entry into bibi's source-neutral reference fields.
 pub fn project_bibtex(source: &str) -> Result<Reference, Error> {
-    let raw = scan_raw_entries(source)?;
+    let raw = scan(source, Leniency::Strict)?;
     if raw.len() != 1 {
         return Err(Error::InvalidBibtex(format!(
             "expected one standalone entry, found {}",
@@ -191,10 +191,6 @@ enum Leniency {
 
 /// Locate and validate complete raw entries without applying BibTeX semantics.
 /// This is the sole authority for all raw source and span invariants.
-fn scan_raw_entries(source: &str) -> Result<Vec<RawEntry>, Error> {
-    scan(source, Leniency::Strict)
-}
-
 fn scan(source: &str, leniency: Leniency) -> Result<Vec<RawEntry>, Error> {
     let raw =
         RawBibliography::parse(source).map_err(|error| Error::InvalidBibtex(error.to_string()))?;
@@ -313,7 +309,7 @@ pub fn validate_key(key: &str) -> Result<(), Error> {
 /// Change only the citation-key token of one complete raw entry.
 pub fn rename_entry(source: &str, new_key: &str) -> Result<String, Error> {
     validate_key(new_key)?;
-    let raw = scan_raw_entries(source)?;
+    let raw = scan(source, Leniency::Strict)?;
     if raw.len() != 1 {
         return Err(Error::InvalidBibtex(
             "expected exactly one entry to rename".into(),
@@ -340,7 +336,7 @@ pub fn rename_entry(source: &str, new_key: &str) -> Result<String, Error> {
 pub fn insert_field(source: &str, name: &str, value: &str) -> Result<String, Error> {
     validate_field_name(name)?;
     validate_field_value(value)?;
-    let raw = scan_raw_entries(source)?;
+    let raw = scan(source, Leniency::Strict)?;
     let [entry] = raw.as_slice() else {
         return Err(Error::InvalidBibtex(
             "expected exactly one entry to extend".into(),
@@ -420,7 +416,7 @@ pub fn scan_entries(source: &str) -> Result<Vec<EntrySpan>, Error> {
 /// delimiters removed, so `x-bibi-inspire-id = {1229104}` yields `1229104`.
 /// A field the entry does not declare, or one whose value is blank, is `None`.
 pub fn field(source: &str, name: &str) -> Result<Option<String>, Error> {
-    let raw = scan_raw_entries(source)?;
+    let raw = scan(source, Leniency::Strict)?;
     let [entry] = raw.as_slice() else {
         return Err(Error::InvalidBibtex(
             "expected exactly one entry to read".into(),
@@ -487,7 +483,7 @@ pub fn strip_fields_with_prefix(source: &str, prefix: &str) -> Result<String, Er
 /// pending, and the result is revalidated as a standalone entry so a cut that
 /// produced something unparseable is reported rather than written.
 fn remove_fields(source: &str, discard: impl Fn(&str) -> bool) -> Result<String, Error> {
-    let raw = scan_raw_entries(source)?;
+    let raw = scan(source, Leniency::Strict)?;
     let [entry] = raw.as_slice() else {
         return Err(Error::InvalidBibtex(
             "expected exactly one entry to trim".into(),
@@ -692,7 +688,7 @@ mod tests {
         assert_eq!(spans[0].field_names, ["title"]);
 
         assert!(parse(source).is_err());
-        assert!(scan_raw_entries(source).is_err());
+        assert!(scan(source, Leniency::Strict).is_err());
     }
 
     #[test]
