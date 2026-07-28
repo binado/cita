@@ -152,6 +152,25 @@ impl Bibfile {
         Self::from_source(path, &source)
     }
 
+    /// Read a bibliography, starting empty when the file does not exist yet.
+    ///
+    /// Commands that build the bibliography (`add`, `import`) treat a missing
+    /// target as a fresh start and create the file on their first write;
+    /// read-only and destructive commands keep reporting [`Error::Missing`].
+    pub fn load_or_create(path: impl AsRef<Path>) -> Result<Self, Error> {
+        let path = path.as_ref().to_path_buf();
+        match fs::read_to_string(&path) {
+            Ok(source) => Self::from_source(path, &source),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(Self {
+                path,
+                leading: Vec::new(),
+                entries: Vec::new(),
+                tail: String::new(),
+            }),
+            Err(source) => Err(Error::Read { path, source }),
+        }
+    }
+
     fn from_source(path: PathBuf, source: &str) -> Result<Self, Error> {
         let mut leading = Vec::new();
         let mut entries = Vec::new();
@@ -212,8 +231,19 @@ impl Bibfile {
         Ok(strip_fields_with_prefix(&self.render(), FIELD_PREFIX)?)
     }
 
-    /// Write the bibliography back to its own path.
+    /// Write the bibliography back to its own path, creating the file and any
+    /// missing parent directories.
     pub fn write(&self) -> Result<(), Error> {
+        if let Some(parent) = self
+            .path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent).map_err(|source| Error::Write {
+                path: self.path.clone(),
+                source,
+            })?;
+        }
         atomic_write(&self.path, self.render().as_bytes())
     }
 
@@ -682,6 +712,24 @@ mod tests {
 
     fn load(source: &str) -> Bibfile {
         Bibfile::from_source(PathBuf::from("references.bib"), source).unwrap()
+    }
+    #[test]
+    fn load_or_create_starts_empty_and_creates_the_file_on_write() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("nested").join("references.bib");
+        let file = Bibfile::load_or_create(&path).unwrap();
+        assert!(file.entries().is_empty());
+        assert_eq!(file.render(), "");
+        // The write creates the parent directories and the file itself.
+        file.write().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "");
+        assert!(Bibfile::load(&path).unwrap().entries().is_empty());
+    }
+    #[test]
+    fn load_still_refuses_a_missing_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("references.bib");
+        assert!(matches!(Bibfile::load(&path), Err(Error::Missing(_))));
     }
 
     fn entry(key: &str, title: &str, extra: &str) -> String {

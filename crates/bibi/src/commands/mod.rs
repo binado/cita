@@ -24,7 +24,7 @@ use bibi_inspire_client::{Client, RetryEvent};
 use std::{
     env, fs,
     fs::OpenOptions,
-    io::{self, IsTerminal, Write},
+    io::{self, Write},
     path::Path,
 };
 
@@ -34,6 +34,13 @@ const CACHE_IGNORE_RULE: &str = "/.bibi/files/";
 /// Load the bibliography a command was pointed at.
 pub(crate) fn open(path: &Path) -> Result<Bibfile> {
     Ok(Bibfile::load(path)?)
+}
+
+/// Load the bibliography a building command was pointed at, starting empty
+/// when the file does not exist yet: `add` and `import` are how a new
+/// bibliography comes into being, so a missing target is a fresh start.
+pub(crate) fn open_or_create(path: &Path) -> Result<Bibfile> {
+    Ok(Bibfile::load_or_create(path)?)
 }
 
 /// Write a mutated bibliography and report which file changed.
@@ -158,10 +165,61 @@ pub(crate) fn add_message(outcome: &AddOutcome, style: Option<anstyle::Style>) -
     }
 }
 
-pub(crate) fn print_add_outcomes(outcomes: &[AddOutcome]) {
-    let style = highlight_style(io::stdout().is_terminal());
+/// The entry an outcome leaves behind: its own key, or the existing entry it
+/// collided with.
+fn outcome_key(outcome: &AddOutcome) -> &str {
+    match outcome {
+        AddOutcome::Added(key)
+        | AddOutcome::Existing(key)
+        | AddOutcome::Overwritten { key, .. } => key,
+        AddOutcome::Skipped { conflicting, .. } => conflicting,
+    }
+}
+
+/// What the user should be warned about, when the outcome kept or replaced
+/// something instead of plainly adding it.
+fn outcome_warning(outcome: &AddOutcome) -> Option<String> {
+    match outcome {
+        AddOutcome::Added(_) => None,
+        AddOutcome::Existing(key) => Some(format!("skipped {key}: already stored")),
+        AddOutcome::Skipped { key, conflicting } if conflicting == key => Some(format!(
+            "skipped {key}: local key already holds different content"
+        )),
+        AddOutcome::Skipped { key, conflicting } => {
+            Some(format!("skipped {key}: already present as {conflicting}"))
+        }
+        AddOutcome::Overwritten { key, replaced } => {
+            let removed = replaced
+                .iter()
+                .filter(|old| old.as_str() != key)
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            (!removed.is_empty()).then(|| format!("overwrote {} -> {key}", removed.join(", ")))
+        }
+    }
+}
+
+fn warn_outcome(outcome: &AddOutcome) {
+    if let Some(warning) = outcome_warning(outcome) {
+        eprintln!("warning: {warning}");
+    }
+}
+
+/// Print the outcome of an add as BibTeX on stdout, one entry per outcome,
+/// warning on stderr about every skip or replacement.
+pub(crate) fn print_add_result(file: &Bibfile, outcomes: &[AddOutcome]) {
     for outcome in outcomes {
-        println!("{}", add_message(outcome, style));
+        warn_outcome(outcome);
+        if let Some(bibtex) = file.raw(outcome_key(outcome)) {
+            println!("{bibtex}");
+        }
+    }
+}
+
+/// Warn on stderr about every outcome that kept or replaced an entry.
+pub(crate) fn warn_add_outcomes(outcomes: &[AddOutcome]) {
+    for outcome in outcomes {
+        warn_outcome(outcome);
     }
 }
 

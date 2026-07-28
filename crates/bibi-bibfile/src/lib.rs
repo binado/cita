@@ -32,8 +32,9 @@ pub const PATH_ENV: &str = "BIBI_BIB";
 /// Error produced while reading, validating, or rewriting a bibliography.
 #[derive(Debug, Error)]
 pub enum Error {
-    /// The bibliography does not exist. Never created implicitly: a mistyped
-    /// directory must not silently become a new, empty bibliography.
+    /// The bibliography does not exist. Reported by read-only and destructive
+    /// commands; `add` and `import` start an empty bibliography instead (see
+    /// [`Bibfile::load_or_create`]).
     #[error(
         "no {BIBLIOGRAPHY_FILE} at {0}; create one with `touch {BIBLIOGRAPHY_FILE}`, or pass --path"
     )]

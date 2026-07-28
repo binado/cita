@@ -111,10 +111,20 @@ ordering contract, so an interrupted run leaves the old contents intact.
 `--path`, then `$BIBI_BIB`, then `./references.bib`. Never a walk up the tree: a
 `.bib` is not a project marker, and silently adopting a parent directory's
 bibliography is worse than asking. A directory argument resolves to the default
-file name inside it. A missing file is always an error, never created — a
-mistyped directory must not become a new, empty bibliography. Every mutating
-command echoes the file it wrote, because there is no longer a single legal
-target to infer.
+file name inside it. A missing file is an error for read-only and destructive
+commands, but `add` and `import` treat it as a fresh start: they begin with an
+empty bibliography and create the file (and any missing parent directories) on
+their first write, since they are how a new bibliography comes into being.
+Every mutating command echoes the file it wrote, because there is no longer a
+single legal target to infer.
+
+### Command output
+
+`add` prints the stored entries' BibTeX on stdout, one entry per locator —
+including entries it skipped or kept, which are also warned about on stderr.
+`import` prints the resulting bibliography in full, exactly as written to disk.
+Both pipe like any other file-producing tool; status messages and warnings go
+to stderr.
 
 ### Exports
 
@@ -142,7 +152,11 @@ refresh by stable record id, batched at 100 records or a 6 KiB encoded `q`.
 Unmanaged entries with a DOI or arXiv id are resolved through the direct
 `/api/arxiv` and `/api/doi` endpoints, which return exactly one record or a
 not-found, so there is no ambiguity to arbitrate. Resolution runs first, so an
-entry adopted in a run is counted by the same pass.
+entry adopted in a run is counted by the same pass. Latency dominates sync, so
+lookups run with bounded concurrency (eight in flight) and every lookup or
+refresh batch fetches its JSON and BibTeX halves concurrently; a client-level
+benchmark test (`resolves_many_locators_with_bounded_concurrency`) guards the
+win against a latency-injecting server.
 
 Adoption attaches bookkeeping and keeps the user's own BibTeX: it answers "what
 is this thing I have", not "replace it". Recording the provider's current

@@ -1,4 +1,4 @@
-use super::{changed, inspire_client, open, persist, print_add_outcomes};
+use super::{changed, inspire_client, open_or_create, persist, print_add_result};
 use anyhow::{Result, bail};
 use bibi_bibfile::{ConflictPolicy, Entry, KeyRequest, PendingReference};
 use bibi_core::{Locator, MetadataProvider};
@@ -17,9 +17,9 @@ pub(crate) async fn add(
         .iter()
         .map(|value| value.parse::<Locator>())
         .collect::<Result<Vec<_>, _>>()?;
-    // Load before resolving so a missing bibliography fails without spending a
-    // network round trip first.
-    let mut file = open(path)?;
+    // Load before resolving so a malformed bibliography fails without spending
+    // a network round trip first; a missing one is simply a fresh start.
+    let mut file = open_or_create(path)?;
     let client = inspire_client()?;
     let mut pending = Vec::with_capacity(locators.len());
     for locator in &locators {
@@ -41,7 +41,7 @@ pub(crate) async fn add(
         ConflictPolicy::Skip
     };
     let outcomes = file.add_batch(pending, policy)?;
-    print_add_outcomes(&outcomes);
+    print_add_result(&file, &outcomes);
     if changed(&outcomes) {
         persist(&file)?;
     }

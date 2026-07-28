@@ -126,17 +126,23 @@ async fn reconcile(file: &mut Bibfile) -> Result<SyncReport> {
     // Identity lookups first, so an entry adopted in this run is refreshed by
     // the same pass rather than waiting for the next one. Resolution records
     // the provider's current timestamp, so the refresh below finds them equal
-    // and leaves the newly adopted entry alone.
-    for (key, locator) in unmanaged {
-        match client.resolve_snapshot(&locator).await {
+    // and leaves the newly adopted entry alone. Lookups run with bounded
+    // concurrency: one serial round trip per entry dominated sync's runtime.
+    let locators = unmanaged
+        .iter()
+        .map(|(_, locator)| locator.clone())
+        .collect::<Vec<_>>();
+    let results = client.resolve_snapshots(&locators).await;
+    for ((key, _), result) in unmanaged.iter().zip(results) {
+        match result {
             Ok(record) => {
-                if file.adopt(&key, &record)? {
-                    report.adopted.push(key);
+                if file.adopt(key, &record)? {
+                    report.adopted.push(key.clone());
                 }
             }
             // A bibliography legitimately holds work INSPIRE has never seen.
             // That is a fact to report, not a failure to abort on.
-            Err(InspireError::NotFound(_)) => report.unresolved.push(key),
+            Err(InspireError::NotFound(_)) => report.unresolved.push(key.clone()),
             Err(error) => return Err(error.into()),
         }
     }

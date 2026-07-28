@@ -45,13 +45,20 @@ fn bibi_stdin(cwd: &Path, args: &[&str], input: &str) -> Output {
 }
 
 fn success(output: Output) -> String {
+    success_streams(output).0
+}
+
+fn success_streams(output: Output) -> (String, String) {
     assert!(
         output.status.success(),
         "stdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8(output.stdout).unwrap()
+    (
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
 }
 
 /// An empty bibliography, which is all a bibi project is.
@@ -143,8 +150,11 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
         "  doi = {10.1000/e2e.seed}\n",
         "}\n",
     );
+    // An import prints the resulting bibliography, which is exactly the file.
     let output = success(bibi_stdin(directory.path(), &["import", "-"], seed));
-    assert_eq!(output, "added SeedAlpha\nadded SeedBeta\n");
+    assert_eq!(output, read_bib(directory.path()));
+    assert!(output.contains("{SeedAlpha,"), "{output}");
+    assert!(output.contains("{SeedBeta,"), "{output}");
     let bibliography = read_bib(directory.path());
     let seed_alpha_before = section(&bibliography, "SeedAlpha").to_owned();
     let seed_beta_before = section(&bibliography, "SeedBeta").to_owned();
@@ -160,11 +170,16 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
     //    record id, checking the bibliography after every command.
     for paper in &PAPERS {
         let locator = format!("inspire:{}", paper.record_id);
+        // An add prints the stored entry's BibTeX.
         let output = success(bibi(
             directory.path(),
             &["add", "--key", paper.key, &locator],
         ));
-        assert_eq!(output, format!("added {}\n", paper.key));
+        assert!(output.contains(&format!("{{{},", paper.key)), "{output}");
+        assert!(
+            output.contains(&format!("x-bibi-inspire-id = {{{}}}", paper.record_id)),
+            "{output}"
+        );
 
         let bibliography = read_bib(directory.path());
         let entry = section(&bibliography, paper.key);
@@ -187,11 +202,13 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
     //    byte-identical bibliography (INSPIRE record identity wins over the
     //    request, regardless of the key it was requested under).
     let before = read_bib(directory.path());
-    let output = success(bibi(
+    // Re-adding prints the kept entry again and warns about the skip on stderr.
+    let (stdout, stderr) = success_streams(bibi(
         directory.path(),
         &["add", "--key", "Maldacena", "inspire:451647"],
     ));
-    assert_eq!(output, "skipped Maldacena\n");
+    assert!(stdout.contains("{Maldacena,"), "{stdout}");
+    assert!(stderr.contains("skipped Maldacena"), "{stderr}");
     assert_eq!(read_bib(directory.path()), before);
 
     // 5. Every added paper is listed.

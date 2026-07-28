@@ -16,6 +16,9 @@ const MAX_BATCH_RECORDS: usize = 100;
 const MAX_ENCODED_QUERY: usize = 6 * 1024;
 const MAX_429_RETRIES: usize = 3;
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
+/// Lookups in flight at once: enough to hide per-request latency on a long
+/// bibliography without hammering the provider's rate limit.
+const MAX_CONCURRENT_LOOKUPS: usize = 8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Notification emitted immediately before retrying a rate-limited request.
@@ -73,8 +76,10 @@ impl Client {
 
     /// Resolve JSON and authoritative BibTeX into a durable record.
     pub async fn resolve_snapshot(&self, locator: &Locator) -> Result<InspireRecord, Error> {
-        let record = self.lookup_json(locator).await?;
-        let bibtex = self.lookup_bibtex(locator).await?;
+        // The two halves describe the same record and neither depends on the
+        // other, so fetch them concurrently rather than paying two round trips.
+        let (record, bibtex) =
+            tokio::try_join!(self.lookup_json(locator), self.lookup_bibtex(locator))?;
         let mut entries =
             parse_bibtex(&bibtex).map_err(|error| Error::Malformed(error.to_string()))?;
         if entries.len() != 1 {
@@ -87,14 +92,44 @@ impl Client {
         cross_check(record, key, snapshot.bibtex)
     }
 
+    /// Resolve several locators with bounded concurrency.
+    ///
+    /// Results come back in locator order, one per locator, so a caller can
+    /// attribute a failure to the entry that caused it. Resolving a whole
+    /// bibliography one locator at a time spends two round trips per entry on
+    /// latency alone; concurrency hides that without removing the per-request
+    /// rate-limit retries.
+    pub async fn resolve_snapshots(
+        &self,
+        locators: &[Locator],
+    ) -> Vec<Result<InspireRecord, Error>> {
+        let mut output = Vec::with_capacity(locators.len());
+        for chunk in locators.chunks(MAX_CONCURRENT_LOOKUPS) {
+            let mut tasks = tokio::task::JoinSet::new();
+            for (index, locator) in chunk.iter().enumerate() {
+                let client = self.clone();
+                let locator = locator.clone();
+                tasks.spawn(async move { (index, client.resolve_snapshot(&locator).await) });
+            }
+            let mut results = Vec::with_capacity(chunk.len());
+            while let Some(joined) = tasks.join_next().await {
+                results.push(joined.expect("lookup task panicked"));
+            }
+            results.sort_by_key(|(index, _)| *index);
+            output.extend(results.into_iter().map(|(_, result)| result));
+        }
+        output
+    }
+
     /// Refresh records by stable INSPIRE ID in bounded search batches.
     pub async fn refresh_records(&self, ids: &[u64]) -> Result<Vec<InspireRecord>, Error> {
         let mut output = Vec::with_capacity(ids.len());
         for batch in batch_ids(ids) {
             let (json_url, bib_url) = self.search_urls(&batch)?;
-            let json = self
-                .request(json_url, format!("INSPIRE records {batch:?}"))
-                .await?;
+            let (json, bibtex) = tokio::try_join!(
+                self.request(json_url, format!("INSPIRE records {batch:?}")),
+                self.request(bib_url, format!("INSPIRE records {batch:?}"))
+            )?;
             let response: SearchResponse =
                 serde_json::from_str(&json).map_err(|error| Error::Malformed(error.to_string()))?;
             let mut records = response
@@ -103,9 +138,6 @@ impl Client {
                 .into_iter()
                 .map(|record| record.into_selected())
                 .collect::<Result<Vec<_>, _>>()?;
-            let bibtex = self
-                .request(bib_url, format!("INSPIRE records {batch:?}"))
-                .await?;
             let mut bib_entries =
                 parse_bibtex(&bibtex).map_err(|error| Error::Malformed(error.to_string()))?;
             for id in batch {

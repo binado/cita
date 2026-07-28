@@ -1,4 +1,4 @@
-use super::{changed, open, persist, print_add_outcomes};
+use super::{changed, open_or_create, persist, warn_add_outcomes};
 use anyhow::{Context, Result, bail};
 use bibi_bibfile::{ConflictPolicy, Entry, FIELD_PREFIX, KeyRequest, PendingReference};
 use bibi_bibliography::{scan_entries, strip_fields_with_prefix};
@@ -14,7 +14,7 @@ use std::{
 /// validated before anything is stored, so a malformed file cannot leave a
 /// half-merged bibliography behind.
 pub(crate) fn import(path: &Path, inputs: &[String], overwrite: bool) -> Result<()> {
-    let mut file = open(path)?;
+    let mut file = open_or_create(path)?;
     let target = canonical(file.path());
     let mut pending = Vec::new();
     for input in inputs {
@@ -40,10 +40,13 @@ pub(crate) fn import(path: &Path, inputs: &[String], overwrite: bool) -> Result<
         ConflictPolicy::Skip
     };
     let outcomes = file.add_batch(pending, policy)?;
-    print_add_outcomes(&outcomes);
+    warn_add_outcomes(&outcomes);
     if changed(&outcomes) {
         persist(&file)?;
     }
+    // The result of an import is the bibliography itself, printed whole so the
+    // command pipes like any other file-producing tool.
+    print!("{}", file.render());
     Ok(())
 }
 

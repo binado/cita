@@ -4,6 +4,7 @@ use std::{
     net::TcpListener,
     path::Path,
     process::{Command, Output, Stdio},
+    sync::{Arc, Mutex},
     thread,
 };
 
@@ -87,36 +88,84 @@ fn entry(key: &str, title: &str, extra: &str) -> String {
     format!("@misc{{{key},\n  title = {{{title}}},\n  {extra}\n}}")
 }
 
-fn server(responses: Vec<(&'static str, String)>) -> (String, thread::JoinHandle<Vec<String>>) {
+/// Canned responses plus the request lines the server saw.
+struct TestServer {
+    base: String,
+    requests: Arc<Mutex<Vec<String>>>,
+}
+
+impl TestServer {
+    fn requests(&self) -> Vec<String> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+/// Serve canned responses matched by request content.
+///
+/// Each response pairs with a substring of the request line (usually
+/// `format=json` or `format=bibtex`), because the client fetches both halves
+/// of a lookup concurrently and either can arrive first. When nothing
+/// matches, the last served response repeats, so failure and not-found tests
+/// stay deterministic for both request halves. The accept loop runs for the
+/// rest of the test; callers read the shared request log once bibi exits.
+fn server(responses: Vec<(&'static str, &'static str, String)>) -> TestServer {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
-    let handle = thread::spawn(move || {
-        responses
-            .into_iter()
-            .map(|(status, body)| {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut bytes = [0; 32768];
-                let length = stream.read(&mut bytes).unwrap();
-                let headers = if status.starts_with("429") {
-                    "Retry-After: 0\r\n"
-                } else {
-                    ""
-                };
-                write!(
-                    stream,
-                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",
-                    body.len()
-                )
-                .unwrap();
-                String::from_utf8_lossy(&bytes[..length])
-                    .lines()
-                    .next()
-                    .unwrap()
-                    .to_owned()
-            })
-            .collect()
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let logged = Arc::clone(&requests);
+    thread::spawn(move || {
+        let mut pending = responses;
+        let mut last: Option<String> = None;
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let mut bytes = [0; 32768];
+            let Ok(length) = stream.read(&mut bytes) else {
+                continue;
+            };
+            if length == 0 {
+                continue;
+            }
+            let line = String::from_utf8_lossy(&bytes[..length])
+                .lines()
+                .next()
+                .unwrap_or("")
+                .to_owned();
+            let response = match pending
+                .iter()
+                .position(|(matcher, _, _)| line.contains(matcher))
+            {
+                Some(at) => {
+                    let (_, status, body) = pending.remove(at);
+                    let raw = wire(status, &body);
+                    last = Some(raw.clone());
+                    raw
+                }
+                None => last
+                    .clone()
+                    .unwrap_or_else(|| wire("500 Internal Server Error", "no canned response")),
+            };
+            // bibi may have cancelled its half of a concurrent pair; a failed
+            // write is not a test failure.
+            let _ = stream.write_all(response.as_bytes());
+            logged.lock().unwrap().push(line);
+        }
     });
-    (format!("http://{address}/"), handle)
+    TestServer {
+        base: format!("http://{address}/"),
+        requests,
+    }
+}
+
+fn wire(status: &str, body: &str) -> String {
+    let headers = if status.starts_with("429") {
+        "Retry-After: 0\r\n"
+    } else {
+        ""
+    };
+    format!(
+        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",
+        body.len()
+    )
 }
 
 fn json_record(id: u64, key: &str, title: &str, arxiv: &str) -> String {
@@ -198,6 +247,42 @@ fn path_and_the_environment_both_select_a_bibliography() {
     assert!(!directory.path().join("references.bib").exists());
 }
 
+/// `add` is how a new bibliography comes into being: a missing target starts
+/// empty and is created, parent directories included, on the first write.
+#[test]
+fn add_creates_a_missing_bibliography_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let json = json_record(42, "Provider:42", "Fresh start", "2401.00042");
+    let bibtex = entry("Provider:42", "Fresh start", "eprint={2401.00042},");
+    let server = server(vec![
+        ("format=json", "200 OK", json),
+        ("format=bibtex", "200 OK", bibtex),
+    ]);
+    let stdout = success(bibi_with_server(
+        directory.path(),
+        &["-p", "papers/references.bib", "add", "2401.00042"],
+        &server.base,
+    ));
+    assert!(stdout.contains("{Provider:42,"), "{stdout}");
+    let written = fs::read_to_string(directory.path().join("papers/references.bib")).unwrap();
+    assert!(written.contains("x-bibi-inspire-id = {42}"), "{written}");
+}
+
+/// Same for `import`: a missing target is a fresh start, and the freshly
+/// created file is exactly what the command prints.
+#[test]
+fn import_creates_a_missing_bibliography_and_prints_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let stdout = success(bibi_stdin(
+        directory.path(),
+        &["-p", "fresh/references.bib", "import", "-"],
+        &entry("First", "First entry", ""),
+    ));
+    let written = fs::read_to_string(directory.path().join("fresh/references.bib")).unwrap();
+    assert_eq!(stdout, written);
+    assert!(written.contains("{First,"), "{written}");
+}
+
 // -------------------------------------------------------- byte preservation
 
 /// The governing promise of a hand-edited source of truth: a mutation rewrites
@@ -261,18 +346,20 @@ fn import_preserves_source_bytes_and_skips_duplicates_by_default() {
     let directory = tempfile::tempdir().unwrap();
     bib(directory.path());
     let source = entry("Alpha", "Alpha title", "doi={10.1/ALPHA},");
-    assert_eq!(
-        success(bibi_stdin(directory.path(), &["import", "-"], &source)),
-        "added Alpha\n"
-    );
-    assert!(read_bib(directory.path()).contains(&source));
+    // The result of an import is the bibliography itself, printed whole.
+    let stdout = success(bibi_stdin(directory.path(), &["import", "-"], &source));
+    assert_eq!(stdout, read_bib(directory.path()));
+    assert!(stdout.contains(&source), "{stdout}");
 
-    // Same identity under a new key is a collision, not a second entry.
+    // Same identity under a new key is a collision, not a second entry: the
+    // kept entry prints again and the skip is warned about on stderr.
     let again = entry("Beta", "Beta title", "doi={10.1/alpha},");
-    assert_eq!(
-        success(bibi_stdin(directory.path(), &["import", "-"], &again)),
-        "skipped Beta: already present as Alpha\n"
+    let (stdout, stderr) = success_streams(bibi_stdin(directory.path(), &["import", "-"], &again));
+    assert!(
+        stderr.contains("skipped Beta: already present as Alpha"),
+        "{stderr}"
     );
+    assert_eq!(stdout, read_bib(directory.path()));
     assert!(!read_bib(directory.path()).contains("Beta title"));
 }
 
@@ -285,14 +372,13 @@ fn import_overwrite_replaces_the_colliding_entry() {
         &["import", "-"],
         &entry("Alpha", "Old", "doi={10.1/X},"),
     ));
-    assert_eq!(
-        success(bibi_stdin(
-            directory.path(),
-            &["import", "--overwrite", "-"],
-            &entry("Renamed", "New", "doi={10.1/X},"),
-        )),
-        "overwrote Alpha -> Renamed\n"
-    );
+    let (stdout, stderr) = success_streams(bibi_stdin(
+        directory.path(),
+        &["import", "--overwrite", "-"],
+        &entry("Renamed", "New", "doi={10.1/X},"),
+    ));
+    assert!(stderr.contains("overwrote Alpha -> Renamed"), "{stderr}");
+    assert_eq!(stdout, read_bib(directory.path()));
     let bibliography = read_bib(directory.path());
     assert!(bibliography.contains("@misc{Renamed,"), "{bibliography}");
     assert!(!bibliography.contains("Old"), "{bibliography}");
@@ -308,10 +394,8 @@ fn import_tolerates_comments_and_directives_in_the_source() {
         "% their notes\n@string{{j = {{Journal}}}}\n\n{}\n\n% trailing\n",
         entry("Theirs", "Their paper", "")
     );
-    assert_eq!(
-        success(bibi_stdin(directory.path(), &["import", "-"], &source)),
-        "added Theirs\n"
-    );
+    let stdout = success(bibi_stdin(directory.path(), &["import", "-"], &source));
+    assert_eq!(stdout, read_bib(directory.path()));
     let bibliography = read_bib(directory.path());
     assert!(bibliography.contains("@misc{Theirs,"), "{bibliography}");
     // Their commentary is theirs; only entries cross over.
@@ -351,7 +435,7 @@ fn import_accepts_several_sources_and_refuses_the_bibliography_itself() {
     }
     let output = success(bibi(directory.path(), &["import", "one.bib", "two.bib"]));
     assert!(
-        output.contains("added One") && output.contains("added Two"),
+        output.contains("@misc{One,") && output.contains("@misc{Two,"),
         "{output}"
     );
 
@@ -459,13 +543,15 @@ fn export_strips_bibi_fields_and_adds_the_arxiv_url() {
     bib(directory.path());
     let json = json_record(42, "Provider:42", "Provider title", "2401.00042");
     let bibtex = entry("Provider:42", "Provider title", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bibtex)]);
+    let server = server(vec![
+        ("format=json", "200 OK", json),
+        ("format=bibtex", "200 OK", bibtex),
+    ]);
     success(bibi_with_server(
         directory.path(),
         &["add", "2401.00042"],
-        &base,
+        &server.base,
     ));
-    handle.join().unwrap();
     assert!(read_bib(directory.path()).contains("x-bibi-inspire-id"));
 
     let exported = success(bibi(directory.path(), &["export", "-o", "-"]));
@@ -546,23 +632,37 @@ fn add_stores_provider_bookkeeping_as_entry_fields() {
     bib(directory.path());
     let json = json_record(42, "Provider:42", "Provider title", "2401.00042");
     let bibtex = entry("Provider:42", "Provider title", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bibtex)]);
-    assert_eq!(
-        success(bibi_with_server(
-            directory.path(),
-            &[
-                "add",
-                "--key",
-                "Local:42",
-                "https://arxiv.org/abs/2401.00042"
-            ],
-            &base
-        )),
-        "added Local:42\n"
+    let server = server(vec![
+        ("format=json", "200 OK", json),
+        ("format=bibtex", "200 OK", bibtex),
+    ]);
+    // The output of an add is the stored entry's BibTeX.
+    let stdout = success(bibi_with_server(
+        directory.path(),
+        &[
+            "add",
+            "--key",
+            "Local:42",
+            "https://arxiv.org/abs/2401.00042",
+        ],
+        &server.base,
+    ));
+    assert!(stdout.contains("@misc{Local:42,"), "{stdout}");
+    assert!(stdout.contains("x-bibi-inspire-id = {42}"), "{stdout}");
+    // The JSON and BibTeX halves of the lookup are fetched concurrently.
+    let requests = server.requests();
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains("format=json")),
+        "{requests:?}"
     );
-    let requests = handle.join().unwrap();
-    assert!(requests[0].contains("format=json"));
-    assert!(requests[1].contains("format=bibtex"));
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.contains("format=bibtex")),
+        "{requests:?}"
+    );
 
     let bibliography = read_bib(directory.path());
     assert!(bibliography.contains("@misc{Local:42,"), "{bibliography}");
@@ -587,16 +687,15 @@ fn a_failed_add_leaves_the_bibliography_untouched() {
     let directory = tempfile::tempdir().unwrap();
     arxiv_library(directory.path());
     let before = read_bib(directory.path());
-    let (base, handle) = server(vec![("500 Internal Server Error", String::new())]);
+    let server = server(vec![("", "500 Internal Server Error", String::new())]);
     assert!(
         !failure(bibi_with_server(
             directory.path(),
             &["add", "2401.00042"],
-            &base
+            &server.base
         ))
         .is_empty()
     );
-    handle.join().unwrap();
     assert_eq!(read_bib(directory.path()), before);
 }
 
@@ -606,13 +705,15 @@ fn sync_refreshes_managed_entries_and_leaves_the_rest_alone() {
     bib(directory.path());
     let json = json_record(42, "Provider:42", "Old", "2401.00042");
     let bibtex = entry("Provider:42", "Old", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bibtex)]);
+    let seed = server(vec![
+        ("format=json", "200 OK", json),
+        ("format=bibtex", "200 OK", bibtex),
+    ]);
     success(bibi_with_server(
         directory.path(),
         &["add", "--key", "Local", "2401.00042"],
-        &base,
+        &seed.base,
     ));
-    handle.join().unwrap();
     success(bibi_stdin(
         directory.path(),
         &["import", "-"],
@@ -630,18 +731,22 @@ fn sync_refreshes_managed_entries_and_leaves_the_rest_alone() {
     );
     let search = format!(r#"{{"hits":{{"hits":[{fresh}]}}}}"#);
     let fresh_bib = entry("Current:42", "Fresh", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", search), ("200 OK", fresh_bib)]);
-    let output = success(bibi_with_server(directory.path(), &["sync"], &base));
+    let refresh = server(vec![
+        ("format=json", "200 OK", search),
+        ("format=bibtex", "200 OK", fresh_bib),
+    ]);
+    let output = success(bibi_with_server(directory.path(), &["sync"], &refresh.base));
     assert!(
         output.contains("refreshed 1 of 1 managed entries"),
         "{output}"
     );
     assert!(output.contains("1 entries not on INSPIRE"), "{output}");
-    let requests = handle.join().unwrap();
+    let requests = refresh.requests();
     assert!(
-        requests[0].contains("control_number%3A42"),
-        "{}",
-        requests[0]
+        requests
+            .iter()
+            .all(|request| request.contains("control_number%3A42")),
+        "{requests:?}"
     );
 
     let bibliography = read_bib(directory.path());
@@ -659,26 +764,28 @@ fn sync_writes_nothing_when_the_provider_timestamp_is_unchanged() {
     bib(directory.path());
     let json = json_record(42, "Provider:42", "Same", "2401.00042");
     let bibtex = entry("Provider:42", "Same", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bibtex)]);
+    let seed = server(vec![
+        ("format=json", "200 OK", json),
+        ("format=bibtex", "200 OK", bibtex),
+    ]);
     success(bibi_with_server(
         directory.path(),
         &["add", "--key", "Local", "2401.00042"],
-        &base,
+        &seed.base,
     ));
-    handle.join().unwrap();
     let before = read_bib(directory.path());
 
     let same = json_record(42, "Provider:42", "Same", "2401.00042");
     let search = format!(r#"{{"hits":{{"hits":[{same}]}}}}"#);
-    let (base, handle) = server(vec![
-        ("200 OK", search),
+    let refresh = server(vec![
+        ("format=json", "200 OK", search),
         (
+            "format=bibtex",
             "200 OK",
             entry("Provider:42", "Same", "eprint={2401.00042},"),
         ),
     ]);
-    let output = success(bibi_with_server(directory.path(), &["sync"], &base));
-    handle.join().unwrap();
+    let output = success(bibi_with_server(directory.path(), &["sync"], &refresh.base));
     assert!(
         output.contains("refreshed 0 of 1 managed entries"),
         "{output}"
@@ -711,18 +818,17 @@ fn cli_prints_every_inspire_retry_to_stderr() {
     bib(directory.path());
     let json = json_record(42, "Provider:42", "Retried", "2401.00042");
     let bibtex = entry("Provider:42", "Retried", "eprint={2401.00042},");
-    let (base, handle) = server(vec![
-        ("429 Too Many Requests", String::new()),
-        ("200 OK", json),
-        ("200 OK", bibtex),
+    let server = server(vec![
+        ("format=json", "429 Too Many Requests", String::new()),
+        ("format=json", "200 OK", json),
+        ("format=bibtex", "200 OK", bibtex),
     ]);
     let (stdout, stderr) = success_streams(bibi_with_server(
         directory.path(),
         &["add", "2401.00042"],
-        &base,
+        &server.base,
     ));
-    handle.join().unwrap();
-    assert!(stdout.contains("added Provider:42"), "{stdout}");
+    assert!(stdout.contains("{Provider:42,"), "{stdout}");
     assert!(stderr.contains("INSPIRE rate limited"), "{stderr}");
 }
 
@@ -793,13 +899,15 @@ fn fetch_save_stores_an_unmatched_locator_before_fetching() {
     arxiv_library(directory.path());
     let json = json_record(42, "Provider:42", "Saved", "2401.00042");
     let bibtex = entry("Provider:42", "Saved", "eprint={2401.00042},");
-    let (base, handle) = server(vec![("200 OK", json), ("200 OK", bibtex)]);
+    let server = server(vec![
+        ("format=json", "200 OK", json),
+        ("format=bibtex", "200 OK", bibtex),
+    ]);
     let (stdout, stderr) = success_streams(bibi_with_server(
         directory.path(),
         &["fetch", "--url", "--save", "2401.00042"],
-        &base,
+        &server.base,
     ));
-    handle.join().unwrap();
     assert_eq!(stdout, "https://arxiv.org/pdf/2401.00042\n");
     assert!(stderr.contains("added Provider:42"), "{stderr}");
     assert!(read_bib(directory.path()).contains("x-bibi-inspire-id = {42}"));
@@ -816,10 +924,11 @@ fn sync_adopts_an_entry_inspire_recognizes_without_rewriting_it() {
 
     let json = json_record(42, "Provider:42", "Provider wording", "2401.00042");
     let bibtex = entry("Provider:42", "Provider wording", "eprint={2401.00042},");
-    let (base, handle) = server(vec![
-        ("200 OK", json),
-        ("200 OK", bibtex),
+    let server = server(vec![
+        ("format=json", "200 OK", json),
+        ("format=bibtex", "200 OK", bibtex),
         (
+            "format=json",
             "200 OK",
             format!(
                 r#"{{"hits":{{"hits":[{}]}}}}"#,
@@ -827,12 +936,12 @@ fn sync_adopts_an_entry_inspire_recognizes_without_rewriting_it() {
             ),
         ),
         (
+            "format=bibtex",
             "200 OK",
             entry("Provider:42", "Provider wording", "eprint={2401.00042},"),
         ),
     ]);
-    let output = success(bibi_with_server(directory.path(), &["sync"], &base));
-    handle.join().unwrap();
+    let output = success(bibi_with_server(directory.path(), &["sync"], &server.base));
     assert!(output.contains("resolved 1 entries"), "{output}");
     assert!(
         output.contains("refreshed 0 of 1 managed entries"),
@@ -859,13 +968,12 @@ fn sync_reports_entries_inspire_does_not_know_without_failing() {
         &entry("Textbook", "A textbook", "doi={10.1/TEXTBOOK},"),
     ));
     let before = read_bib(directory.path());
-    let (base, handle) = server(vec![("404 Not Found", String::new())]);
+    let server = server(vec![("", "404 Not Found", String::new())]);
     let output = success(bibi_with_server(
         directory.path(),
         &["sync", "--verbose"],
-        &base,
+        &server.base,
     ));
-    handle.join().unwrap();
     assert!(output.contains("1 entries not on INSPIRE"), "{output}");
     assert!(output.contains("not on INSPIRE: Textbook"), "{output}");
     assert_eq!(read_bib(directory.path()), before);
@@ -915,14 +1023,29 @@ fn sync_refuses_two_entries_that_resolve_to_one_record() {
         ),
     )
     .unwrap();
-    let (base, handle) = server(vec![
-        ("200 OK", json_record(42, "P:42", "One", "2401.00042")),
-        ("200 OK", entry("P:42", "One", "eprint={2401.00042},")),
-        ("200 OK", json_record(42, "P:42", "One", "2401.00042")),
-        ("200 OK", entry("P:42", "One", "eprint={2401.00042},")),
+    let server = server(vec![
+        (
+            "format=json",
+            "200 OK",
+            json_record(42, "P:42", "One", "2401.00042"),
+        ),
+        (
+            "format=bibtex",
+            "200 OK",
+            entry("P:42", "One", "eprint={2401.00042},"),
+        ),
+        (
+            "format=json",
+            "200 OK",
+            json_record(42, "P:42", "One", "2401.00042"),
+        ),
+        (
+            "format=bibtex",
+            "200 OK",
+            entry("P:42", "One", "eprint={2401.00042},"),
+        ),
     ]);
-    let error = failure(bibi_with_server(directory.path(), &["sync"], &base));
-    handle.join().unwrap();
+    let error = failure(bibi_with_server(directory.path(), &["sync"], &server.base));
     assert!(error.contains("both claim INSPIRE record 42"), "{error}");
 }
 
@@ -936,24 +1059,36 @@ fn sync_dry_run_reports_the_plan_without_writing() {
         &entry("Mine", "Mine", "eprint={2401.00042},"),
     ));
     let before = read_bib(directory.path());
-    let (base, handle) = server(vec![
-        ("200 OK", json_record(42, "P:42", "Provider", "2401.00042")),
-        ("200 OK", entry("P:42", "Provider", "eprint={2401.00042},")),
+    let server = server(vec![
         (
+            "format=json",
+            "200 OK",
+            json_record(42, "P:42", "Provider", "2401.00042"),
+        ),
+        (
+            "format=bibtex",
+            "200 OK",
+            entry("P:42", "Provider", "eprint={2401.00042},"),
+        ),
+        (
+            "format=json",
             "200 OK",
             format!(
                 r#"{{"hits":{{"hits":[{}]}}}}"#,
                 json_record(42, "P:42", "Provider", "2401.00042")
             ),
         ),
-        ("200 OK", entry("P:42", "Provider", "eprint={2401.00042},")),
+        (
+            "format=bibtex",
+            "200 OK",
+            entry("P:42", "Provider", "eprint={2401.00042},"),
+        ),
     ]);
     let (stdout, stderr) = success_streams(bibi_with_server(
         directory.path(),
         &["sync", "--dry-run"],
-        &base,
+        &server.base,
     ));
-    handle.join().unwrap();
     assert!(stdout.contains("resolved 1 entries"), "{stdout}");
     assert!(stderr.contains("not written"), "{stderr}");
     assert_eq!(read_bib(directory.path()), before);
@@ -971,13 +1106,12 @@ fn sync_verbose_lists_every_entry_the_summary_counted() {
         entry("Unknown", "Never indexed", "doi={10.1/UNKNOWN},"),
     );
     success(bibi_stdin(directory.path(), &["import", "-"], &input));
-    let (base, handle) = server(vec![("404 Not Found", String::new())]);
+    let server = server(vec![("", "404 Not Found", String::new())]);
     let output = success(bibi_with_server(
         directory.path(),
         &["sync", "--verbose"],
-        &base,
+        &server.base,
     ));
-    handle.join().unwrap();
     assert!(output.contains("2 entries not on INSPIRE"), "{output}");
     assert!(output.contains("not on INSPIRE: Unknown"), "{output}");
     assert!(
