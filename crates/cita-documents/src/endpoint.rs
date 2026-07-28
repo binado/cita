@@ -3,7 +3,7 @@
 use cita_core::Locator;
 use url::Url;
 
-use crate::Error;
+use crate::{ArtifactKind, Error};
 
 /// Default arXiv endpoint used when no override is configured.
 pub(crate) const DEFAULT_BASE_URL: &str = "https://arxiv.org/";
@@ -15,15 +15,15 @@ pub(crate) fn validated_arxiv_id(value: &str) -> Result<String, Error> {
     }
 }
 
-pub(crate) fn pdf_url(base_url: &Url, arxiv_id: &str) -> Result<Url, Error> {
-    artifact_url(base_url, "pdf", arxiv_id)
-}
-
-pub(crate) fn source_url(base_url: &Url, arxiv_id: &str) -> Result<Url, Error> {
-    artifact_url(base_url, "src", arxiv_id)
-}
-
-fn artifact_url(base_url: &Url, endpoint: &str, arxiv_id: &str) -> Result<Url, Error> {
+pub(crate) fn artifact_url(
+    base_url: &Url,
+    kind: ArtifactKind,
+    arxiv_id: &str,
+) -> Result<Url, Error> {
+    let endpoint = match kind {
+        ArtifactKind::Pdf => "pdf",
+        ArtifactKind::Source => "src",
+    };
     let mut url = base_url.clone();
     let mut segments = url
         .path_segments_mut()

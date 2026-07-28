@@ -6,7 +6,7 @@ use reqwest::StatusCode;
 use tempfile::NamedTempFile;
 use url::Url;
 
-use crate::endpoint::{DEFAULT_BASE_URL, pdf_url, source_url, validated_arxiv_id};
+use crate::endpoint::{DEFAULT_BASE_URL, artifact_url, validated_arxiv_id};
 use crate::pdf::{PDF_SIGNATURE, has_pdf_signature, pdf_cache_path, validate_cached_pdf};
 use crate::source::{
     DEFAULT_SOURCE_LIMITS, SourceArchiveLimits, cache_entry_exists,
@@ -79,7 +79,7 @@ impl DocumentStore {
             source,
         })?;
 
-        let url = pdf_url(&self.base_url, &arxiv_id)?;
+        let url = artifact_url(&self.base_url, ArtifactKind::Pdf, &arxiv_id)?;
         let mut response = self.http.get(url).send().await.map_err(Error::Transport)?;
         let status = response.status();
         if !status.is_success() {
@@ -140,7 +140,7 @@ impl DocumentStore {
             source,
         })?;
 
-        let url = source_url(&self.base_url, &arxiv_id)?;
+        let url = artifact_url(&self.base_url, ArtifactKind::Source, &arxiv_id)?;
         let mut response = self.http.get(url).send().await.map_err(Error::Transport)?;
         let status = response.status();
         if status == StatusCode::NOT_FOUND {
@@ -182,7 +182,7 @@ pub fn arxiv_pdf_url(arxiv_id: &str) -> Result<Url, Error> {
     let arxiv_id = validated_arxiv_id(arxiv_id)?;
     let base_url =
         Url::parse(DEFAULT_BASE_URL).expect("the built-in arXiv base URL must always be valid");
-    pdf_url(&base_url, &arxiv_id)
+    artifact_url(&base_url, ArtifactKind::Pdf, &arxiv_id)
 }
 
 #[derive(Clone, Debug)]
