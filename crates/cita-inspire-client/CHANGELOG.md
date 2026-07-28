@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- expose the supported `ApiLiteratureRecord` JSON model and
+  `Client::resolve_api_record`
+
+### Changed
+
+- [**breaking**] replace `InspireRecord` with `InspireSnapshot` and attach
+  authoritative BibTeX directly to API records
+
 ## [0.2.0](https://github.com/binado/cita/compare/cita-inspire-client-v0.1.0...cita-inspire-client-v0.2.0) - 2026-07-21
 
 ### Other

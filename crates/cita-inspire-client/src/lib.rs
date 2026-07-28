@@ -6,4 +6,5 @@ mod snapshot;
 mod wire;
 
 pub use client::{Client, ClientBuilder, Error, RetryEvent};
-pub use snapshot::{InspireRecord, project_inspire};
+pub use snapshot::{InspireSnapshot, project_inspire};
+pub use wire::{ApiArxivEprint, ApiDoi, ApiLiteratureMetadata, ApiLiteratureRecord, ApiTitle};

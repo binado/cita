@@ -85,13 +85,14 @@ fn search_bibtex(ids: &[u64]) -> String {
 }
 
 #[tokio::test]
-async fn json_only_resolution_performs_exactly_one_request() {
+async fn api_record_resolution_performs_exactly_one_request() {
     let (base, handle) = server(vec![response("200 OK", "", &json_record(42))]);
-    let reference = client(&base)
-        .resolve_reference(&Locator::Inspire(42))
+    let record = client(&base)
+        .resolve_api_record(&Locator::Inspire(42))
         .await
         .unwrap();
-    assert_eq!(reference.title, "Title 42");
+    assert_eq!(record.record_id(), Some(42));
+    assert_eq!(record.metadata.titles[0].title, "Title 42");
     let requests = handle.join().unwrap();
     assert_eq!(requests.len(), 1);
     assert!(requests[0].contains("format=json"), "{}", requests[0]);

@@ -11,7 +11,7 @@ use cita_bibliography::{
 use cita_core::{
     Locator, ProjectionError, Reference, ReferenceSource, normalize_arxiv, normalize_doi,
 };
-use cita_inspire_client::InspireRecord;
+use cita_inspire_client::InspireSnapshot;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -99,7 +99,7 @@ impl InspireEntry {
 
 impl SourceSnapshot {
     /// Convert a durable provider record into a manifest snapshot.
-    pub fn inspire(record: InspireRecord) -> Self {
+    pub fn inspire(record: InspireSnapshot) -> Self {
         Self::Inspire(InspireEntry {
             record_id: record.record_id,
             updated: record.updated,
@@ -611,7 +611,7 @@ impl Manifest {
     }
 
     /// Replace the complete managed INSPIRE set while preserving local keys.
-    pub fn replace_inspire(&mut self, refreshed: Vec<InspireRecord>) -> Result<bool, Error> {
+    pub fn replace_inspire(&mut self, refreshed: Vec<InspireSnapshot>) -> Result<bool, Error> {
         let expected = self
             .references
             .iter()
@@ -911,8 +911,8 @@ mod tests {
         }
     }
 
-    fn record(provider_key: &str, record_id: u64) -> InspireRecord {
-        InspireRecord {
+    fn record(provider_key: &str, record_id: u64) -> InspireSnapshot {
+        InspireSnapshot {
             record_id,
             updated: "2026-01-01".into(),
             texkey: provider_key.into(),
@@ -942,8 +942,8 @@ mod tests {
         manifest.add_batch(pending, ConflictPolicy::Skip)
     }
 
-    fn updated(provider_key: &str, record_id: u64, timestamp: &str) -> InspireRecord {
-        InspireRecord {
+    fn updated(provider_key: &str, record_id: u64, timestamp: &str) -> InspireSnapshot {
+        InspireSnapshot {
             updated: timestamp.into(),
             ..record(provider_key, record_id)
         }
@@ -977,6 +977,29 @@ mod tests {
         ));
         loaded.generate().unwrap();
         Manifest::load_verified(dir.path().join(MANIFEST_FILE)).unwrap();
+    }
+
+    #[test]
+    fn inspire_snapshot_rust_name_does_not_change_schema_one_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = Manifest::create(dir.path()).unwrap();
+        add(&mut manifest, vec![inspire("Local", "Provider:Key", 42)]).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join(MANIFEST_FILE)).unwrap(),
+            concat!(
+                "schema = 1\n",
+                "\n",
+                "[references.Local]\n",
+                "source = \"inspire\"\n",
+                "record_id = 42\n",
+                "updated = \"2026-01-01\"\n",
+                "bibtex = \"@misc{Provider:Key,title={Record 42}}\"\n",
+            )
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join(BIBLIOGRAPHY_FILE)).unwrap(),
+            "@misc{Local,title={Record 42}}\n"
+        );
     }
 
     #[test]
@@ -1398,7 +1421,7 @@ mod tests {
     fn curated_identifiers_override_bibtex_derived_identity() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
-        let record = InspireRecord {
+        let record = InspireSnapshot {
             record_id: 99,
             updated: "2026-01-01".into(),
             texkey: "Curated:2026".into(),
@@ -1433,7 +1456,7 @@ mod tests {
     fn curated_identifier_partial_override_falls_through_for_the_other_field() {
         let dir = tempfile::tempdir().unwrap();
         let mut manifest = Manifest::create(dir.path()).unwrap();
-        let record = InspireRecord {
+        let record = InspireSnapshot {
             record_id: 100,
             updated: "2026-01-01".into(),
             texkey: "Partial:2026".into(),
@@ -1471,7 +1494,7 @@ mod tests {
 
     #[test]
     fn source_snapshot_inspire_normalizes_curated_identifiers() {
-        let record = InspireRecord {
+        let record = InspireSnapshot {
             record_id: 1,
             updated: "2026-01-01".into(),
             texkey: "Key:2026".into(),
