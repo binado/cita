@@ -1,39 +1,37 @@
-# cita
+# bibi
 
-cita is a Git-friendly bibliography CLI. It keeps authoritative source snapshots
-in `cita.toml` and deterministically generates the tracked `references.bib`.
+bibi is a Git-friendly bibliography CLI whose source of truth is your
+`references.bib` file. Entries are authoritative BibTeX and stay exactly as you
+or your provider wrote them; bibi's own bookkeeping rides along in `x-bibi-*`
+fields on the entries, where LaTeX ignores it. There is no manifest, no
+generated artifact, and nothing to keep in step.
+
 INSPIRE is the managed metadata provider: its records retain canonical
-identifiers selected from and cross-checked against INSPIRE's exact BibTeX and
-can be refreshed by stable record ID. Generic BibTeX ingestion is available
-through `cita import`, which preserves each standalone entry's exact source
-bytes.
+identifiers cross-checked against INSPIRE's exact BibTeX and are refreshed by
+stable record ID.
 
 Requires Rust 1.88 or newer.
 
 ```bash
-cargo install cita
+cargo install bibi
 ```
 
 ## Quick start
 
 ```bash
-cita init
-cita add https://arxiv.org/abs/1207.7214 doi:10.1016/j.physletb.2012.08.020
-cita import local-references.bib
-cita list
-cita sync
-cita fetch 1207.7214
+touch references.bib
+bibi add https://arxiv.org/abs/1207.7214 doi:10.1016/j.physletb.2012.08.020
+bibi import colleague.bib
+bibi list
+bibi sync
+bibi fetch 1207.7214
 ```
 
-Several independent projects can also be registered as shelves in one library:
-
-```bash
-cita library init
-cita library new paper-one --path papers/paper-one
-cita add 1207.7214 --shelf paper-one
-cita library list
-cita sync --all-shelves
-```
+bibi operates on `./references.bib` unless you point it elsewhere with
+`-p/--path` (a `.bib` file) or `$BIBI_BIB`. Directories are refused. It never
+searches parent directories. `add` and `import` create a missing bibliography
+(and parent directories) on first write; other commands report the missing file.
+If you work in subdirectories, set `BIBI_BIB` in a `.envrc`.
 
 Supported locators are bare arXiv IDs; explicit `arxiv:`, `doi:`, or `inspire:`
 locators; and canonical `https://arxiv.org`, `https://inspirehep.net`, or
@@ -43,122 +41,93 @@ work as selectors.
 
 ## Commands
 
-- `cita init [--path <directory>]` creates an empty schema-1 project in the
-  current directory, or in the specified existing directory. Initialization
-  does not run Git, so malformed repository metadata or an unavailable Git
-  executable cannot prevent it. Commands run inside a nested project discover
-  its nearest `cita.toml`. If only `references.bib` exists at the chosen
-  location, initialization imports every standalone entry. Existing schema-1
-  projects are validated; any other schema is explicitly unsupported. The
-  target directory must already exist, and invalid existing content is rejected
-  without rewriting the managed files.
-- `cita import <path|->` atomically imports all standalone entries from a file
-  or stdin.
-- `cita add [--key K] <locator>...` resolves INSPIRE JSON and authoritative
-  BibTeX. `--key` keeps an independent local key and accepts one locator.
-- `cita sync` refreshes only INSPIRE snapshots by stable record ID and leaves
-  imported entries byte-for-byte unchanged.
-- `cita remove <selector>...` removes a batch atomically.
-- `cita list [--sort-by key|title|author|year] [--order asc|desc]` displays
+- `bibi add [--key K] [--overwrite] <locator>...` resolves INSPIRE JSON and
+  authoritative BibTeX. `--key` keeps an independent local key and accepts one
+  locator. A failed lookup writes nothing.
+- `bibi import [--overwrite] <path|->...` folds entries from other BibTeX files
+  into yours. Sources are only ever read. Comments and directives in a source
+  are tolerated, and any `x-bibi-*` fields on incoming entries are stripped —
+  someone else's bookkeeping is not evidence about your bibliography, and
+  `bibi sync` re-establishes it from each entry's own identity.
+- `bibi sync [--dry-run] [--verbose]` reconciles with INSPIRE. Managed entries
+  refresh by record ID; entries INSPIRE recognizes but bibi does not yet track
+  are adopted, which attaches bookkeeping while leaving your wording alone.
+  Entries INSPIRE does not know are reported, not treated as failures.
+- `bibi remove <selector>...` removes a batch atomically.
+- `bibi rekey <selector> <new-key>` changes one entry's citation key, touching
+  only that token.
+- `bibi list [--sort-by key|title|author|year] [--order asc|desc]` displays
   source-neutral projections.
-- `cita generate` repairs a missing or edited `references.bib` from the
-  authoritative manifest.
-- `cita export [-o/--output <file>]` writes a derived BibTeX file for tools that
-  want a resolvable link, such as Zotero. It renders the same entries as
-  `references.bib` and adds `url = {https://arxiv.org/pdf/<id>}` to each entry
-  with an arXiv ID, leaving entries that already define a `url` untouched. The
-  default file is named for the project directory; a relative `--output` is
-  relative to the directory where cita was invoked. The export never overwrites
-  a managed file — not this project's, and not a `cita.toml`, `references.bib`,
-  or `cita-library.toml` belonging to any other project or library — and it
-  refuses to run while `references.bib` has drifted.
-- `cita fetch [--force | --cache-only | --url] [--source] [--open] [--save]
+- `bibi check` validates the file and reports every problem at once.
+- `bibi export [-o/--output <file>] [--keep-metadata]` writes a copy for
+  somebody else to read: `x-bibi-*` fields removed, and
+  `url = {https://arxiv.org/pdf/<id>}` added to each entry with an arXiv ID,
+  leaving authored `url` values untouched. `-o -` writes to stdout. The default
+  file is named for the bibliography's directory. The only target it refuses is
+  the bibliography itself.
+- `bibi fetch [--force | --cache-only | --url] [--source] [--open] [--save]
   <selector>` returns an absolute cached PDF path by default, the arXiv PDF URL
   with `-u/--url`, or an absolute extracted source directory with `--source`.
   `--source` and `--url` are mutually exclusive. `--open` launches the returned
   target with the system default application. Without `--save`, an unmatched
   locator uses INSPIRE JSON only.
-- `cita commit` is an optional Git helper. It validates consistency and commits
-  only `cita.toml` and `references.bib`, leaving unrelated staged changes
-  intact. It refuses to run if either managed file is already staged.
-- `cita library init [--path <directory>]` creates an idempotent
-  `cita-library.toml` registry in an existing directory. A library root cannot
-  itself be a cita project.
-- `cita library list` (alias `ls`) lists stable shelf names and their
-  library-relative paths in deterministic order.
-- `cita library new <name> [--path <relative-directory>]` (alias `create`)
-  creates and registers an independent shelf. It can create an empty project,
-  import an existing standalone `references.bib`, or adopt an existing verified
-  cita project. Initialization completes before registration, so a registry
-  write failure leaves a usable standalone shelf for a safe retry.
-- `-s/--shelf <name>` runs any of `add`, `import`, `remove`, `list`, `generate`,
-  `export`, `sync`, `fetch`, and `commit` in that registered shelf instead of
-  the project discovered from the current directory. Import and export paths
-  remain relative to the directory where the user invoked cita, not to the
-  shelf. A shelf export is named for the stable registered shelf name rather
-  than the shelf directory, so importing each file into Zotero yields one
-  collection per shelf.
-- `--all-shelves` runs `generate`, `export`, or `sync` in every shelf in name
-  order, continuing after shelf-specific failures, printing one result per
-  shelf, and exiting unsuccessfully if any shelf failed. It is mutually
-  exclusive with `--shelf`, and with `export --output`, which cannot name a file
-  for each shelf. The remaining commands are deliberately excluded: there is no
-  library-wide commit, and mutations stay per-shelf.
-- `cita completions <bash|elvish|fish|powershell|zsh>` prints a shell completion
-  script to stdout, e.g. `cita completions zsh > ~/.zfunc/_cita`.
+- `bibi completions <bash|elvish|fish|powershell|zsh>` prints a shell completion
+  script to stdout, e.g. `bibi completions zsh > ~/.zfunc/_bibi`.
 
 Successful `fetch` output is suitable for command substitution; status messages
 are written to stderr. For example, choose a specific PDF viewer on macOS with
-`open -a Skim "$(cita fetch <selector>)"`.
+`open -a Skim "$(bibi fetch <selector>)"`.
+
+Git is yours to drive. bibi writes one tracked text file in the format you read,
+so `git diff` already shows what changed.
 
 ## Storage rules
 
-`cita.toml` is the sole authority. Each sorted local key contains one tagged
-source snapshot (`inspire` or `import`). Snapshots are strictly validated and
-duplicate normalized DOI, arXiv, or provider identities are rejected across all
-sources.
+`references.bib` is the sole authority. Bibliographic content is the BibTeX
+itself; bibi adds only these fields:
 
-The projected `Reference` intentionally contains only the fields Cita needs for
+| Field | Meaning |
+|---|---|
+| `x-bibi-inspire-id` | stable INSPIRE record id; its presence is what makes an entry managed |
+| `x-bibi-inspire-updated` | provider timestamp, so a sync that learns nothing writes nothing |
+| `x-bibi-arxiv` | curated normalized arXiv id |
+| `x-bibi-doi` | curated normalized DOI |
+| `x-bibi-frozen` | never refreshed, never resolved — for entries you have corrected by hand, and for work INSPIRE will never have |
+
+Because the file is yours to edit, **a mutation rewrites only the entries it
+touches**. Your comments, `@string` directives, indentation, and entry ordering
+survive every command; new entries are appended rather than sorted in. Loading
+and writing back without changing anything reproduces the file byte for byte.
+
+Duplicate normalized DOI, arXiv, or provider identities are rejected across the
+whole file, as are missing titles and unsafe citation keys.
+
+The projected `Reference` intentionally contains only the fields bibi needs for
 selection and display: title, authors, collaborations, year, and DOI/arXiv/
-provider identifiers. The authoritative BibTeX remains available in the source
-snapshot for all other bibliographic data.
+provider identifiers. The BibTeX entry remains available for everything else.
 
-`references.bib` behaves like a lockfile: entries are sorted by local key,
-separated by one blank line, and end with one newline. Preserved field bytes are
-unchanged; only the citation-key token may be re-keyed. Every normal command
-checks its exact bytes against the manifest and reports drift. Use `cita
-generate` to repair it.
-
-The `cita export` output is a derived, one-way convenience artifact. It is never
+The `bibi export` output is a derived, one-way convenience artifact. It is never
 authoritative, is not tracked or verified, and is not read back by any command;
-regenerate it instead of editing it, and add it to `.gitignore` if you do not
-want it tracked. Re-importing an export into Zotero adds items again rather than
-updating the previous import.
+regenerate it instead of editing it. Re-importing an export into Zotero adds
+items again rather than updating the previous import.
 
-Mutations validate and render the complete candidate in memory, atomically
-persist `references.bib` first, and persist `cita.toml` as the commit point.
-Downloaded PDFs and extracted source packages live under `.cita/files`;
-initialization adds
-`/.cita/files/` to the project root's `.gitignore` so the cache is not tracked.
-
-A library is only a sorted registry of shelf names and relative paths. Each
-shelf has its own `cita.toml`, `references.bib`, `.cita/files` cache, identities,
-and optional Git history. There is no aggregate bibliography, shared cache, or
-cross-shelf citation-key/identifier uniqueness. Registered paths cannot escape
-the library root, overlap or nest, or alias one another through symlinks.
+Mutations validate a complete candidate in memory, then replace the file in one
+atomic write. Downloaded PDFs and extracted source packages live under
+`.bibi/files` beside the bibliography, and `/.bibi/files/` is added to the
+directory's `.gitignore` so the cache is not tracked.
 
 ## Workspace
 
-- `cita-core`: locators, neutral `Reference` vocabulary, and provider traits.
-- `cita-bibliography`: standalone BibTeX snapshot projection, raw-entry
-  preservation, re-keying, and `biblatex`-based generic rendering.
-- `cita-inspire-client`: typed INSPIRE JSON metadata, authoritative BibTeX
+- `bibi-core`: locators, neutral `Reference` vocabulary, and provider traits.
+- `bibi-bibliography`: BibTeX projection, whole-file span scanning, raw-entry
+  preservation, re-keying, and field insertion and removal.
+- `bibi-inspire-client`: typed INSPIRE JSON metadata, authoritative BibTeX
   snapshots, and stable-ID refreshes.
-- `cita-manifest`: schema-1 shelf and library validation, identity indexes,
-  deterministic TOML, path safety, output verification, and coordinated writes.
-- `cita-documents`: validated arXiv PDF/source downloads, safe source
+- `bibi-bibfile`: the `.bib` file as the store — byte-preserving mutation,
+  identity uniqueness, validation, and path resolution.
+- `bibi-documents`: validated arXiv PDF/source downloads, safe source
   extraction, and atomic caching.
-- `cita`: CLI wiring, discovery, selectors, and scoped Git commits.
+- `bibi`: CLI wiring, sync reconciliation, and export policy.
 
 ## Development
 
@@ -173,19 +142,18 @@ Provider and document tests are hermetic and use local TCP listeners.
 
 ## Publishing
 
-All six crates share one version and their APIs are intentionally unstable
-throughout 0.x. Releases are automated with
+All six crates share one version. Releases are automated with
 [release-plz](https://release-plz.dev) (`release-plz.toml`,
 `.github/workflows/release-plz.yml`):
 
 1. Merge Conventional-Commit PRs to `main`.
 2. release-plz opens (or updates) a "release PR" that bumps the shared version
    and updates every crate's `CHANGELOG.md`.
-3. Merging that release PR publishes all six crates in dependency order and tags
-   them.
+3. Merging that release PR publishes all six crates in dependency order and
+   tags them.
 
-After the first release, smoke-test with `cargo install cita --locked`.
+After a release, smoke-test with `cargo install bibi --locked`.
 
 As an emergency fallback, the crates can still be published by hand in
-dependency order: `cita-core`, then `cita-bibliography` and `cita-documents`,
-then `cita-inspire-client`, then `cita-manifest`, and finally `cita`.
+dependency order: `bibi-core`, then `bibi-bibliography` and `bibi-documents`,
+then `bibi-inspire-client`, then `bibi-bibfile`, and finally `bibi`.

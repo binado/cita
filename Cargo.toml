@@ -1,33 +1,33 @@
 [workspace]
 members = [
-    "crates/cita",
-    "crates/cita-core",
-    "crates/cita-documents",
-    "crates/cita-inspire-client",
-    "crates/cita-bibliography",
-    "crates/cita-manifest",
+    "crates/bibi",
+    "crates/bibi-core",
+    "crates/bibi-documents",
+    "crates/bibi-inspire-client",
+    "crates/bibi-bibliography",
+    "crates/bibi-bibfile",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.4.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
-repository = "https://github.com/binado/cita"
+repository = "https://github.com/binado/bibi"
 authors = ["Bernardo Veronese"]
 
 [workspace.dependencies]
 anstyle = "1"
 anyhow = "1.0.94"
 biblatex = "0.12"
-clap = { version = "4.5.23", features = ["derive"] }
+clap = { version = "4.5.23", features = ["derive", "env"] }
 clap_complete = "4"
-cita-bibliography = { path = "crates/cita-bibliography", version = "0.4.0" }
-cita-core = { path = "crates/cita-core", version = "0.4.0" }
-cita-documents = { path = "crates/cita-documents", version = "0.4.0" }
-cita-inspire-client = { path = "crates/cita-inspire-client", version = "0.4.0" }
-cita-manifest = { path = "crates/cita-manifest", version = "0.4.0" }
+bibi-bibfile = { path = "crates/bibi-bibfile", version = "1.0.0" }
+bibi-bibliography = { path = "crates/bibi-bibliography", version = "1.0.0" }
+bibi-core = { path = "crates/bibi-core", version = "1.0.0" }
+bibi-documents = { path = "crates/bibi-documents", version = "1.0.0" }
+bibi-inspire-client = { path = "crates/bibi-inspire-client", version = "1.0.0" }
 flate2 = "1"
 httpdate = "1"
 opener = "0.8.5"
