@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/binado/cita/compare/cita-inspire-client-v0.4.0...cita-inspire-client-v0.5.0) - 2026-07-28
+
+### Other
+
+- simplify INSPIRE record pipeline ([#40](https://github.com/binado/cita/pull/40))
+
 ### Added
 
 - expose the supported `ApiLiteratureRecord` JSON model and
