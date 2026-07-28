@@ -5,3 +5,6 @@
 
 # Bibi document cache
 /.bibi/files/
+
+# Local agent scratch
+.claude/
