@@ -51,10 +51,10 @@ cita-bibliography ← cita-inspire-client   cita-documents
 - `cita-core`: `Reference`, provider traits, locators, and normalization.
 - `cita-bibliography`: strict standalone BibTeX snapshots, projections,
   and raw-entry re-keying and field insertion.
-- `cita-inspire-client`: lean `InspireRecord`s (authoritative BibTeX plus
+- `cita-inspire-client`: lean `InspireSnapshot`s (authoritative BibTeX plus
   record id, timestamp, and canonical arXiv/DOI), stable-record-ID refresh
-  batches, bounded queries, and 429 retries; cross-checks its BibTeX against the
-  selected JSON through `cita-bibliography`.
+  batches, bounded queries, and 429 retries; attaches BibTeX only after
+  cross-checking it against the slim API JSON model through `cita-bibliography`.
 - `cita-manifest`: schema-1 shelf authority, library registry/path validation,
   identity indexes, deterministic TOML, generated bibliography verification,
   and coordinated writes.

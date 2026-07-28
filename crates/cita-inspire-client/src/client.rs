@@ -1,5 +1,5 @@
-use crate::{InspireRecord, snapshot::SelectedRecord, wire::SearchResponse};
-use cita_bibliography::{parse as parse_bibtex, project_bibtex};
+use crate::{ApiLiteratureRecord, InspireSnapshot, wire::SearchResponse};
+use cita_bibliography::parse as parse_bibtex;
 use cita_core::{Locator, MetadataProvider, ProviderError, Reference, ReferenceSource};
 use reqwest::{StatusCode, header::RETRY_AFTER};
 use std::{
@@ -65,15 +65,25 @@ impl Client {
 
     /// Resolve only source-neutral JSON metadata without fetching BibTeX.
     pub async fn resolve_reference(&self, locator: &Locator) -> Result<Reference, Error> {
-        self.lookup_json(locator)
+        self.resolve_api_record(locator)
             .await?
             .project()
             .map_err(|error| Error::Malformed(error.to_string()))
     }
 
+    /// Resolve the supported subset of an INSPIRE literature JSON record.
+    pub async fn resolve_api_record(
+        &self,
+        locator: &Locator,
+    ) -> Result<ApiLiteratureRecord, Error> {
+        let url = self.record_url(locator, "json")?;
+        let body = self.request(url, locator.to_string()).await?;
+        serde_json::from_str(&body).map_err(|error| Error::Malformed(error.to_string()))
+    }
+
     /// Resolve JSON and authoritative BibTeX into a durable record.
-    pub async fn resolve_snapshot(&self, locator: &Locator) -> Result<InspireRecord, Error> {
-        let record = self.lookup_json(locator).await?;
+    pub async fn resolve_snapshot(&self, locator: &Locator) -> Result<InspireSnapshot, Error> {
+        let record = self.resolve_api_record(locator).await?;
         let bibtex = self.lookup_bibtex(locator).await?;
         let mut entries =
             parse_bibtex(&bibtex).map_err(|error| Error::Malformed(error.to_string()))?;
@@ -83,12 +93,12 @@ impl Client {
                 entries.len()
             )));
         }
-        let (key, snapshot) = entries.pop_first().expect("length checked");
-        cross_check(record, key, snapshot.bibtex)
+        let (_, snapshot) = entries.pop_first().expect("length checked");
+        record.attach_bibtex(snapshot)
     }
 
     /// Refresh records by stable INSPIRE ID in bounded search batches.
-    pub async fn refresh_records(&self, ids: &[u64]) -> Result<Vec<InspireRecord>, Error> {
+    pub async fn refresh_records(&self, ids: &[u64]) -> Result<Vec<InspireSnapshot>, Error> {
         let mut output = Vec::with_capacity(ids.len());
         for batch in batch_ids(ids) {
             let (json_url, bib_url) = self.search_urls(&batch)?;
@@ -97,12 +107,7 @@ impl Client {
                 .await?;
             let response: SearchResponse =
                 serde_json::from_str(&json).map_err(|error| Error::Malformed(error.to_string()))?;
-            let mut records = response
-                .hits
-                .hits
-                .into_iter()
-                .map(|record| record.into_selected())
-                .collect::<Result<Vec<_>, _>>()?;
+            let mut records = response.hits.hits;
             let bibtex = self
                 .request(bib_url, format!("INSPIRE records {batch:?}"))
                 .await?;
@@ -111,12 +116,12 @@ impl Client {
             for id in batch {
                 let position = records
                     .iter()
-                    .position(|record| record.record_id() == id)
+                    .position(|record| record.record_id() == Some(id))
                     .ok_or(Error::NotFound(format!("inspire:{id}")))?;
                 let record = records.remove(position);
                 let matching = bib_entries
                     .keys()
-                    .filter(|key| record.texkeys().contains(key))
+                    .filter(|key| record.metadata.texkeys.contains(key))
                     .cloned()
                     .collect::<Vec<_>>();
                 if matching.len() != 1 {
@@ -126,11 +131,8 @@ impl Client {
                     )));
                 }
                 let key = matching.into_iter().next().expect("length checked");
-                let bibtex = bib_entries
-                    .remove(&key)
-                    .expect("matching key exists")
-                    .bibtex;
-                output.push(cross_check(record, key, bibtex)?);
+                let bibtex = bib_entries.remove(&key).expect("matching key exists");
+                output.push(record.attach_bibtex(bibtex)?);
             }
             if !records.is_empty() || !bib_entries.is_empty() {
                 return Err(Error::Malformed(
@@ -139,14 +141,6 @@ impl Client {
             }
         }
         Ok(output)
-    }
-
-    async fn lookup_json(&self, locator: &Locator) -> Result<SelectedRecord, Error> {
-        let url = self.record_url(locator, "json")?;
-        let body = self.request(url, locator.to_string()).await?;
-        let record = serde_json::from_str::<crate::wire::LiteratureRecord>(&body)
-            .map_err(|error| Error::Malformed(error.to_string()))?;
-        record.into_selected()
     }
 
     async fn lookup_bibtex(&self, locator: &Locator) -> Result<String, Error> {
@@ -251,7 +245,7 @@ impl Client {
 }
 
 impl MetadataProvider for Client {
-    type Snapshot = InspireRecord;
+    type Snapshot = InspireSnapshot;
 
     async fn resolve(&self, locator: &Locator) -> Result<Self::Snapshot, ProviderError> {
         self.resolve_snapshot(locator).await.map_err(provider_error)
@@ -275,28 +269,6 @@ fn provider_error(error: Error) -> ProviderError {
         Error::Malformed(value) => ProviderError::Malformed(value),
         error => ProviderError::Request(error.to_string()),
     }
-}
-
-/// Confirm that an authoritative BibTeX entry describes the selected record,
-/// then fuse the two into a durable record keyed by the canonical texkey.
-fn cross_check(
-    record: SelectedRecord,
-    bibtex_key: String,
-    bibtex: String,
-) -> Result<InspireRecord, Error> {
-    if !record.texkeys().contains(&bibtex_key) {
-        return Err(Error::Malformed(format!(
-            "BibTeX key `{bibtex_key}` is not one of the INSPIRE texkeys"
-        )));
-    }
-    let bib_reference =
-        project_bibtex(&bibtex).map_err(|error| Error::Malformed(error.to_string()))?;
-    if !record.identity_matches(&bib_reference) {
-        return Err(Error::Malformed(
-            "INSPIRE JSON and BibTeX do not identify the same record".into(),
-        ));
-    }
-    Ok(record.into_record(bibtex_key, bibtex, &bib_reference))
 }
 
 fn batch_ids(ids: &[u64]) -> Vec<Vec<u64>> {
