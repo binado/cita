@@ -113,4 +113,11 @@ pub enum Error {
     /// The provider returned a record nothing asked for.
     #[error("INSPIRE returned record {0}, which no entry requested")]
     UnexpectedRecord(u64),
+    /// `--path` / `$BIBI_BIB` named something other than a `.bib` file.
+    ///
+    /// Directories are refused (no implicit `references.bib` inside them), and
+    /// paths without a `.bib` extension are refused so a mistyped create target
+    /// cannot become a file named `papers` instead of `papers/references.bib`.
+    #[error("bibliography path must be a `.bib` file, not `{0}`")]
+    NotABibFile(PathBuf),
 }

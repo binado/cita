@@ -8,11 +8,12 @@ use std::{env, path::PathBuf};
 #[derive(Debug, Parser)]
 #[command(name = "bibi", version, about = "A Git-friendly bibliography CLI")]
 struct Cli {
-    /// Bibliography to operate on; a directory uses its `references.bib`
+    /// Bibliography to operate on (a `.bib` file path)
     ///
     /// Resolution is explicit and never walks up the tree, because a `.bib` is
     /// not a project marker and quietly adopting a parent directory's
-    /// bibliography would be worse than asking.
+    /// bibliography would be worse than asking. Directories are refused: pass
+    /// the file itself (for example `papers/references.bib`).
     #[arg(
         short = 'p',
         long,
@@ -189,38 +190,43 @@ async fn main() {
 async fn run() -> Result<()> {
     let cli = Cli::parse();
     let cwd = env::current_dir().context("could not determine current directory")?;
-    let path = Bibfile::resolve(cli.path.as_deref(), &cwd);
     match cli.command {
         None => {
             Cli::command().print_help()?;
             println!();
         }
-        Some(Command::Import(args)) => commands::import(&path, &args.sources, args.overwrite)?,
-        Some(Command::Add(AddArgs {
-            key,
-            overwrite,
-            locators,
-        })) => commands::add(&path, key.as_deref(), &locators, overwrite).await?,
-        Some(Command::Sync(args)) => commands::sync(&path, args.dry_run, args.verbose).await?,
-        Some(Command::Remove(args)) => commands::remove(&path, &args.selectors)?,
-        Some(Command::Rekey(args)) => commands::rekey(&path, &args.selector, &args.new_key)?,
-        Some(Command::List(ListArgs {
-            sort_by,
-            order,
-            no_wrap_title,
-        })) => commands::list(&path, sort_by, order, !no_wrap_title)?,
-        Some(Command::Check) => commands::check(&path)?,
-        Some(Command::Export(args)) => {
-            commands::export(&path, args.output.as_deref(), &cwd, args.keep_metadata)?
-        }
-        Some(Command::Fetch(args)) => {
-            let (selector, options) = args.into_options();
-            commands::fetch(&path, &selector, options).await?
-        }
         Some(Command::Completions { shell }) => {
             let mut command = Cli::command();
             let name = command.get_name().to_string();
             clap_complete::generate(shell, &mut command, name, &mut std::io::stdout());
+        }
+        Some(command) => {
+            let path = Bibfile::resolve(cli.path.as_deref(), &cwd)?;
+            match command {
+                Command::Import(args) => commands::import(&path, &args.sources, args.overwrite)?,
+                Command::Add(AddArgs {
+                    key,
+                    overwrite,
+                    locators,
+                }) => commands::add(&path, key.as_deref(), &locators, overwrite).await?,
+                Command::Sync(args) => commands::sync(&path, args.dry_run, args.verbose).await?,
+                Command::Remove(args) => commands::remove(&path, &args.selectors)?,
+                Command::Rekey(args) => commands::rekey(&path, &args.selector, &args.new_key)?,
+                Command::List(ListArgs {
+                    sort_by,
+                    order,
+                    no_wrap_title,
+                }) => commands::list(&path, sort_by, order, !no_wrap_title)?,
+                Command::Check => commands::check(&path)?,
+                Command::Export(args) => {
+                    commands::export(&path, args.output.as_deref(), &cwd, args.keep_metadata)?
+                }
+                Command::Fetch(args) => {
+                    let (selector, options) = args.into_options();
+                    commands::fetch(&path, &selector, options).await?
+                }
+                Command::Completions { .. } => unreachable!("handled above"),
+            }
         }
     }
     Ok(())

@@ -110,13 +110,14 @@ ordering contract, so an interrupted run leaves the old contents intact.
 
 `--path`, then `$BIBI_BIB`, then `./references.bib`. Never a walk up the tree: a
 `.bib` is not a project marker, and silently adopting a parent directory's
-bibliography is worse than asking. A directory argument resolves to the default
-file name inside it. A missing file is an error for read-only and destructive
-commands, but `add` and `import` treat it as a fresh start: they begin with an
-empty bibliography and create the file (and any missing parent directories) on
-their first write, since they are how a new bibliography comes into being.
-Every mutating command echoes the file it wrote, because there is no longer a
-single legal target to infer.
+bibliography is worse than asking. Only a `.bib` file path is accepted —
+directories are refused, with no implicit `references.bib` inside them — so a
+mistyped create target cannot become a file named `papers`. A missing file is an
+error for read-only and destructive commands, but `add` and `import` treat it as
+a fresh start: they begin with an empty bibliography and create the file (and
+any missing parent directories) on their first write, since they are how a new
+bibliography comes into being. Every mutating command echoes the file it wrote,
+because there is no longer a single legal target to infer.
 
 ### Command output
 

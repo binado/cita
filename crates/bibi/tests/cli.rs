@@ -235,8 +235,14 @@ fn path_and_the_environment_both_select_a_bibliography() {
         &entry("Viaflag", "Chosen by flag", ""),
     ));
 
-    // The flag also accepts a directory, and works after the subcommand.
-    assert!(success(bibi(directory.path(), &["list", "-p", "papers"])).contains("Chosen by flag"));
+    // The flag accepts a `.bib` file path, including after the subcommand.
+    assert!(
+        success(bibi(
+            directory.path(),
+            &["list", "-p", "papers/references.bib"]
+        ))
+        .contains("Chosen by flag")
+    );
     let via_env = bibi_with_env(
         directory.path(),
         &["list"],
@@ -245,6 +251,24 @@ fn path_and_the_environment_both_select_a_bibliography() {
     );
     assert!(success(via_env).contains("Chosen by flag"));
     assert!(!directory.path().join("references.bib").exists());
+}
+
+#[test]
+fn a_directory_path_is_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let papers = directory.path().join("papers");
+    fs::create_dir(&papers).unwrap();
+    bib(&papers);
+    let error = failure(bibi(directory.path(), &["list", "-p", "papers"]));
+    assert!(error.contains("must be a `.bib` file"), "{error}");
+    assert!(error.contains("papers"), "{error}");
+}
+
+#[test]
+fn a_path_without_a_bib_extension_is_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let error = failure(bibi(directory.path(), &["list", "-p", "papers"]));
+    assert!(error.contains("must be a `.bib` file"), "{error}");
 }
 
 /// `add` is how a new bibliography comes into being: a missing target starts

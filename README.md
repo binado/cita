@@ -28,9 +28,10 @@ bibi fetch 1207.7214
 ```
 
 bibi operates on `./references.bib` unless you point it elsewhere with
-`-p/--path` (a file or a directory) or `$BIBI_BIB`. It never searches parent
-directories, and it never creates the file for you — if you work in
-subdirectories, set `BIBI_BIB` in a `.envrc`.
+`-p/--path` (a `.bib` file) or `$BIBI_BIB`. Directories are refused. It never
+searches parent directories. `add` and `import` create a missing bibliography
+(and parent directories) on first write; other commands report the missing file.
+If you work in subdirectories, set `BIBI_BIB` in a `.envrc`.
 
 Supported locators are bare arXiv IDs; explicit `arxiv:`, `doi:`, or `inspire:`
 locators; and canonical `https://arxiv.org`, `https://inspirehep.net`, or

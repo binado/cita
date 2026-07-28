@@ -118,9 +118,10 @@ impl Bibfile {
     /// Explicit path first, then `BIBI_BIB`, then `references.bib` in the
     /// current directory. There is deliberately no walk up the tree: a `.bib`
     /// is not a project marker, and silently adopting a parent directory's
-    /// bibliography is worse than asking for a path. A directory resolves to
-    /// the default file name inside it.
-    pub fn resolve(explicit: Option<&Path>, cwd: &Path) -> PathBuf {
+    /// bibliography is worse than asking for a path. The result must be a
+    /// `.bib` file path: directories and extension-less names are refused, so
+    /// create-on-write cannot invent a misnamed file from a typo like `-p papers`.
+    pub fn resolve(explicit: Option<&Path>, cwd: &Path) -> Result<PathBuf, Error> {
         let candidate = match explicit {
             Some(path) => path.to_path_buf(),
             None => match env::var_os(PATH_ENV).filter(|value| !value.is_empty()) {
@@ -133,10 +134,10 @@ impl Bibfile {
         } else {
             cwd.join(candidate)
         };
-        if candidate.is_dir() {
-            return candidate.join(BIBLIOGRAPHY_FILE);
+        if candidate.is_dir() || !is_bib_path(&candidate) {
+            return Err(Error::NotABibFile(candidate));
         }
-        candidate
+        Ok(candidate)
     }
 
     /// Read and scan a bibliography.
@@ -692,6 +693,11 @@ fn identities(reference: &Reference) -> Vec<String> {
     values
 }
 
+fn is_bib_path(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("bib"))
+}
+
 /// Replace a file's contents in one step, or leave the old contents in place.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     let directory = path.parent().unwrap_or(Path::new("."));
@@ -1104,21 +1110,28 @@ mod tests {
     fn an_explicit_path_resolves_against_the_caller() {
         let cwd = Path::new("/work");
         assert_eq!(
-            Bibfile::resolve(Some(Path::new("other.bib")), cwd),
+            Bibfile::resolve(Some(Path::new("other.bib")), cwd).unwrap(),
             PathBuf::from("/work/other.bib")
         );
         assert_eq!(
-            Bibfile::resolve(Some(Path::new("/abs/other.bib")), cwd),
+            Bibfile::resolve(Some(Path::new("/abs/other.bib")), cwd).unwrap(),
             PathBuf::from("/abs/other.bib")
         );
     }
 
     #[test]
-    fn a_directory_resolves_to_the_default_file_inside_it() {
+    fn a_directory_is_refused() {
         let directory = tempfile::tempdir().unwrap();
-        assert_eq!(
-            Bibfile::resolve(Some(directory.path()), Path::new("/work")),
-            directory.path().join(BIBLIOGRAPHY_FILE)
+        let error = Bibfile::resolve(Some(directory.path()), Path::new("/work")).unwrap_err();
+        assert!(matches!(error, Error::NotABibFile(_)), "{error:?}");
+    }
+
+    #[test]
+    fn a_path_without_a_bib_extension_is_refused() {
+        let error = Bibfile::resolve(Some(Path::new("papers")), Path::new("/work")).unwrap_err();
+        assert!(
+            matches!(error, Error::NotABibFile(ref path) if path.ends_with("papers")),
+            "{error:?}"
         );
     }
 
