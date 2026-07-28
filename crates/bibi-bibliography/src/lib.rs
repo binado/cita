@@ -224,9 +224,6 @@ fn scan(source: &str, leniency: Leniency) -> Result<Vec<RawEntry>, Error> {
                 "only complete BibTeX entries and whitespace are allowed".into(),
             ));
         }
-        if source.as_bytes().get(end - 1) != Some(&b'}') {
-            return Err(Error::InvalidBibtex("entry has no closing brace".into()));
-        }
         source
             .get(start..end)
             .ok_or_else(|| Error::InvalidBibtex("entry is not on UTF-8 boundaries".into()))?;
