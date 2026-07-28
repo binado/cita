@@ -224,9 +224,6 @@ fn scan(source: &str, leniency: Leniency) -> Result<Vec<RawEntry>, Error> {
                 "only complete BibTeX entries and whitespace are allowed".into(),
             ));
         }
-        source
-            .get(start..end)
-            .ok_or_else(|| Error::InvalidBibtex("entry is not on UTF-8 boundaries".into()))?;
         let key_range = item.v.key.span.clone();
         let raw_key = source.get(key_range.clone()).ok_or_else(|| {
             Error::InvalidBibtex("citation key has an invalid source range".into())
@@ -237,7 +234,6 @@ fn scan(source: &str, leniency: Leniency) -> Result<Vec<RawEntry>, Error> {
                 "citation key source range does not match parsed key".into(),
             ));
         }
-        validate_key(&key)?;
         if !keys.insert(key.clone()) {
             return Err(Error::KeyConflict(key));
         }
@@ -404,9 +400,9 @@ impl EntrySpan {
 ///
 /// Unlike [`parse`], comments and directives are tolerated: a caller that only
 /// ever replaces whole entry spans copies everything else through untouched, so
-/// unmodelled bytes survive a rewrite rather than being lost by it. Citation
-/// keys are still validated and duplicates still rejected, because those are
-/// properties of the entries themselves.
+/// unmodelled bytes survive a rewrite rather than being lost by it. Duplicate
+/// keys are still rejected, because that is a property of the entries
+/// themselves; key-charset validation is left to the caller.
 pub fn scan_entries(source: &str) -> Result<Vec<EntrySpan>, Error> {
     Ok(scan(source, Leniency::IgnoreNonEntryContent)?
         .into_iter()
