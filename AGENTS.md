@@ -2,13 +2,17 @@
 
 ## What this is
 
-bibi is a command-line tool that maintains a bibliography as a manifest and
-renders a BibTeX file from it on demand. Schema-1 `bibi.toml` is the only
-authoritative project state; `references.bib` is explicit output, written by
-`bibi export` and never read back. Rust edition 2024, MSRV 1.88.
+bibi is a command-line tool that maintains one project's bibliography as a
+manifest and renders BibTeX from it on demand. Schema-1 `bibi.toml` is the only
+authoritative project state; a `.bib` file is derived output the shell chooses
+to keep, and bibi never reads one back. Rust edition 2024, MSRV 1.88.
 
-`REDESIGN.md` is the design authority and `IMPLEMENTATION.md` the crate-level
-contract. Where they disagree, the design wins.
+`BIBI_TWO_BINARIES.md` records the product split this tool is being finished
+against: the project-local file manager here, and a deferred user-level library
+manager. It supersedes `REDESIGN.md` and `IMPLEMENTATION.md` wherever they
+describe a global manifest, an `export` command, or a managed document cache;
+elsewhere `REDESIGN.md` is the design authority and `IMPLEMENTATION.md` the
+crate-level contract, and where those two disagree the design wins.
 
 ## Commands
 
@@ -23,7 +27,7 @@ cargo run -p bibi -- add 1207.7214
 cargo run -p bibi -- add -f local.bib
 cargo run -p bibi -- list --format json
 cargo run -p bibi -- sync
-cargo run -p bibi -- export
+cargo run -p bibi -- list --format bibtex > references.bib
 cargo run -p bibi -- check references.bib
 cargo run -p bibi -- fetch <selector> --url
 cargo test -p bibi-inspire --test e2e -- --ignored  # live INSPIRE, network required
@@ -42,10 +46,11 @@ Three seams exist for tests and are documented as such:
   promises are the registry's, so a new provider should not rewrite an
   approximation of them.
 - `bibi_inspire::testing::TestClock` records the waits it was asked for.
-- Three environment variables redirect what the binary would otherwise touch:
-  `BIBI_GLOBAL_MANIFEST`, `BIBI_CACHE_ROOT`, and `BIBI_INSPIRE_BASE_URL`. The
-  CLI suite sets all three, so a test can never reach the real network, the
-  user's real cache, or their real global manifest.
+- Two environment variables redirect what the binary would otherwise reach:
+  `BIBI_INSPIRE_BASE_URL` and `BIBI_ARXIV_BASE_URL`. They are the only ambient
+  state left — bibi targets the working directory and writes nowhere else — so
+  pointing both at a local `TcpListener` is enough to keep a command-level test
+  off the real network entirely.
 
 CI runs format, clippy-as-errors, test, build, and doc on 1.88 and stable.
 Tests are hermetic; INSPIRE and arXiv suites use local `TcpListener`s. The
@@ -87,7 +92,7 @@ bibi-provider       bibi-manifest    bibi-documents
   join, pacing, and retry.
 - `bibi-manifest`: schema-1 TOML, candidate validation, indexes, optimistic
   concurrency, atomic writes.
-- `bibi-documents`: the global arXiv PDF/source cache.
+- `bibi-documents`: arXiv PDF/source retrieval. It stores nothing.
 - `bibi-application`: command use cases over injected stores and providers.
 - `bibi`: Clap definitions, bootstrap, output routing, exit codes.
 
@@ -148,16 +153,16 @@ budget; 429 retries are the fallback and clamp `Retry-After` to [5s, 60s].
 ### Rendering and output
 
 Rendering is a pure function of the manifest and its options (I6): no network,
-no cache probing, no ambient state. `export`, `check`, and `list --format
-bibtex` share one `render_manifest` entry point; every other BibTeX-producing
-path calls `bibi_bibtex::render` directly, so separator and trailing-newline
-rules live in exactly one place.
+no ambient state. `check` and `list --format bibtex` share one `render_manifest`
+entry point; every other BibTeX-producing path calls `bibi_bibtex::render`
+directly, so separator and trailing-newline rules live in exactly one place.
 
-Plain `export` and `check` are offline. `export --provider` syncs that provider
-first, reloads the *committed* manifest, and writes nothing if sync reported a
-failure. On `export`, `--provider` names what to *sync* and never limits what is
-rendered, so the filters `export` and `check` share deliberately exclude it
-while `list` keeps a provider filter of its own.
+**bibi writes no bibliography.** `list --format bibtex` renders to stdout and
+the shell decides whether and where that becomes a file, which is what keeps a
+`.bib` output rather than maintained state. `sync` and rendering stay separate
+operations; nothing renders and refreshes in one command. `list` and `check`
+share one filter set, `--provider` included, so a filtered view can be rendered
+and then verified under the same options.
 
 stdout carries the command's result in its most pipeable form; stderr carries
 everything meant for a human. Skips exit zero, failures exit one, Clap usage
@@ -185,13 +190,29 @@ strictly needs to. Narrowing it means widening the contract.
 
 ### Scope
 
-A manifest is `bibi.toml`, resolved by the first rule that applies: `-p/--path`,
-then `-g/--global`, then `./bibi.toml`. **There is no upward search.** Outputs
-resolve against the manifest directory; inputs (`add -f`, `check`) resolve
-against the working directory. Only `init`, `add`, and `add -f` may create a
-missing manifest.
+A manifest is `bibi.toml`: the one named by `-p/--path`, otherwise the one in
+the working directory. **There is no upward search and no user-level manifest.**
+The target is always evident from where the command was run. Inputs (`add -f`,
+`check`) resolve against the working directory, as does a `fetch` download. Only
+`init`, `add`, and `add -f` may create a missing manifest, and bibi writes no
+file into a project directory other than that manifest.
 
-There are no shelves, no library registry, no grouping, and no Git integration.
+There is no global store, no document cache, no shelves, no library registry, no
+grouping, and no Git integration. Those belong to the deferred library manager
+in `BIBI_TWO_BINARIES.md`, which is why they are absent here rather than
+unimplemented.
+
+### Documents
+
+`fetch` acquires one file into the working directory and manages nothing. It
+retrieves arXiv artifacts only: a record carrying no arXiv identifier fails
+cleanly, and bibi does not follow a DOI to a publisher.
+
+The default filename is the arXiv identifier and its kind — `1207.7214.pdf`,
+`hep-th-9901001.tar.gz` — which is arXiv's own naming rather than a scheme of
+bibi's. `-o/--output` names an exact file. Neither destination is ever
+overwritten. A source fetch saves the original archive rather than unpacking
+it, so no archive traversal happens anywhere in the tree.
 
 ## Error handling
 

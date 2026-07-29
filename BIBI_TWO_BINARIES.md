@@ -7,14 +7,18 @@ project-local bibliography tool and the large, user-level bibliography manager
 are separate binaries built on common domain crates.
 
 This direction reopens parts of `REDESIGN.md` that reject a database backend and
-a user-level library. Until those decisions are reconciled explicitly,
-`REDESIGN.md` remains authoritative for the existing `bibi` binary.
+a user-level library.
 
-**The large binary is deferred.** Active work is phase one of the implementation
-sequence: finishing the small binary against its file-centered promise. The
-large binary is recorded here so that the small binary's deletions are made for
-a stated reason rather than by taste, and so the shared-crate consequences are
-known before they are needed. Sections describing large bibi and the shared
+**Phase one has landed; the large binary is deferred.** The `bibi` binary now
+matches the small-bibi command set and scope described below, so this document
+is authoritative for it wherever `REDESIGN.md` and `IMPLEMENTATION.md` still
+describe a global manifest, an `export` command, or a managed document cache.
+Both carry a note saying so. Full reconciliation waits until the second binary
+exists.
+
+The large binary is recorded here so that the small binary's deletions were made
+for a stated reason rather than by taste, and so the shared-crate consequences
+are known before they are needed. Sections describing large bibi and the shared
 crate layout are design intent, not pending work.
 
 ## The problem
@@ -181,11 +185,11 @@ bibi list --author Aad --format bibtex > aad.bib
 bibi check aad.bib --author Aad
 ```
 
-`list` and `check` share one filter set, `--provider` included. The current tree
-splits them into two types, with a provider filter for `list` and none for the
-rendering commands, because on `export` `--provider` named the provider to
-*sync* first and a filter spelled the same way would have been ambiguous.
-Removing `export` removes the ambiguity, so the two collapse into one.
+`list` and `check` share one filter set, `--provider` included. They were once
+two types, with a provider filter for `list` and none for the rendering
+commands, because on `export` `--provider` named the provider to *sync* first
+and a filter spelled the same way would have been ambiguous. Removing `export`
+removed the ambiguity, and the two collapsed into one.
 
 ### Simplified `fetch`
 

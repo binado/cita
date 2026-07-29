@@ -8,6 +8,15 @@ users whose data must be carried forward.
 Everything here is decided. §12 lists what has been deliberately deferred, and
 §11 records what was rejected and why, so that neither is reopened by accident.
 
+> **Partly superseded.** `BIBI_TWO_BINARIES.md` splits bibi into a project-local
+> file manager and a deferred user-level library manager, and phase one of that
+> document has landed. Wherever this document describes a global manifest and
+> `-g/--global`, an `export` command, or a managed document cache with
+> `cache clean`, it describes what bibi *was*: those are gone, `list --format
+> bibtex` plus shell redirection is how a bibliography is written, and `fetch`
+> downloads one file into the working directory. Everything else here still
+> holds. Full reconciliation waits until the second binary exists.
+
 ---
 
 ## 1. What bibi is

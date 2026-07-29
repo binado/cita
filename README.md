@@ -1,7 +1,7 @@
 # bibi
 
-bibi maintains a bibliography as a manifest and renders a BibTeX file from it on
-demand.
+bibi maintains one project's bibliography as a manifest and renders BibTeX from
+it on demand.
 
 ```console
 $ bibi add 1207.7214
@@ -16,13 +16,16 @@ $ bibi add 1207.7214
 }
 added 1, overwrote 0
 
-$ bibi export
-wrote 1 record(s) to /home/you/paper/references.bib
+$ bibi list --format bibtex > references.bib
 ```
 
-Schema-1 `bibi.toml` is the only project state bibi maintains. `references.bib`
-is output: it is written when you ask for it, never read back, and never kept
-silently in step behind your back.
+Schema-1 `bibi.toml` is the only project state bibi maintains. A `.bib` file is
+output: your shell writes it when you ask for it, bibi never reads it back, and
+nothing keeps it silently in step behind your back.
+
+Clone the project and you can reproduce its bibliography from the manifest
+alone. There is no user-level library to install first and no database to be
+out of sync with.
 
 ## The idea
 
@@ -62,10 +65,8 @@ Rust 1.88 or newer.
 | `bibi list` | List records as a table, `keys`, `bibtex`, or `json` |
 | `bibi show <selector>` | Emit one record as BibTeX |
 | `bibi sync` | Refresh what changed upstream |
-| `bibi export` | Render the bibliography |
 | `bibi check [bibfile]` | Verify a rendered bibliography, byte for byte |
-| `bibi fetch <selector>` | Get the PDF or source package |
-| `bibi cache clean` | Evict the global document cache |
+| `bibi fetch <selector>` | Download a record's PDF or source archive |
 | `bibi init` | Create an empty manifest |
 | `bibi completions <shell>` | Print a completion script |
 
@@ -107,42 +108,62 @@ A record is updated as a unit. If its metadata arrives and its BibTeX does not,
 nothing about it is written — including its revision, so the next sync tries
 again rather than believing it is current.
 
-### Exporting and checking
+### Rendering and checking
 
 ```console
-$ bibi export --output paper/references.bib --year 2024
+$ bibi list --format bibtex --year 2024 > paper/references.bib
 $ bibi check paper/references.bib --year 2024
 ```
 
-`export` is the only way a bibliography is written, and plain `export` is
-offline. `export --provider inspire` syncs that provider first and writes
-nothing if the sync reported a failure. Whether you commit the rendered file is
-your business — bibi neither tracks it nor rewrites it — and `check` covers the
-boundary if you do, exiting nonzero on drift without repairing anything.
+bibi does not write bibliographies; it renders them to stdout and your shell
+decides whether and where that becomes a file. Rendering is always offline, and
+never refreshes anything on the way — run `sync` first if you want that:
+
+```console
+$ bibi sync && bibi list --format bibtex > references.bib
+```
+
+Whether you commit the rendered file is your business — bibi neither tracks it
+nor rewrites it — and `check` covers the boundary if you do, exiting nonzero on
+drift without repairing anything. It takes the same filters `list` does, so a
+filtered view can be verified under the options it was made with.
+
+Shell redirection truncates the destination before bibi runs. If that matters,
+render to a sibling and move it into place:
+
+```console
+$ bibi list --format bibtex > refs.bib.tmp && mv refs.bib.tmp refs.bib
+```
 
 ### Documents
 
 ```console
-$ bibi fetch ATLAS:2012yve            # an absolute path to the cached PDF
-$ bibi fetch ATLAS:2012yve --source   # the extracted source tree
+$ bibi fetch ATLAS:2012yve            # downloads ./1207.7214.pdf
+$ bibi fetch ATLAS:2012yve --source   # downloads ./1207.7214.tar.gz
 $ bibi fetch 1207.7214 --url          # any selector works; just the URL
-$ open $(bibi fetch ATLAS:2012yve)
+$ bibi fetch ATLAS:2012yve -o higgs.pdf
+$ bibi fetch ATLAS:2012yve --open   # download it, then open it
+$ open $(bibi fetch ATLAS:2012yve)  # or compose it yourself
 ```
 
-Documents live in one user-level cache shared by every project, addressed by
-arXiv id, so two projects citing one paper store one copy. The cache is derived
-and disposable: removing a record evicts nothing, and `bibi cache clean --all`
-is how it goes away.
+`fetch` gets you a file; it does not manage a collection. The download lands in
+your working directory under arXiv's own name for it, or at the exact path
+`-o/--output` names. Neither is ever overwritten — if the file is already there,
+`fetch` says so and leaves it alone.
+
+There is no cache to grow, evict, or reason about, and nothing in the manifest
+refers to a downloaded file. arXiv is the only source; a record without an arXiv
+identifier says so plainly.
 
 ## Scope
 
-A manifest is `bibi.toml` in the directory you are standing in. `-p/--path`
-names another one and `-g/--global` selects the user-level manifest, which is an
-ordinary project at a fixed path.
+A manifest is `bibi.toml` in the directory you are standing in, or the one
+`-p/--path` names. That is the whole rule.
 
-**There is no upward search.** Running `bibi list` in a subdirectory targets
-that subdirectory, not the project above it. Outputs resolve against the
-manifest's directory; inputs like `add -f` resolve against yours.
+**There is no upward search and no user-level manifest.** Running `bibi list` in
+a subdirectory targets that subdirectory, not the project above it, and no
+command reaches for a library somewhere in your home directory. Inputs like
+`add -f`, and `fetch` downloads, resolve against the directory you are in.
 
 `init` exists, but nothing depends on it: `add` creates a manifest where you are
 standing. Commands that only read report that there is no project instead.
@@ -163,11 +184,11 @@ stderr carries everything meant for a person.
 
 | Variable | Effect |
 | --- | --- |
-| `BIBI_GLOBAL_MANIFEST` | Where `-g` points |
-| `BIBI_CACHE_ROOT` | Where documents are cached |
+| `BIBI_INSPIRE_BASE_URL` | Where INSPIRE requests go (for testing) |
+| `BIBI_ARXIV_BASE_URL` | Where arXiv downloads come from (for testing) |
 
-bibi reads no configuration file, and stores no credential anywhere. INSPIRE
-needs none.
+Both exist so the test suite can run against a local listener. bibi reads no
+configuration file and stores no credential anywhere; INSPIRE needs none.
 
 ## Providers
 
