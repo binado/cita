@@ -1,7 +1,7 @@
 //! Retrieving a record's documents, and evicting the cache.
 
 use crate::{error::Error, services::Services};
-use bibi_core::{ArxivId, Selector};
+use bibi_core::Selector;
 use bibi_documents::{ArtifactKind, CleanMode, CleanReport, FetchOutcome, FetchPolicy};
 use bibi_manifest::ManifestStore;
 
@@ -91,9 +91,4 @@ pub async fn fetch(
 /// any project, and removing a record never evicted anything from it.
 pub fn clean_cache(services: &Services, mode: CleanMode) -> Result<CleanReport, Error> {
     Ok(services.documents()?.clean(mode)?)
-}
-
-/// The arXiv identifier a record's documents are addressed by, if it has one.
-pub fn document_id(record: &bibi_core::Record) -> Option<&ArxivId> {
-    record.identifiers.arxiv.as_ref()
 }

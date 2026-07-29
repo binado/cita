@@ -61,8 +61,8 @@ async fn a_rendered_bibliography_matches_its_golden() {
 
 #[tokio::test]
 async fn the_json_projection_matches_its_golden() {
-    let (_directory, services, store) = project().await;
-    let records = list(&services, &store, &ListRequest::default()).unwrap();
+    let (_directory, _services, store) = project().await;
+    let records = list(&store, &ListRequest::default()).unwrap();
     // Every field but the id is a function of the manifest. The id is minted,
     // and deliberately so — identity is bibi's own, not derived from content —
     // so the golden pins its shape rather than a value that cannot recur.
@@ -85,9 +85,9 @@ fn mask_ids(json: &str) -> String {
 
 #[tokio::test]
 async fn both_outputs_are_stable_across_repeated_runs() {
-    let (_directory, services, store) = project().await;
+    let (_directory, _services, store) = project().await;
     let manifest = store.load().unwrap().manifest;
-    let records = list(&services, &store, &ListRequest::default()).unwrap();
+    let records = list(&store, &ListRequest::default()).unwrap();
     for _ in 0..3 {
         let reloaded = store.load().unwrap().manifest;
         assert_eq!(
@@ -95,7 +95,7 @@ async fn both_outputs_are_stable_across_repeated_runs() {
             render_manifest(&manifest, &RenderOptions::default()).unwrap()
         );
         assert_eq!(
-            to_json(&list(&services, &store, &ListRequest::default()).unwrap()).unwrap(),
+            to_json(&list(&store, &ListRequest::default()).unwrap()).unwrap(),
             to_json(&records).unwrap()
         );
         // Reloading does not re-mint: identity survives every read.

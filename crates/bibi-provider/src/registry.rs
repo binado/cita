@@ -3,9 +3,9 @@
 use crate::{
     contract::Provider,
     error::{MappingError, ProviderError},
-    outcome::{PayloadItem, ProviderRecord, RefreshItem, RefreshRequest, Resolution},
+    outcome::{PayloadItem, PayloadRequest, RefreshItem, RefreshRequest, Resolution},
 };
-use bibi_core::{Locator, ProviderId, ProviderName, QualifiedLocator};
+use bibi_core::{Locator, ProviderName, ProviderOwned, QualifiedLocator};
 use std::{collections::BTreeSet, sync::Arc};
 use thiserror::Error as ThisError;
 
@@ -38,7 +38,7 @@ pub enum LocatorOutcome {
         /// Which provider answered.
         provider: ProviderName,
         /// The mapped record.
-        record: Box<ProviderRecord>,
+        record: Box<ProviderOwned>,
     },
     /// Every applicable provider reported absence.
     ///
@@ -287,21 +287,24 @@ impl ProviderRegistry {
     pub async fn fetch_payloads(
         &self,
         provider: &Arc<dyn Provider>,
-        provider_ids: &[ProviderId],
+        requests: &[PayloadRequest],
     ) -> Result<Vec<PayloadItem>, ProviderError> {
-        let items = provider.fetch_payloads(provider_ids).await?;
-        let expected = provider_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let items = provider.fetch_payloads(requests).await?;
+        let expected = requests
+            .iter()
+            .map(|request| request.provider_id.clone())
+            .collect::<BTreeSet<_>>();
         let returned = items
             .iter()
             .map(|item| item.provider_id.clone())
             .collect::<BTreeSet<_>>();
-        if items.len() != provider_ids.len() || returned != expected {
+        if items.len() != requests.len() || returned != expected {
             return Err(ProviderError::contract(
                 provider.name(),
                 format!(
                     "returned {} payload results for {} requested ids",
                     items.len(),
-                    provider_ids.len()
+                    requests.len()
                 ),
             ));
         }
@@ -359,7 +362,7 @@ impl ProviderRegistry {
 }
 
 /// Check the promises the registry makes on every provider's behalf.
-fn validate(provider: &Arc<dyn Provider>, record: &ProviderRecord) -> Result<(), ProviderError> {
+fn validate(provider: &Arc<dyn Provider>, record: &ProviderOwned) -> Result<(), ProviderError> {
     let name = provider.name();
     if record.provenance.provider != *name {
         return Err(ProviderError::contract(

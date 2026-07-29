@@ -30,10 +30,8 @@ pub async fn run(services: &Services, target: &TargetSelection, args: SyncArgs) 
 /// Nothing is written to stdout: the records it touched are already in the
 /// manifest, and `list` or `export` is how they are read back.
 fn present(report: &SyncReport, dry_run: bool) -> bool {
-    for key in &report.missing {
-        output::warn(format!(
-            "`{key}`: its provider no longer holds this record; it was left unchanged"
-        ));
+    for absence in &report.absences {
+        output::warn(format!("`{}`: {}", absence.key, absence.reason));
     }
     for (provider, count) in &report.unavailable {
         output::warn(format!(
@@ -67,8 +65,8 @@ fn present(report: &SyncReport, dry_run: bool) -> bool {
         // stays visible rather than quietly rotting.
         summary.push_str(&format!(", {} unrefreshable", report.unrefreshable));
     }
-    if !report.missing.is_empty() {
-        summary.push_str(&format!(", {} missing", report.missing.len()));
+    if !report.absences.is_empty() {
+        summary.push_str(&format!(", {} left unchanged", report.absences.len()));
     }
     if dry_run {
         summary.push_str(" (dry run: nothing written)");

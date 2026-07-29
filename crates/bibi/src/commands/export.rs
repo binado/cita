@@ -28,7 +28,7 @@ pub async fn run_export(
             force: args.force,
             output: args.output,
             options: RenderOptions {
-                filter: crate::commands::list::render_filter(&args.filter),
+                filter: crate::commands::list::render_filter(services, &args.filter),
             },
         },
     )
@@ -57,7 +57,7 @@ pub fn run_check(services: &Services, target: &TargetSelection, args: CheckArgs)
         &store,
         &path,
         &RenderOptions {
-            filter: crate::commands::list::render_filter(&args.filter),
+            filter: crate::commands::list::render_filter(services, &args.filter),
         },
     )?;
     match &outcome {

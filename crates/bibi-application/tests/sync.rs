@@ -160,7 +160,7 @@ async fn a_forced_sync_refetches_everything_in_batched_calls() {
 async fn a_changed_revision_refreshes_the_record_and_keeps_its_identity() {
     let project = Project::with(vec![Arc::new(stocked(1)), Arc::new(LocalProvider::new())]);
     seed(&project, 1).await;
-    let before = list(&project.services, &project.store(), &ListRequest::default()).unwrap();
+    let before = list(&project.store(), &ListRequest::default()).unwrap();
 
     let updated = Arc::new(
         FakeProvider::new("inspire")
@@ -178,7 +178,7 @@ async fn a_changed_revision_refreshes_the_record_and_keeps_its_identity() {
     assert_eq!(report.refreshed.len(), 1);
     assert_eq!(report.description_changes, 1);
     assert!(report.committed);
-    let after = list(&project.services, &project.store(), &ListRequest::default()).unwrap();
+    let after = list(&project.store(), &ListRequest::default()).unwrap();
     assert_eq!(after[0].id, before[0].id, "the bibi id is immutable");
     assert_eq!(after[0].key, before[0].key, "a refresh never renames");
     assert_eq!(after[0].description.title, "Corrected");
@@ -208,9 +208,13 @@ async fn a_record_whose_payload_never_arrives_keeps_its_old_revision() {
         .unwrap();
 
     assert!(report.refreshed.is_empty());
-    assert_eq!(report.missing.len(), 1);
+    assert_eq!(report.absences.len(), 1);
+    assert_eq!(
+        report.absences[0].reason,
+        bibi_application::SyncAbsenceReason::PayloadAbsent
+    );
     assert!(!report.committed);
-    let after = list(&project.services, &project.store(), &ListRequest::default()).unwrap();
+    let after = list(&project.store(), &ListRequest::default()).unwrap();
     // Nothing was written — above all not the revision, which would have made
     // the next sync compare equal and skip the repair forever.
     assert_eq!(
@@ -266,7 +270,7 @@ async fn an_ambiguous_join_fails_its_provider_while_others_commit() {
     // The other provider's record still refreshed, and the write happened.
     assert_eq!(report.refreshed.len(), 1);
     assert!(report.committed);
-    let after = list(&project.services, &project.store(), &ListRequest::default()).unwrap();
+    let after = list(&project.store(), &ListRequest::default()).unwrap();
     let nine = after
         .iter()
         .find(|record| record.key.as_str() == "Key:9")
@@ -290,7 +294,11 @@ async fn a_missing_record_is_a_warning_and_never_a_rebind() {
     let report = sync(&project.services, &project.store(), &SyncRequest::default())
         .await
         .unwrap();
-    assert_eq!(report.missing.len(), 1);
+    assert_eq!(report.absences.len(), 1);
+    assert_eq!(
+        report.absences[0].reason,
+        bibi_application::SyncAbsenceReason::ProviderGone
+    );
     assert!(report.failures.is_empty(), "absence is not a failure");
     assert!(!report.committed);
 }
@@ -351,7 +359,7 @@ async fn a_replaced_identifier_fails_its_record_while_an_added_one_is_reported()
             .contains("do not change once set")
     );
     assert!(report.committed, "the good record still commits");
-    let after = list(&project.services, &project.store(), &ListRequest::default()).unwrap();
+    let after = list(&project.store(), &ListRequest::default()).unwrap();
     let untouched = after.iter().find(|r| r.key.as_str() == "Key:2").unwrap();
     assert_eq!(
         untouched.identifiers.arxiv.as_ref().unwrap().as_str(),

@@ -1,6 +1,6 @@
 //! Listing and its JSON projection.
 
-use crate::{error::Error, services::Services};
+use crate::error::Error;
 use bibi_core::{Record, RecordFilter};
 use bibi_manifest::ManifestStore;
 use serde::Serialize;
@@ -8,30 +8,20 @@ use serde::Serialize;
 /// Which records to list.
 #[derive(Clone, Debug, Default)]
 pub struct ListRequest {
-    /// The ordinary filters.
+    /// The ordinary filters, already complete (including any `--local` set).
     pub filter: RecordFilter,
-    /// Keep only records no provider will ever refresh.
-    pub local: bool,
 }
 
 /// Load and filter, returning records in local-key order.
 ///
-/// `--local` is answered by asking the registry which providers ingest without
-/// refreshing, never by comparing a stored provider name with a literal string.
-/// `--provider <name>`, by contrast, is a pure manifest query: the named
-/// provider need not be installed, and an uninstalled one yields an empty
-/// listing rather than an error, because listing never has to *call* it.
-pub fn list(
-    services: &Services,
-    store: &ManifestStore,
-    request: &ListRequest,
-) -> Result<Vec<Record>, Error> {
+/// `--provider <name>` is a pure manifest query: the named provider need not be
+/// installed, and an uninstalled one yields an empty listing rather than an
+/// error, because listing never has to *call* it. `--local` is answered by the
+/// caller filling [`RecordFilter::unrefreshable_providers`] from the registry's
+/// capabilities, never by comparing a stored provider name with a literal.
+pub fn list(store: &ManifestStore, request: &ListRequest) -> Result<Vec<Record>, Error> {
     let manifest = store.load()?.manifest;
-    let mut filter = request.filter.clone();
-    if request.local {
-        filter.unrefreshable_providers = Some(services.providers.unrefreshable_names());
-    }
-    Ok(manifest.filter(&filter).cloned().collect())
+    Ok(manifest.filter(&request.filter).cloned().collect())
 }
 
 /// The stable schema-1 JSON shape of one record.

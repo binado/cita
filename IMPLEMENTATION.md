@@ -505,14 +505,12 @@ src/
 
 ### Provider-neutral values
 
-```rust
-pub struct ProviderRecord {
-    pub provenance: Provenance,
-    pub identifiers: Identifiers,
-    pub description: Description,
-    pub payload: BibtexEntry,
-}
+`ProviderOwned` (defined in `bibi-core`) is the single shape for a provider's
+complete contribution — provenance, identifiers, description, and payload.
+Providers return it from `resolve`/`ingest`; the application writes it into the
+manifest. There is no parallel provider-crate twin of that type.
 
+```rust
 pub struct RefreshRequest {
     pub bibi_id: BibiId,
     pub provider_id: ProviderId,
@@ -524,10 +522,17 @@ pub struct ProviderMetadata {
     pub revision: Option<Revision>,
     pub identifiers: Identifiers,
     pub description: Description,
+    /// Ephemeral join hints for a subsequent fetch_payloads. Never persisted.
+    pub join_tokens: Vec<String>,
+}
+
+pub struct PayloadRequest {
+    pub provider_id: ProviderId,
+    pub join_tokens: Vec<String>,
 }
 
 pub enum Resolution {
-    Found(ProviderRecord),
+    Found(ProviderOwned),
     NotFound,
     UnsupportedLocator,
 }
@@ -550,7 +555,7 @@ pub struct PayloadItem {
 ```
 
 **Every provider entry point is plural.** `resolve` takes a slice of locators
-and `fetch_payloads` a slice of provider ids, because both are driven by
+and `fetch_payloads` a slice of [`PayloadRequest`], because both are driven by
 operations that routinely carry hundreds of items — `add -f` over a colleague's
 bibliography, and `sync --force` over a whole project — and because a provider is
 the only party that knows how its API batches. A provider that cannot batch loops
@@ -593,7 +598,7 @@ pub trait Provider: Send + Sync {
 
     fn fetch_payloads<'a>(
         &'a self,
-        provider_ids: &'a [ProviderId],
+        requests: &'a [PayloadRequest],
     ) -> ProviderFuture<'a, Result<Vec<PayloadItem>, ProviderError>>;
 
     fn ingest(
@@ -658,7 +663,7 @@ that failed and suggest `--provider <other>`.
 ### Local provider
 
 `LocalProvider` calls `BibtexEntry::local_metadata`, normalizes identifiers
-through `bibi-core`, and returns the same `ProviderRecord` shape as a network
+through `bibi-core`, and returns the same `ProviderOwned` shape as a network
 provider:
 
 ```text
@@ -774,7 +779,7 @@ and stop fallback.
 
 Two locators in one call may resolve to the same INSPIRE record — a DOI and an
 arXiv id for one paper, which is ordinary in an imported file. Both return the
-same `ProviderRecord`, and the application's duplicate policy collapses them; the
+same `ProviderOwned`, and the application's duplicate policy collapses them; the
 provider does not deduplicate on the caller's behalf.
 
 ### Structured mapping
@@ -817,13 +822,14 @@ provider BibTeX.
 4. returns exactly one `RefreshItem` per requested bibi id;
 5. maps missing records to `RefreshState::Missing`;
 6. maps request/decode failures to item errors for every affected request;
-7. retains each returned record's texkeys for the payload join.
+7. returns each record's texkeys as `ProviderMetadata.join_tokens` for the
+   subsequent payload fetch.
 
 The 100-record and 6 KiB bounds are the current cita values and are kept: they
 are properties of INSPIRE's query endpoint, not of the old refresh strategy.
 
-The application compares returned revisions and calls `fetch_payloads` with the
-changed or forced ids.
+The application compares returned revisions and calls `fetch_payloads` with one
+`PayloadRequest` per changed or forced id, echoing that metadata's `join_tokens`.
 
 ### The texkey join
 
@@ -834,8 +840,9 @@ where a provider response has no envelope.
 
 `join.rs` implements it:
 
-1. request `format=json` for the batch with `fields=texkeys` alongside the
-   control number, so every requested record's declared texkeys are known;
+1. obtain declared texkeys from each `PayloadRequest.join_tokens`, or — when
+   those tokens are empty — request `format=json` for the batch with
+   `fields=texkeys` alongside the control number;
 2. build a `texkey -> control_number` index, failing if any texkey is claimed by
    more than one record in the batch;
 3. split the BibTeX response into entries with `bibi-bibtex`, which yields each
@@ -847,11 +854,13 @@ Steps 2 and 4 are the ambiguity conditions and produce a `MappingError` over the
 whole batch: if the response contains an entry bibi cannot place, or two records
 claim one key, no pairing in that response is trustworthy and none is kept.
 Step 5 is absence, which is unambiguous and survivable — the record is left
-untouched and reported missing.
+untouched and reported as a payload-absent sync absence.
 
-A record's texkeys are already fetched by the metadata pass, so the refresh path
-reuses that index rather than re-requesting it; only `resolve` pays for a
-separate texkey lookup, and it is requesting JSON anyway.
+A record's texkeys travel on `ProviderMetadata.join_tokens` from the metadata
+pass into the matching `PayloadRequest`, so the refresh path needs no provider
+session state and no extra lookup; only a cold `fetch_payloads` with empty tokens
+(or `resolve`, which already holds the mapped texkeys in-process) pays for a
+separate texkey request.
 
 Note what makes this sound: INSPIRE declares the texkeys, bibi does not guess
 them. The entry key is read syntactically by the scanner that already owns key
@@ -1544,7 +1553,7 @@ it is a usage error raised before any I/O.
 - refreshed;
 - description changes;
 - individual identifier additions;
-- missing;
+- absences, each typed as provider-gone or payload-absent;
 - unrefreshable;
 - unavailable, grouped by provider name;
 - item failures;

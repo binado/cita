@@ -12,7 +12,7 @@ use bibi_core::{
     ProviderOwned, Record, Revision,
 };
 use bibi_manifest::{ManifestCandidate, ManifestStore};
-use bibi_provider::{Provider, ProviderMetadata, RefreshRequest, RefreshState};
+use bibi_provider::{PayloadRequest, Provider, ProviderMetadata, RefreshRequest, RefreshState};
 use std::{collections::BTreeMap, sync::Arc};
 
 /// Options for `sync`.
@@ -50,6 +50,39 @@ pub struct IdentifierAddition {
     pub value: String,
 }
 
+/// A record sync left alone with a warning (not a failure).
+#[derive(Clone, Debug)]
+pub struct SyncAbsence {
+    /// The record that was left unchanged.
+    pub key: CitationKey,
+    /// Why nothing was written.
+    pub reason: SyncAbsenceReason,
+}
+
+/// Why a sync left a record unchanged.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SyncAbsenceReason {
+    /// The provider answered [`RefreshState::Missing`].
+    ProviderGone,
+    /// Metadata indicated a change, but no BibTeX payload arrived.
+    PayloadAbsent,
+}
+
+impl std::fmt::Display for SyncAbsenceReason {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ProviderGone => write!(
+                formatter,
+                "its provider no longer holds this record; it was left unchanged"
+            ),
+            Self::PayloadAbsent => write!(
+                formatter,
+                "provider metadata changed but no BibTeX arrived; it was left unchanged"
+            ),
+        }
+    }
+}
+
 /// What a sync did.
 #[derive(Debug, Default)]
 pub struct SyncReport {
@@ -63,8 +96,8 @@ pub struct SyncReport {
     pub description_changes: usize,
     /// Identifiers that were added.
     pub identifier_additions: Vec<IdentifierAddition>,
-    /// Records their provider no longer holds.
-    pub missing: Vec<CitationKey>,
+    /// Records left unchanged with a warning.
+    pub absences: Vec<SyncAbsence>,
     /// Records no provider will ever refresh.
     pub unrefreshable: usize,
     /// Records owned by providers this build does not carry.
@@ -212,7 +245,10 @@ async fn refresh_group(
             // Absence is a no-op with a warning. bibi does not re-resolve by
             // identifier on its own: that would be a silent rebind inside a
             // bulk operation, discovered late and corrupting a deliverable.
-            Ok(RefreshState::Missing) => report.missing.push(record.key.clone()),
+            Ok(RefreshState::Missing) => report.absences.push(SyncAbsence {
+                key: record.key.clone(),
+                reason: SyncAbsenceReason::ProviderGone,
+            }),
             Ok(RefreshState::Metadata(metadata)) => {
                 if metadata.provider_id != record.provider_id {
                     report.failures.push(ItemFailure::new(
@@ -240,15 +276,14 @@ async fn refresh_group(
     if changed.is_empty() {
         return;
     }
-    let provider_ids = changed
+    let requests = changed
         .iter()
-        .map(|(record, _)| record.provider_id.clone())
+        .map(|(record, metadata)| PayloadRequest {
+            provider_id: record.provider_id.clone(),
+            join_tokens: metadata.join_tokens.clone(),
+        })
         .collect::<Vec<_>>();
-    let payloads = match services
-        .providers
-        .fetch_payloads(provider, &provider_ids)
-        .await
-    {
+    let payloads = match services.providers.fetch_payloads(provider, &requests).await {
         Ok(items) => items
             .into_iter()
             .map(|item| (item.provider_id, item.payload))
@@ -271,7 +306,10 @@ async fn refresh_group(
             // record is written — above all not the revision, since an advanced
             // revision beside an old payload would desync the two permanently
             // *and* suppress the repair on the next sync.
-            report.missing.push(record.key.clone());
+            report.absences.push(SyncAbsence {
+                key: record.key.clone(),
+                reason: SyncAbsenceReason::PayloadAbsent,
+            });
             continue;
         };
         let doi = IdentifierChange::classify(

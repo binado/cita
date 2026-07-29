@@ -8,7 +8,7 @@
 
 use bibi_core::{ArxivId, BibiId, Locator, ProviderId};
 use bibi_inspire::InspireProvider;
-use bibi_provider::{Provider, RefreshRequest, RefreshState, Resolution};
+use bibi_provider::{PayloadRequest, Provider, RefreshRequest, RefreshState, Resolution};
 
 /// The ATLAS Higgs discovery paper: public, stable, and unlikely to move.
 const ARXIV: &str = "1207.7214";
@@ -71,7 +71,10 @@ async fn resolves_a_stable_public_record_and_refreshes_it() {
 
     // A forced payload fetch pairs through the verified texkey join.
     let payloads = provider
-        .fetch_payloads(&[ProviderId::new(CONTROL_NUMBER).unwrap()])
+        .fetch_payloads(&[PayloadRequest {
+            provider_id: ProviderId::new(CONTROL_NUMBER).unwrap(),
+            join_tokens: metadata.join_tokens.clone(),
+        }])
         .await
         .expect("fetching a public payload");
     assert_eq!(payloads.len(), 1);

@@ -7,22 +7,19 @@ use crate::{
     transport::{JOIN_FIELDS, RECORD_FIELDS, Transport},
 };
 use bibi_bibtex::BibtexEntry;
-use bibi_core::{Locator, Provenance, ProviderId, ProviderName};
+use bibi_core::{Locator, Provenance, ProviderId, ProviderName, ProviderOwned};
 use bibi_provider::{
-    MappingError, PayloadItem, Provider, ProviderCapabilities, ProviderError, ProviderFuture,
-    ProviderMetadata, ProviderRecord, RefreshItem, RefreshRequest, RefreshState, Resolution,
+    MappingError, PayloadItem, PayloadRequest, Provider, ProviderCapabilities, ProviderError,
+    ProviderFuture, ProviderMetadata, RefreshItem, RefreshRequest, RefreshState, Resolution,
     RetrievalError,
 };
-use std::{collections::HashMap, sync::Mutex};
+use std::collections::HashMap;
 
 /// The INSPIRE provider.
 #[derive(Debug)]
 pub struct InspireProvider {
     name: ProviderName,
     transport: Transport,
-    /// Texkeys learned from a metadata pass, so the payload join does not
-    /// re-request what it was just told.
-    declared: Mutex<HashMap<ProviderId, Vec<String>>>,
 }
 
 impl InspireProvider {
@@ -36,7 +33,6 @@ impl InspireProvider {
         Self {
             name: error::provider(),
             transport,
-            declared: Mutex::new(HashMap::new()),
         }
     }
 
@@ -56,47 +52,36 @@ impl InspireProvider {
                 .map_err(ProviderError::Retrieval)?;
             records.extend(mapping::map_search(&raw).map_err(ProviderError::Mapping)?);
         }
-        self.remember(&records);
         Ok(records)
     }
 
-    fn remember(&self, records: &[MappedRecord]) {
-        let mut declared = self.declared.lock().expect("texkey cache");
-        for record in records {
-            declared.insert(record.provider_id.clone(), record.texkeys.clone());
-        }
-    }
-
-    /// The texkeys for a batch, from the cache or from one narrowed request.
+    /// The texkeys for a batch, from request tokens or from one narrowed request.
     async fn declared_keys(
         &self,
-        provider_ids: &[ProviderId],
+        requests: &[PayloadRequest],
     ) -> Result<Vec<DeclaredKeys>, ProviderError> {
         let mut known = Vec::new();
         let mut unknown = Vec::new();
-        {
-            let declared = self.declared.lock().expect("texkey cache");
-            for provider_id in provider_ids {
-                match declared.get(provider_id) {
-                    Some(texkeys) => known.push(DeclaredKeys {
-                        provider_id: provider_id.clone(),
-                        texkeys: texkeys.clone(),
-                    }),
-                    None => unknown.push(provider_id.clone()),
-                }
+        for request in requests {
+            if request.join_tokens.is_empty() {
+                unknown.push(request.provider_id.clone());
+            } else {
+                known.push(DeclaredKeys {
+                    provider_id: request.provider_id.clone(),
+                    texkeys: request.join_tokens.clone(),
+                });
             }
         }
         if !unknown.is_empty() {
-            let terms = control_number_terms(&unknown)?;
-            let raw = self
-                .transport
-                .search_json(&batching::query(&terms), terms.len(), JOIN_FIELDS)
-                .await
-                .map_err(ProviderError::Retrieval)?;
-            let looked_up = mapping::map_declared_keys(&raw).map_err(ProviderError::Mapping)?;
-            let mut cache = self.declared.lock().expect("texkey cache");
-            for record in &looked_up {
-                cache.insert(record.provider_id.clone(), record.texkeys.clone());
+            let mut looked_up = Vec::new();
+            for batch in batching::batch_ids(&unknown) {
+                let terms = control_number_terms(&batch)?;
+                let raw = self
+                    .transport
+                    .search_json(&batching::query(&terms), terms.len(), JOIN_FIELDS)
+                    .await
+                    .map_err(ProviderError::Retrieval)?;
+                looked_up.extend(mapping::map_declared_keys(&raw).map_err(ProviderError::Mapping)?);
             }
             known.extend(looked_up);
         }
@@ -106,17 +91,21 @@ impl InspireProvider {
     /// Fetch BibTeX for a batch and pair it back to the records requested.
     async fn payloads_for(
         &self,
-        provider_ids: &[ProviderId],
+        requests: &[PayloadRequest],
     ) -> Result<Vec<PayloadItem>, ProviderError> {
-        let declared = self.declared_keys(provider_ids).await?;
-        let terms = control_number_terms(provider_ids)?;
+        let provider_ids = requests
+            .iter()
+            .map(|request| request.provider_id.clone())
+            .collect::<Vec<_>>();
+        let declared = self.declared_keys(requests).await?;
+        let terms = control_number_terms(&provider_ids)?;
         let raw = self
             .transport
             .search_bibtex(&batching::query(&terms), terms.len())
             .await
             .map_err(ProviderError::Retrieval)?;
         let entries = mapping::split_entries(&raw).map_err(ProviderError::Mapping)?;
-        join::join(provider_ids, &declared, entries).map_err(ProviderError::Mapping)
+        join::join(&provider_ids, &declared, entries).map_err(ProviderError::Mapping)
     }
 }
 
@@ -191,7 +180,7 @@ impl Provider for InspireProvider {
                                     record.provider_id
                                 )))
                             })?;
-                        Ok(Resolution::Found(Box::new(ProviderRecord {
+                        Ok(Resolution::Found(Box::new(ProviderOwned {
                             provenance: Provenance::managed(
                                 self.name.clone(),
                                 record.provider_id.clone(),
@@ -242,6 +231,7 @@ impl Provider for InspireProvider {
                             revision: record.revision.clone(),
                             identifiers: record.identifiers.clone(),
                             description: record.description.clone(),
+                            join_tokens: record.texkeys.clone(),
                         })),
                     }),
                 })
@@ -251,20 +241,21 @@ impl Provider for InspireProvider {
 
     fn fetch_payloads<'a>(
         &'a self,
-        provider_ids: &'a [ProviderId],
+        requests: &'a [PayloadRequest],
     ) -> ProviderFuture<'a, Result<Vec<PayloadItem>, ProviderError>> {
         Box::pin(async move {
-            let mut items = Vec::with_capacity(provider_ids.len());
-            for batch in batching::batch(&control_number_terms(provider_ids)?) {
-                let ids = batch
+            let mut items = Vec::with_capacity(requests.len());
+            let ids = requests
+                .iter()
+                .map(|request| request.provider_id.clone())
+                .collect::<Vec<_>>();
+            for batch_ids in batching::batch_ids(&ids) {
+                let batch = requests
                     .iter()
-                    .filter_map(|term| term.strip_prefix("control_number:"))
-                    .map(ProviderId::new)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|_| {
-                        ProviderError::Mapping(error::invalid_value("record id", "empty"))
-                    })?;
-                items.extend(self.payloads_for(&ids).await?);
+                    .filter(|request| batch_ids.contains(&request.provider_id))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                items.extend(self.payloads_for(&batch).await?);
             }
             Ok(items)
         })
@@ -285,18 +276,25 @@ impl InspireProvider {
         if records.is_empty() {
             return Ok(HashMap::new());
         }
-        let ids = records
+        let requests = records
             .iter()
-            .map(|record| record.provider_id.clone())
+            .map(|record| PayloadRequest {
+                provider_id: record.provider_id.clone(),
+                join_tokens: record.texkeys.clone(),
+            })
             .collect::<Vec<_>>();
         let mut paired = HashMap::new();
-        for batch in batching::batch(&control_number_terms(&ids)?) {
-            let batch_ids = ids
+        let ids = requests
+            .iter()
+            .map(|request| request.provider_id.clone())
+            .collect::<Vec<_>>();
+        for batch_ids in batching::batch_ids(&ids) {
+            let batch = requests
                 .iter()
-                .filter(|id| batch.contains(&format!("control_number:{id}")))
+                .filter(|request| batch_ids.contains(&request.provider_id))
                 .cloned()
                 .collect::<Vec<_>>();
-            for item in self.payloads_for(&batch_ids).await? {
+            for item in self.payloads_for(&batch).await? {
                 if let Some(payload) = item.payload {
                     paired.insert(item.provider_id, payload);
                 }

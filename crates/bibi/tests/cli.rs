@@ -403,6 +403,32 @@ fn export_filters_select_what_is_rendered() {
 }
 
 #[test]
+fn export_and_check_honor_local() {
+    let (_directory, path) = project();
+    let server = TestServer::new(vec![
+        hits(&[record(1124337, "Aad:2012tfa", "1207.7214", "Observation")]),
+        "@article{Aad:2012tfa,\n  title = {Observation}\n}\n".to_owned(),
+    ]);
+    bibi_against(&path, &server, &["add", "1207.7214"]);
+    std::fs::write(path.join("mine.bib"), "@misc{Mine,title={Mine}}\n").unwrap();
+    bibi(&path, &["add", "-f", "mine.bib", "--force-local"]);
+
+    let listed = bibi(&path, &["list", "--format", "keys", "--local"]);
+    assert_eq!(code(&listed), 0);
+    assert_eq!(stdout(&listed), "Mine\n");
+
+    let exported = bibi(&path, &["export", "-o", "local.bib", "--local"]);
+    assert_eq!(code(&exported), 0);
+    assert!(stderr(&exported).contains("wrote 1 record(s)"));
+    let written = std::fs::read_to_string(path.join("local.bib")).unwrap();
+    assert!(written.contains("@misc{Mine"));
+    assert!(!written.contains("Aad:2012tfa"));
+
+    assert_eq!(code(&bibi(&path, &["check", "local.bib", "--local"])), 0);
+    assert_eq!(code(&bibi(&path, &["check", "local.bib"])), 1);
+}
+
+#[test]
 fn a_sync_with_no_managed_records_reports_and_writes_nothing() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();

@@ -11,9 +11,9 @@ use crate::{
     services::Services,
 };
 use bibi_bibtex::{BibtexEntry, CitationKey, parse_file};
-use bibi_core::{BibiId, ProviderName, QualifiedLocator, Record};
+use bibi_core::{BibiId, ProviderName, ProviderOwned, QualifiedLocator, Record};
 use bibi_manifest::{ManifestCandidate, ManifestStore};
-use bibi_provider::{LocatorOutcome, ProviderRecord, Resolution};
+use bibi_provider::{LocatorOutcome, Resolution};
 use std::{io::Read, path::PathBuf};
 
 /// Where `add -f` reads entries from.
@@ -258,7 +258,7 @@ pub async fn add_file(
 
 /// What resolving one imported entry's identifiers produced.
 enum EntryResolution {
-    Found(Box<ProviderRecord>),
+    Found(Box<ProviderOwned>),
     Absent,
     Failed(String),
 }
@@ -269,7 +269,7 @@ enum EntryResolution {
 /// concern a bare provider id cannot arise here.
 fn resolve_entry(outcomes: &[LocatorOutcome]) -> EntryResolution {
     let mut failure = None;
-    let mut found: Option<Box<ProviderRecord>> = None;
+    let mut found: Option<Box<ProviderOwned>> = None;
     for outcome in outcomes {
         match outcome {
             LocatorOutcome::Found { record, .. } => {
@@ -303,14 +303,14 @@ fn resolve_entry(outcomes: &[LocatorOutcome]) -> EntryResolution {
     }
 }
 
-fn same_provider_record(left: &ProviderRecord, right: &ProviderRecord) -> bool {
+fn same_provider_record(left: &ProviderOwned, right: &ProviderOwned) -> bool {
     match (left.provenance.identity(), right.provenance.identity()) {
         (Some(left), Some(right)) => left == right,
         _ => false,
     }
 }
 
-fn provider_identity(record: &ProviderRecord) -> String {
+fn provider_identity(record: &ProviderOwned) -> String {
     record
         .provenance
         .identity()
@@ -319,7 +319,7 @@ fn provider_identity(record: &ProviderRecord) -> String {
 }
 
 /// Hand an entry to the provider that ingests user-supplied BibTeX.
-fn ingest(services: &Services, entry: BibtexEntry) -> Result<ProviderRecord, String> {
+fn ingest(services: &Services, entry: BibtexEntry) -> Result<ProviderOwned, String> {
     let provider = services
         .providers
         .ingest_provider()
@@ -354,7 +354,7 @@ enum CollisionPolicy {
 fn plan(
     candidate: &ManifestCandidate,
     key: &CitationKey,
-    record: &ProviderRecord,
+    record: &ProviderOwned,
     overwrite: bool,
     explicit_key: bool,
     collisions: CollisionPolicy,
@@ -416,14 +416,14 @@ fn apply(
     candidate: &mut ManifestCandidate,
     item: &str,
     key: CitationKey,
-    record: ProviderRecord,
+    record: ProviderOwned,
     placement: Placement,
     items: &mut BatchReport<AddedRecord>,
 ) -> Result<(), Error> {
     match placement {
         Placement::Insert => {
             let provider = record.provenance.provider.clone();
-            let stored = Record::new(BibiId::new(), key, record.into())?;
+            let stored = Record::new(BibiId::new(), key, record)?;
             let id = stored.id;
             candidate.insert(stored)?;
             items
@@ -432,7 +432,7 @@ fn apply(
         }
         Placement::Overwrite(id) => {
             let provider = record.provenance.provider.clone();
-            candidate.replace(&id, record.into())?;
+            candidate.replace(&id, record)?;
             items
                 .successes
                 .push(added(candidate, &id, provider, AddKind::Overwritten)?);

@@ -1,5 +1,7 @@
 //! Splitting a set of query terms into requests INSPIRE will accept.
 
+use bibi_core::ProviderId;
+
 /// Records per search. A property of the query endpoint, not of any one
 /// operation, so resolve and refresh use the same bound.
 pub const MAX_BATCH_RECORDS: usize = 100;
@@ -14,18 +16,36 @@ pub const MAX_ENCODED_QUERY: usize = 6 * 1024;
 /// difference between seconds and minutes of pacing on exactly the operations
 /// where a user is waiting.
 pub fn batch(terms: &[String]) -> Vec<Vec<String>> {
-    let mut batches: Vec<Vec<String>> = Vec::new();
-    for term in terms {
-        let needs_new = batches.last().is_none_or(|batch| {
-            batch.len() == MAX_BATCH_RECORDS || encoded_len(batch, Some(term)) > MAX_ENCODED_QUERY
+    batch_by(terms, |term| term.clone())
+}
+
+/// Split provider ids into batches sized by their `control_number:` query terms.
+pub fn batch_ids(ids: &[ProviderId]) -> Vec<Vec<ProviderId>> {
+    batch_by(ids, |id| format!("control_number:{id}"))
+}
+
+/// Split items into batches whose rendered terms satisfy both bounds.
+fn batch_by<T, F>(items: &[T], mut term_of: F) -> Vec<Vec<T>>
+where
+    T: Clone,
+    F: FnMut(&T) -> String,
+{
+    let mut batches: Vec<Vec<T>> = Vec::new();
+    let mut terms: Vec<Vec<String>> = Vec::new();
+    for item in items {
+        let term = term_of(item);
+        let needs_new = terms.last().is_none_or(|batch| {
+            batch.len() == MAX_BATCH_RECORDS || encoded_len(batch, Some(&term)) > MAX_ENCODED_QUERY
         });
         if needs_new {
             batches.push(Vec::new());
+            terms.push(Vec::new());
         }
         batches
             .last_mut()
             .expect("a batch exists")
-            .push(term.clone());
+            .push(item.clone());
+        terms.last_mut().expect("a term batch exists").push(term);
     }
     batches
 }
@@ -56,6 +76,12 @@ mod tests {
             .collect()
     }
 
+    fn ids(count: usize) -> Vec<ProviderId> {
+        (1..=count)
+            .map(|id| ProviderId::new(id.to_string()).unwrap())
+            .collect()
+    }
+
     #[test]
     fn splits_at_the_record_limit() {
         let all = terms(205);
@@ -65,6 +91,17 @@ mod tests {
             [100, 100, 5]
         );
         // Nothing is lost or reordered.
+        assert_eq!(batches.concat(), all);
+    }
+
+    #[test]
+    fn splits_ids_at_the_record_limit() {
+        let all = ids(205);
+        let batches = batch_ids(&all);
+        assert_eq!(
+            batches.iter().map(Vec::len).collect::<Vec<_>>(),
+            [100, 100, 5]
+        );
         assert_eq!(batches.concat(), all);
     }
 
@@ -86,6 +123,7 @@ mod tests {
     #[test]
     fn an_empty_request_makes_no_batches() {
         assert!(batch(&[]).is_empty());
+        assert!(batch_ids(&[]).is_empty());
     }
 
     #[test]

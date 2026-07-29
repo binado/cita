@@ -3,11 +3,11 @@
 use crate::{
     contract::{Provider, ProviderCapabilities, ProviderFuture},
     error::{MappingError, ProviderError},
-    outcome::{PayloadItem, ProviderRecord, RefreshItem, RefreshRequest, RefreshState, Resolution},
+    outcome::{PayloadItem, RefreshItem, RefreshRequest, RefreshState, Resolution},
 };
 use bibi_bibtex::BibtexEntry;
 use bibi_core::{
-    ArxivId, Description, Doi, Identifiers, Locator, Provenance, ProviderId, ProviderName,
+    ArxivId, Description, Doi, Identifiers, Locator, Provenance, ProviderName, ProviderOwned,
 };
 
 /// The name the local provider is stored under.
@@ -82,7 +82,7 @@ impl Provider for LocalProvider {
 
     fn fetch_payloads<'a>(
         &'a self,
-        _provider_ids: &'a [ProviderId],
+        _requests: &'a [crate::outcome::PayloadRequest],
     ) -> ProviderFuture<'a, Result<Vec<PayloadItem>, ProviderError>> {
         // Unreachable through the ordinary flow: a local record reports
         // `Unrefreshable`, so nothing ever advances to fetching its payload,
@@ -114,7 +114,7 @@ impl Provider for LocalProvider {
                 .as_deref()
                 .and_then(|arxiv| ArxivId::new(arxiv).ok()),
         };
-        Ok(Resolution::Found(Box::new(ProviderRecord {
+        Ok(Resolution::Found(Box::new(ProviderOwned {
             provenance: Provenance::unmanaged(self.name.clone()),
             identifiers,
             description: Description {
@@ -196,7 +196,7 @@ mod tests {
         );
         let requests = [RefreshRequest {
             bibi_id: bibi_core::BibiId::new(),
-            provider_id: ProviderId::new("x").unwrap(),
+            provider_id: bibi_core::ProviderId::new("x").unwrap(),
             stored_revision: None,
         }];
         let refreshed = provider.refresh_metadata(&requests).await;

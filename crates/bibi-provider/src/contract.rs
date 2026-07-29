@@ -2,10 +2,10 @@
 
 use crate::{
     error::ProviderError,
-    outcome::{PayloadItem, RefreshItem, RefreshRequest, Resolution},
+    outcome::{PayloadItem, PayloadRequest, RefreshItem, RefreshRequest, Resolution},
 };
 use bibi_bibtex::BibtexEntry;
-use bibi_core::{Locator, ProviderId, ProviderName};
+use bibi_core::{Locator, ProviderName};
 use std::{future::Future, pin::Pin};
 
 /// A boxed future, so heterogeneous providers can live behind one trait object.
@@ -106,9 +106,13 @@ pub trait Provider: Send + Sync {
     ) -> ProviderFuture<'a, Vec<RefreshItem>>;
 
     /// Fetch BibTeX for records whose metadata changed.
+    ///
+    /// Each request may carry ephemeral join tokens from the preceding
+    /// [`Provider::refresh_metadata`] call. Providers that need none leave them
+    /// empty and ignore them.
     fn fetch_payloads<'a>(
         &'a self,
-        provider_ids: &'a [ProviderId],
+        requests: &'a [PayloadRequest],
     ) -> ProviderFuture<'a, Result<Vec<PayloadItem>, ProviderError>>;
 
     /// Turn user-supplied BibTeX into a record of this provider's own.

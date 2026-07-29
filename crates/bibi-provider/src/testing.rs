@@ -11,13 +11,14 @@ use crate::{
     contract::{Provider, ProviderCapabilities, ProviderFuture},
     error::{MappingError, ProviderError, RetrievalError},
     outcome::{
-        PayloadItem, ProviderMetadata, ProviderRecord, RefreshItem, RefreshRequest, RefreshState,
+        PayloadItem, PayloadRequest, ProviderMetadata, RefreshItem, RefreshRequest, RefreshState,
         Resolution,
     },
 };
 use bibi_bibtex::BibtexEntry;
 use bibi_core::{
-    Description, Identifiers, Locator, Provenance, ProviderId, ProviderName, Revision,
+    Description, Identifiers, Locator, Provenance, ProviderId, ProviderName, ProviderOwned,
+    Revision,
 };
 use std::{
     collections::HashMap,
@@ -38,7 +39,7 @@ pub enum ProviderCall {
 /// How a fake provider should answer.
 #[derive(Clone, Debug)]
 enum Answer {
-    Records(HashMap<String, ProviderRecord>),
+    Records(HashMap<String, ProviderOwned>),
     Retrieval(String),
     Mapping(String),
 }
@@ -77,7 +78,7 @@ impl FakeProvider {
     }
 
     /// Answer `locator` with `record`.
-    pub fn with_record(mut self, locator: &str, record: ProviderRecord) -> Self {
+    pub fn with_record(mut self, locator: &str, record: ProviderOwned) -> Self {
         if let Answer::Records(records) = &mut self.answer {
             records.insert(locator.to_owned(), record);
         }
@@ -216,21 +217,26 @@ impl Provider for FakeProvider {
 
     fn fetch_payloads<'a>(
         &'a self,
-        provider_ids: &'a [ProviderId],
+        requests: &'a [PayloadRequest],
     ) -> ProviderFuture<'a, Result<Vec<PayloadItem>, ProviderError>> {
         self.calls
             .lock()
             .expect("call log")
-            .push(ProviderCall::FetchPayloads(provider_ids.to_vec()));
+            .push(ProviderCall::FetchPayloads(
+                requests
+                    .iter()
+                    .map(|request| request.provider_id.clone())
+                    .collect(),
+            ));
         Box::pin(async move {
             if let Some(message) = &self.payload_error {
                 return Err(self.mapping(message));
             }
-            Ok(provider_ids
+            Ok(requests
                 .iter()
-                .map(|id| PayloadItem {
-                    provider_id: id.clone(),
-                    payload: self.payloads.get(id).cloned().flatten(),
+                .map(|request| PayloadItem {
+                    provider_id: request.provider_id.clone(),
+                    payload: self.payloads.get(&request.provider_id).cloned().flatten(),
                 })
                 .collect())
         })
@@ -241,14 +247,14 @@ impl Provider for FakeProvider {
     }
 }
 
-/// Build a `ProviderRecord` for tests.
+/// Build a `ProviderOwned` for tests.
 pub fn provider_record(
     provider: &str,
     provider_id: &str,
     texkey: &str,
     title: &str,
-) -> ProviderRecord {
-    ProviderRecord {
+) -> ProviderOwned {
+    ProviderOwned {
         provenance: Provenance::managed(
             ProviderName::new(provider).expect("test provider name"),
             ProviderId::new(provider_id).expect("test id"),
@@ -283,6 +289,7 @@ pub fn provider_metadata(
             title: title.to_owned(),
             ..Description::default()
         },
+        join_tokens: Vec::new(),
     }
 }
 

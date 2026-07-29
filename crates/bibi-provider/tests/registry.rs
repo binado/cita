@@ -2,8 +2,8 @@
 
 use bibi_core::{Locator, ProviderId, ProviderName, QualifiedLocator};
 use bibi_provider::{
-    LocalProvider, LocatorOutcome, Provider, ProviderCapabilities, ProviderError, ProviderFuture,
-    ProviderRegistry, RefreshItem, RefreshRequest, RegistryError, Resolution,
+    LocalProvider, LocatorOutcome, PayloadRequest, Provider, ProviderCapabilities, ProviderError,
+    ProviderFuture, ProviderRegistry, RefreshItem, RefreshRequest, RegistryError, Resolution,
     testing::{FakeProvider, ProviderCall, provider_record, verify_contract},
 };
 use std::sync::Arc;
@@ -237,7 +237,7 @@ async fn a_provider_that_answers_the_wrong_number_of_locators_is_refused() {
         }
         fn fetch_payloads<'a>(
             &'a self,
-            _: &'a [ProviderId],
+            _: &'a [PayloadRequest],
         ) -> ProviderFuture<'a, Result<Vec<bibi_provider::PayloadItem>, ProviderError>> {
             Box::pin(async { Ok(Vec::new()) })
         }
@@ -273,7 +273,13 @@ async fn a_provider_that_answers_the_wrong_number_of_locators_is_refused() {
     );
     assert!(
         registry
-            .fetch_payloads(&provider, &[ProviderId::new("1").unwrap()])
+            .fetch_payloads(
+                &provider,
+                &[PayloadRequest {
+                    provider_id: ProviderId::new("1").unwrap(),
+                    join_tokens: Vec::new(),
+                }]
+            )
             .await
             .is_err()
     );

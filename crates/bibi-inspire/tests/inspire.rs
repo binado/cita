@@ -5,8 +5,8 @@ mod support;
 use bibi_core::{ArxivId, BibiId, Doi, Locator, ProviderId};
 use bibi_inspire::{InspireProvider, RateLimiter, RetryEvent, Transport, testing::TestClock};
 use bibi_provider::{
-    Provider, ProviderError, RefreshRequest, RefreshState, Resolution, RetrievalError,
-    testing::verify_contract,
+    PayloadRequest, Provider, ProviderError, RefreshRequest, RefreshState, Resolution,
+    RetrievalError, testing::verify_contract,
 };
 use std::{
     sync::{Arc, Mutex},
@@ -266,9 +266,15 @@ async fn a_payload_fetch_reuses_the_texkeys_the_metadata_pass_learned() {
         provider_id: ProviderId::new("1").unwrap(),
         stored_revision: None,
     }];
-    provider.refresh_metadata(&requests).await;
+    let refreshed = provider.refresh_metadata(&requests).await;
+    let RefreshState::Metadata(metadata) = refreshed[0].result.as_ref().unwrap() else {
+        panic!("expected metadata");
+    };
     let items = provider
-        .fetch_payloads(&[ProviderId::new("1").unwrap()])
+        .fetch_payloads(&[PayloadRequest {
+            provider_id: ProviderId::new("1").unwrap(),
+            join_tokens: metadata.join_tokens.clone(),
+        }])
         .await
         .unwrap();
 
@@ -282,14 +288,17 @@ async fn a_payload_fetch_reuses_the_texkeys_the_metadata_pass_learned() {
 }
 
 #[tokio::test]
-async fn a_payload_fetch_without_a_prior_metadata_pass_looks_up_its_own_texkeys() {
+async fn a_payload_fetch_without_join_tokens_looks_up_its_own_texkeys() {
     let server = TestServer::new(vec![
         Reply::ok(hits(vec![record(1, "First:2012", None, None)])),
         Reply::ok(entry("First:2012")),
     ]);
     let provider = provider(&server, Arc::new(TestClock::new()));
     let items = provider
-        .fetch_payloads(&[ProviderId::new("1").unwrap()])
+        .fetch_payloads(&[PayloadRequest {
+            provider_id: ProviderId::new("1").unwrap(),
+            join_tokens: Vec::new(),
+        }])
         .await
         .unwrap();
     assert!(items[0].payload.is_some());
@@ -299,16 +308,19 @@ async fn a_payload_fetch_without_a_prior_metadata_pass_looks_up_its_own_texkeys(
 
 #[tokio::test]
 async fn a_record_that_received_no_entry_comes_back_absent_not_failed() {
-    let server = TestServer::new(vec![
-        Reply::ok(hits(vec![
-            record(1, "First:2012", None, None),
-            record(2, "Second:2013", None, None),
-        ])),
-        Reply::ok(entry("First:2012")),
-    ]);
+    let server = TestServer::new(vec![Reply::ok(entry("First:2012"))]);
     let provider = provider(&server, Arc::new(TestClock::new()));
     let items = provider
-        .fetch_payloads(&[ProviderId::new("1").unwrap(), ProviderId::new("2").unwrap()])
+        .fetch_payloads(&[
+            PayloadRequest {
+                provider_id: ProviderId::new("1").unwrap(),
+                join_tokens: vec!["First:2012".into()],
+            },
+            PayloadRequest {
+                provider_id: ProviderId::new("2").unwrap(),
+                join_tokens: vec!["Second:2013".into()],
+            },
+        ])
         .await
         .unwrap();
     assert!(items[0].payload.is_some());
@@ -475,11 +487,19 @@ async fn three_hundred_records_cost_three_metadata_and_three_payload_requests() 
     assert_eq!(items.len(), 300, "one outcome per record");
     assert_eq!(server.requests().len(), 3, "metadata in three batches");
 
-    let provider_ids = ids
+    let payload_requests = items
         .iter()
-        .map(|id| ProviderId::new(id.to_string()).unwrap())
+        .map(|item| {
+            let RefreshState::Metadata(metadata) = item.result.as_ref().unwrap() else {
+                panic!("expected metadata");
+            };
+            PayloadRequest {
+                provider_id: metadata.provider_id.clone(),
+                join_tokens: metadata.join_tokens.clone(),
+            }
+        })
         .collect::<Vec<_>>();
-    let payloads = provider.fetch_payloads(&provider_ids).await.unwrap();
+    let payloads = provider.fetch_payloads(&payload_requests).await.unwrap();
     assert_eq!(payloads.len(), 300);
     assert!(payloads.iter().all(|item| item.payload.is_some()));
     // Six requests in total: the metadata pass already declared the texkeys,

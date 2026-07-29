@@ -167,6 +167,117 @@ async fn a_filtered_export_renders_only_what_matches() {
 }
 
 #[tokio::test]
+async fn a_local_export_renders_only_unrefreshable_owners() {
+    let project = project_with_two_records().await;
+    let path = project.path("mine.bib");
+    std::fs::write(&path, "@misc{Mine,title={Mine}}\n").unwrap();
+    bibi_application::add_file(
+        &project.services,
+        &project.store(),
+        &bibi_application::AddFileRequest {
+            source: bibi_application::InputSource::Path(path),
+            provider: None,
+            overwrite: false,
+            force_local: true,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let report = export(
+        &project.services,
+        &project.store(),
+        &ExportRequest {
+            output: Some(PathBuf::from("local.bib")),
+            options: RenderOptions {
+                filter: RecordFilter {
+                    unrefreshable_providers: Some(project.services.providers.unrefreshable_names()),
+                    ..RecordFilter::default()
+                },
+            },
+            ..ExportRequest::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(report.records, 1);
+    let written = std::fs::read_to_string(project.path("local.bib")).unwrap();
+    assert_eq!(written, "@misc{Mine,title={Mine}}\n");
+}
+
+#[tokio::test]
+async fn export_provider_syncs_without_narrowing_a_local_render() {
+    let project = project_with_two_records().await;
+    let path = project.path("mine.bib");
+    std::fs::write(&path, "@misc{Mine,title={Mine}}\n").unwrap();
+    bibi_application::add_file(
+        &project.services,
+        &project.store(),
+        &bibi_application::AddFileRequest {
+            source: bibi_application::InputSource::Path(path),
+            provider: None,
+            overwrite: false,
+            force_local: true,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let updated = Arc::new(
+        FakeProvider::new("inspire")
+            .with_refresh(
+                "1",
+                RefreshState::Metadata(Box::new(provider_metadata("1", Some("r2"), "Corrected"))),
+            )
+            .with_payload("1", Some(payload("Alpha:2012", "Corrected")))
+            .with_refresh(
+                "2",
+                RefreshState::Metadata(Box::new(provider_metadata(
+                    "2",
+                    Some("r1"),
+                    "Second paper",
+                ))),
+            )
+            .with_payload("2", Some(payload("Zed:2020", "Second paper"))),
+    );
+    let services = Services::new(
+        Arc::new(ProviderRegistry::new(vec![
+            updated,
+            Arc::new(LocalProvider::new()),
+        ])),
+        project.services.paths.clone(),
+    );
+
+    let report = export(
+        &services,
+        &project.store(),
+        &ExportRequest {
+            provider: Some(bibi_core::ProviderName::new("inspire").unwrap()),
+            output: Some(PathBuf::from("local.bib")),
+            options: RenderOptions {
+                filter: RecordFilter {
+                    unrefreshable_providers: Some(services.providers.unrefreshable_names()),
+                    ..RecordFilter::default()
+                },
+            },
+            ..ExportRequest::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(report.sync.is_some());
+    assert_eq!(report.sync.as_ref().unwrap().refreshed.len(), 1);
+    // --provider selected what to sync; --local selected what to render.
+    assert_eq!(report.records, 1);
+    let written = std::fs::read_to_string(project.path("local.bib")).unwrap();
+    assert_eq!(written, "@misc{Mine,title={Mine}}\n");
+}
+
+#[tokio::test]
 async fn an_empty_selection_renders_zero_bytes() {
     let project = project_with_two_records().await;
     export(

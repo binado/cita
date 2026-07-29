@@ -95,7 +95,7 @@ async fn a_first_add_creates_the_manifest_without_an_init() {
 #[tokio::test]
 async fn a_read_command_reports_a_missing_manifest_rather_than_conjuring_one() {
     let project = Project::new(network());
-    assert!(list(&project.services, &project.store(), &ListRequest::default()).is_err());
+    assert!(list(&project.store(), &ListRequest::default()).is_err());
     assert!(show(&project.store(), "Anything").is_err());
     assert!(!project.store().exists());
 }
@@ -188,7 +188,7 @@ async fn overwrite_replaces_provider_data_and_preserves_id_and_key() {
         },
     )
     .await;
-    let before = list(&project.services, &project.store(), &ListRequest::default()).unwrap();
+    let before = list(&project.store(), &ListRequest::default()).unwrap();
 
     let updated = Arc::new(FakeProvider::new("inspire").with_record(
         "arxiv:1207.7214",
@@ -215,7 +215,7 @@ async fn overwrite_replaces_provider_data_and_preserves_id_and_key() {
     .await;
 
     assert_eq!(report.items.successes[0].kind, AddKind::Overwritten);
-    let after = list(&project.services, &project.store(), &ListRequest::default()).unwrap();
+    let after = list(&project.store(), &ListRequest::default()).unwrap();
     assert_eq!(after.len(), 1);
     assert_eq!(after[0].id, before[0].id, "the bibi id is immutable");
     assert_eq!(after[0].key, before[0].key, "the local key is the user's");
@@ -260,7 +260,7 @@ async fn a_partial_batch_commits_its_successes_and_reports_the_rest() {
     assert_eq!(report.items.failures.len(), 2);
     assert!(report.committed, "the one success is not discarded");
     assert_eq!(
-        list(&project.services, &project.store(), &ListRequest::default())
+        list(&project.store(), &ListRequest::default())
             .unwrap()
             .len(),
         1
@@ -306,7 +306,7 @@ async fn importing_resolves_what_it_can_and_keeps_the_rest_locally() {
     .unwrap();
 
     assert_eq!(report.items.successes.len(), 2);
-    let records = list(&project.services, &project.store(), &ListRequest::default()).unwrap();
+    let records = list(&project.store(), &ListRequest::default()).unwrap();
     let resolved = records
         .iter()
         .find(|record| record.key.as_str() == "TheirKey:2012")
@@ -451,7 +451,7 @@ async fn force_local_stores_entries_a_provider_would_have_resolved() {
     .unwrap();
 
     assert_eq!(report.items.successes.len(), 1);
-    let records = list(&project.services, &project.store(), &ListRequest::default()).unwrap();
+    let records = list(&project.store(), &ListRequest::default()).unwrap();
     assert_eq!(records[0].provenance.provider.as_str(), "local");
     assert!(records[0].payload.source().contains("My formatting"));
     // No provider was consulted at all.
@@ -522,7 +522,7 @@ async fn an_imported_key_collision_is_skipped_or_identifies_the_overwrite_target
         .await
         .unwrap();
     assert_eq!(overwritten.items.successes[0].kind, AddKind::Overwritten);
-    let records = list(&project.services, &project.store(), &ListRequest::default()).unwrap();
+    let records = list(&project.store(), &ListRequest::default()).unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].key.as_str(), "Taken");
     assert_eq!(records[0].description.title, "A different work entirely");
@@ -602,7 +602,7 @@ async fn multiple_identifier_targets_fail_one_item_without_discarding_the_batch(
     assert_eq!(overwritten.items.successes.len(), 1);
     assert_eq!(overwritten.items.failures.len(), 1);
     assert!(overwritten.committed);
-    let records = list(&project.services, &project.store(), &ListRequest::default()).unwrap();
+    let records = list(&project.store(), &ListRequest::default()).unwrap();
     assert_eq!(records.len(), 3, "two originals plus the unrelated success");
 }
 
@@ -625,14 +625,15 @@ async fn the_local_filter_asks_the_registry_rather_than_matching_a_name() {
     .await
     .unwrap();
 
-    let all = list(&project.services, &project.store(), &ListRequest::default()).unwrap();
+    let all = list(&project.store(), &ListRequest::default()).unwrap();
     assert_eq!(all.len(), 2);
     let local = list(
-        &project.services,
         &project.store(),
         &ListRequest {
-            local: true,
-            ..ListRequest::default()
+            filter: bibi_core::RecordFilter {
+                unrefreshable_providers: Some(project.services.providers.unrefreshable_names()),
+                ..bibi_core::RecordFilter::default()
+            },
         },
     )
     .unwrap();
@@ -644,7 +645,7 @@ async fn the_local_filter_asks_the_registry_rather_than_matching_a_name() {
 async fn the_json_projection_has_the_schema_one_fields_and_no_payload() {
     let project = Project::new(network());
     add(&project, &["1207.7214"], AddRequest::default()).await;
-    let records = list(&project.services, &project.store(), &ListRequest::default()).unwrap();
+    let records = list(&project.store(), &ListRequest::default()).unwrap();
     let json = to_json(&records).unwrap();
 
     assert!(json.ends_with("]\n"));
@@ -693,7 +694,7 @@ async fn removing_emits_what_it_deleted_and_renaming_preserves_the_payload() {
     assert_eq!(report.items.successes.len(), 1);
     assert!(report.items.successes[0].bibtex.contains("@article{Higgs,"));
     assert!(
-        list(&project.services, &project.store(), &ListRequest::default())
+        list(&project.store(), &ListRequest::default())
             .unwrap()
             .is_empty()
     );
@@ -719,7 +720,7 @@ async fn removing_the_same_record_twice_is_an_idempotent_skip() {
     assert!(dry_run.items.failures.is_empty());
     assert!(!dry_run.committed);
     assert_eq!(
-        list(&project.services, &project.store(), &ListRequest::default())
+        list(&project.store(), &ListRequest::default())
             .unwrap()
             .len(),
         1,

@@ -29,7 +29,7 @@ pub use contract::{Provider, ProviderCapabilities, ProviderFuture};
 pub use error::{MappingError, ProviderError, RetrievalError};
 pub use local::{LOCAL_PROVIDER, LocalProvider};
 pub use outcome::{
-    PayloadItem, ProviderMetadata, ProviderRecord, RefreshItem, RefreshRequest, RefreshState,
+    PayloadItem, PayloadRequest, ProviderMetadata, RefreshItem, RefreshRequest, RefreshState,
     Resolution,
 };
 pub use registry::{LocatorOutcome, ProviderRegistry, RegistryError};

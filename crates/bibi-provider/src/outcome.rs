@@ -2,38 +2,7 @@
 
 use crate::error::ProviderError;
 use bibi_bibtex::BibtexEntry;
-use bibi_core::{
-    BibiId, Description, Identifiers, Provenance, ProviderId, ProviderOwned, Revision,
-};
-
-/// Everything a provider knows about one record.
-///
-/// The shape follows from the record's field groups: a provider produces
-/// provenance, identifiers, description, and payload. It never produces
-/// identity or naming — the application mints the bibi id, and the local key is
-/// adopted from the payload's own texkey or supplied by the user.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProviderRecord {
-    /// Which provider owns this record, and its handle and token.
-    pub provenance: Provenance,
-    /// Canonical normalized identifiers.
-    pub identifiers: Identifiers,
-    /// Advisory display data, mapped from the structured record.
-    pub description: Description,
-    /// Verbatim provider BibTeX.
-    pub payload: BibtexEntry,
-}
-
-impl From<ProviderRecord> for ProviderOwned {
-    fn from(record: ProviderRecord) -> Self {
-        Self {
-            provenance: record.provenance,
-            identifiers: record.identifiers,
-            payload: record.payload,
-            description: record.description,
-        }
-    }
-}
+use bibi_core::{BibiId, Description, Identifiers, ProviderId, ProviderOwned, Revision};
 
 /// One record a refresh should examine.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -57,13 +26,27 @@ pub struct ProviderMetadata {
     pub identifiers: Identifiers,
     /// Advisory display data.
     pub description: Description,
+    /// Ephemeral, provider-private hints for a subsequent [`crate::Provider::fetch_payloads`].
+    ///
+    /// Empty when unused. Never persisted: tokens live only on this type and
+    /// the matching [`PayloadRequest`], never on a stored record.
+    pub join_tokens: Vec<String>,
+}
+
+/// One record whose BibTeX should be fetched.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayloadRequest {
+    /// The provider's handle for it.
+    pub provider_id: ProviderId,
+    /// Join hints echoed from the matching [`ProviderMetadata`].
+    pub join_tokens: Vec<String>,
 }
 
 /// What resolving one locator produced.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Resolution {
     /// A complete mapped record.
-    Found(Box<ProviderRecord>),
+    Found(Box<ProviderOwned>),
     /// The provider understands the locator and holds no such record.
     NotFound,
     /// The provider cannot resolve locators of that kind.
