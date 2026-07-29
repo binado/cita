@@ -16,6 +16,7 @@
 #![warn(missing_docs)]
 
 mod add;
+mod documents;
 mod error;
 mod export;
 mod list;
@@ -35,6 +36,7 @@ mod target;
 pub mod domain {
     pub use bibi_bibtex::CitationKey;
     pub use bibi_core::{ProviderName, Record, RecordFilter, Selector};
+    pub use bibi_documents::{CleanMode, CleanReport, DocumentStore};
     pub use bibi_manifest::ManifestStore;
 }
 
@@ -42,6 +44,7 @@ pub use add::{
     AddFileRequest, AddKind, AddReport, AddRequest, AddedRecord, InputSource, add_file,
     add_locators,
 };
+pub use documents::{FetchRequest, FetchTarget, clean_cache, document_id, fetch};
 pub use error::Error;
 pub use export::{CheckOutcome, DEFAULT_OUTPUT, ExportReport, ExportRequest, check, export};
 pub use list::{ListJsonRecord, ListRequest, list, to_json, to_keys};
@@ -51,5 +54,6 @@ pub use reports::{BatchReport, ItemFailure, SkipReason, SkippedItem};
 pub use services::Services;
 pub use sync::{IdentifierAddition, RefreshedRecord, SyncReport, SyncRequest, sync};
 pub use target::{
-    GLOBAL_MANIFEST_ENV, MANIFEST_NAME, PlatformPaths, TargetResolver, TargetSelection, output,
+    CACHE_ROOT_ENV, GLOBAL_MANIFEST_ENV, MANIFEST_NAME, PlatformPaths, TargetResolver,
+    TargetSelection, output,
 };

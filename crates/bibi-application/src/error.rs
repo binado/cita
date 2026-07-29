@@ -30,6 +30,9 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+    /// The document cache could not be opened or used.
+    #[error(transparent)]
+    Documents(#[from] bibi_documents::Error),
     /// JSON output could not be produced.
     #[error("could not render JSON: {0}")]
     Json(#[from] serde_json::Error),

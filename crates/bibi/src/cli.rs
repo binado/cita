@@ -52,6 +52,11 @@ pub enum Command {
     Export(ExportArgs),
     /// Verify a rendered bibliography against the manifest
     Check(CheckArgs),
+    /// Retrieve a record's PDF or source package
+    Fetch(FetchArgs),
+    /// Maintain the global document cache
+    #[command(subcommand)]
+    Cache(CacheCommand),
     /// Create an empty manifest
     Init,
 }
@@ -140,6 +145,45 @@ pub enum ListFormat {
     Bibtex,
     /// The schema-1 metadata projection
     Json,
+}
+
+#[derive(Args, Debug)]
+pub struct FetchArgs {
+    /// The record to fetch for
+    #[arg(value_name = "SELECTOR")]
+    pub selector: String,
+    /// Fetch the source package instead of the PDF
+    #[arg(long, conflicts_with = "url")]
+    pub source: bool,
+    /// Print the public URL instead of downloading
+    #[arg(long)]
+    pub url: bool,
+    /// Open the result after producing it
+    #[arg(long)]
+    pub open: bool,
+    /// Download again, replacing the cached artifact
+    #[arg(long, conflicts_with = "url")]
+    pub force: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CacheCommand {
+    /// Delete the global document cache
+    Clean(CacheCleanArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct CacheCleanArgs {
+    /// Report what would be removed
+    #[arg(
+        long = "dry-run",
+        required_unless_present = "all",
+        conflicts_with = "all"
+    )]
+    pub dry_run: bool,
+    /// Remove it
+    #[arg(long)]
+    pub all: bool,
 }
 
 #[derive(Args, Debug)]

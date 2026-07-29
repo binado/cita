@@ -14,6 +14,9 @@ pub struct PlatformPaths {
 /// The environment variable that overrides the global manifest's location.
 pub const GLOBAL_MANIFEST_ENV: &str = "BIBI_GLOBAL_MANIFEST";
 
+/// The environment variable that overrides the document cache's location.
+pub const CACHE_ROOT_ENV: &str = "BIBI_CACHE_ROOT";
+
 impl PlatformPaths {
     /// Discover the platform's directories.
     ///
@@ -28,9 +31,13 @@ impl PlatformPaths {
             Some(path) if !path.is_empty() => PathBuf::from(path),
             _ => directories.config_dir().join("bibi.toml"),
         };
+        let cache_root = match std::env::var_os(CACHE_ROOT_ENV) {
+            Some(path) if !path.is_empty() => PathBuf::from(path),
+            _ => directories.cache_dir().to_path_buf(),
+        };
         Ok(Self {
             global_manifest,
-            cache_root: directories.cache_dir().to_path_buf(),
+            cache_root,
         })
     }
 

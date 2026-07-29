@@ -18,6 +18,7 @@ fn bibi(directory: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bibi"))
         .current_dir(directory)
         .env("BIBI_GLOBAL_MANIFEST", directory.join("global.toml"))
+        .env("BIBI_CACHE_ROOT", directory.join("cache/bibi"))
         .args(args)
         .output()
         .expect("running bibi")
@@ -206,6 +207,7 @@ fn bibi_against(directory: &Path, server: &TestServer, args: &[&str]) -> Output 
     Command::new(env!("CARGO_BIN_EXE_bibi"))
         .current_dir(directory)
         .env("BIBI_GLOBAL_MANIFEST", directory.join("global.toml"))
+        .env("BIBI_CACHE_ROOT", directory.join("cache/bibi"))
         .env("BIBI_INSPIRE_BASE_URL", &server.base_url)
         .args(args)
         .output()
@@ -396,4 +398,54 @@ fn a_sync_with_no_managed_records_reports_and_writes_nothing() {
         std::fs::read_to_string(path.join("bibi.toml")).unwrap(),
         before
     );
+}
+
+#[test]
+fn fetch_reports_a_url_without_downloading_anything() {
+    let (_directory, path) = project();
+    let server = TestServer::new(vec![
+        hits(&[record(1124337, "Aad:2012tfa", "1207.7214", "Observation")]),
+        "@article{Aad:2012tfa,\n  title = {Observation}\n}\n".to_owned(),
+    ]);
+    bibi_against(&path, &server, &["add", "1207.7214"]);
+
+    let output = bibi(&path, &["fetch", "Aad:2012tfa", "--url"]);
+    assert_eq!(code(&output), 0);
+    // One line, so `open $(bibi fetch <selector> --url)` works.
+    assert_eq!(stdout(&output), "https://arxiv.org/pdf/1207.7214\n");
+    // Nothing was cached: --url is a question, not a download.
+    assert!(!path.join("cache").exists());
+}
+
+#[test]
+fn fetching_a_record_without_an_arxiv_id_explains_why_it_cannot() {
+    let (_directory, path) = project();
+    std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
+    bibi(&path, &["add", "-f", "library.bib"]);
+    let output = bibi(&path, &["fetch", "notes:2026", "--url"]);
+    assert_eq!(code(&output), 1);
+    assert!(stderr(&output).contains("no arXiv identifier"));
+}
+
+#[test]
+fn cache_clean_previews_before_it_removes_and_needs_to_be_told_which() {
+    let (_directory, path) = project();
+    let cache = path.join("cache/bibi/documents/arxiv/1207.7214");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join("paper.pdf"), "%PDF-1.7\n").unwrap();
+
+    let preview = bibi(&path, &["cache", "clean", "--dry-run"]);
+    assert_eq!(code(&preview), 0);
+    assert!(stderr(&preview).contains("would remove 1 file"));
+    assert!(cache.join("paper.pdf").exists());
+
+    let removed = bibi(&path, &["cache", "clean", "--all"]);
+    assert_eq!(code(&removed), 0);
+    assert!(stderr(&removed).contains("removed 1 file"));
+    assert!(!path.join("cache/bibi/documents").exists());
+    // The cache root itself is shared with the platform, so it survives.
+    assert!(path.join("cache/bibi").exists());
+
+    // Neither flag is a usage error: eviction is never implicit.
+    assert_eq!(code(&bibi(&path, &["cache", "clean"])), 2);
 }

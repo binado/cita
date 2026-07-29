@@ -1,6 +1,7 @@
 //! One module per command: Clap arguments in, a rendered report out.
 
 pub mod add;
+pub mod documents;
 pub mod export;
 pub mod init;
 pub mod list;
