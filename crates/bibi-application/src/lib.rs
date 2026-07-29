@@ -16,9 +16,9 @@
 #![warn(missing_docs)]
 
 mod add;
+mod check;
 mod documents;
 mod error;
-mod export;
 mod list;
 mod records;
 mod render;
@@ -44,9 +44,9 @@ pub use add::{
     AddFileRequest, AddKind, AddReport, AddRequest, AddedRecord, InputSource, add_file,
     add_locators,
 };
+pub use check::{CheckOutcome, check};
 pub use documents::{FetchRequest, FetchTarget, clean_cache, fetch};
 pub use error::Error;
-pub use export::{CheckOutcome, DEFAULT_OUTPUT, ExportReport, ExportRequest, check, export};
 pub use list::{ListJsonRecord, ListRequest, list, to_json, to_keys};
 pub use records::{RemoveReport, RemovedRecord, init, remove, rename, show};
 pub use render::{RenderOptions, render_manifest, render_records};
@@ -56,4 +56,4 @@ pub use sync::{
     IdentifierAddition, RefreshedRecord, SyncAbsence, SyncAbsenceReason, SyncReport, SyncRequest,
     sync,
 };
-pub use target::{CACHE_ROOT_ENV, MANIFEST_NAME, PlatformPaths, TargetResolver, output};
+pub use target::{CACHE_ROOT_ENV, MANIFEST_NAME, PlatformPaths, TargetResolver};

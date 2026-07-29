@@ -93,18 +93,6 @@ impl TargetResolver {
     }
 }
 
-/// Resolve an output path against the manifest's own directory.
-///
-/// With `-p other/bibi.toml`, a rendered bibliography is written beside that
-/// manifest rather than beside the shell's working directory.
-pub fn output(store: &ManifestStore, path: &Path) -> PathBuf {
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        store.directory().join(path)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,11 +114,6 @@ mod tests {
         let store = resolver.resolve(Some(Path::new("other/bibi.toml")));
         assert_eq!(store.path(), Path::new("/work/project/other/bibi.toml"));
         assert_eq!(store.directory(), Path::new("/work/project/other"));
-        // Outputs follow the manifest, not the shell.
-        assert_eq!(
-            output(&store, Path::new("references.bib")),
-            Path::new("/work/project/other/references.bib")
-        );
     }
 
     #[test]

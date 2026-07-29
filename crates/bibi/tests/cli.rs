@@ -322,19 +322,30 @@ fn structural_flag_conflicts_are_clap_usage_errors() {
     }
 }
 
+/// What a shell does with `bibi list --format bibtex > <name>`.
+///
+/// bibi writes no bibliography itself, so every materialized `.bib` in these
+/// tests is produced the way a user produces one: by redirecting stdout.
+fn render_to(path: &Path, name: &str, filters: &[&str]) -> Output {
+    let mut args = vec!["list", "--format", "bibtex"];
+    args.extend_from_slice(filters);
+    let output = bibi(path, &args);
+    std::fs::write(path.join(name), stdout(&output)).unwrap();
+    output
+}
+
 #[test]
-fn export_writes_a_bibliography_and_check_verifies_it() {
+fn a_rendered_bibliography_is_what_check_verifies() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
     bibi(&path, &["add", "-f", "library.bib"]);
 
-    // A bibliography is written only when asked for: adding wrote no .bib.
+    // A bibliography exists only once a shell writes one: adding wrote no .bib,
+    // and neither does anything else bibi offers.
     assert!(!path.join("references.bib").exists());
 
-    let exported = bibi(&path, &["export"]);
-    assert_eq!(code(&exported), 0);
-    assert_eq!(stdout(&exported), "", "the result is the file");
-    assert!(stderr(&exported).contains("wrote 2 record(s)"));
+    let rendered = render_to(&path, "references.bib", &[]);
+    assert_eq!(code(&rendered), 0);
     assert_eq!(
         std::fs::read_to_string(path.join("references.bib")).unwrap(),
         LIBRARY.trim_end().to_owned() + "\n"
@@ -367,15 +378,17 @@ fn export_writes_a_bibliography_and_check_verifies_it() {
 }
 
 #[test]
-fn export_refuses_to_write_over_the_manifest() {
+fn there_is_no_command_that_writes_a_bibliography() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
     bibi(&path, &["add", "-f", "library.bib"]);
     let before = std::fs::read_to_string(path.join("bibi.toml")).unwrap();
 
-    let output = bibi(&path, &["export", "-o", "bibi.toml"]);
-    assert_eq!(code(&output), 1);
-    assert!(stderr(&output).contains("choose another output path"));
+    // `export` chose a destination, which is the shell's job now.
+    let output = bibi(&path, &["export"]);
+    assert_eq!(code(&output), 2);
+    assert!(!path.join("references.bib").exists());
+    // And with no destination to choose, nothing can be aimed at the manifest.
     assert_eq!(
         std::fs::read_to_string(path.join("bibi.toml")).unwrap(),
         before
@@ -383,12 +396,12 @@ fn export_refuses_to_write_over_the_manifest() {
 }
 
 #[test]
-fn export_filters_select_what_is_rendered() {
+fn filters_select_what_is_rendered_and_what_is_checked() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
     bibi(&path, &["add", "-f", "library.bib"]);
 
-    let output = bibi(&path, &["export", "-o", "subset.bib", "--year", "2026"]);
+    let output = render_to(&path, "subset.bib", &["--year", "2026"]);
     assert_eq!(code(&output), 0);
     let written = std::fs::read_to_string(path.join("subset.bib")).unwrap();
     assert!(written.contains("notes:2026"));
@@ -403,7 +416,7 @@ fn export_filters_select_what_is_rendered() {
 }
 
 #[test]
-fn export_and_check_honor_local() {
+fn rendering_and_check_honor_local() {
     let (_directory, path) = project();
     let server = TestServer::new(vec![
         hits(&[record(1124337, "Aad:2012tfa", "1207.7214", "Observation")]),
@@ -417,15 +430,38 @@ fn export_and_check_honor_local() {
     assert_eq!(code(&listed), 0);
     assert_eq!(stdout(&listed), "Mine\n");
 
-    let exported = bibi(&path, &["export", "-o", "local.bib", "--local"]);
-    assert_eq!(code(&exported), 0);
-    assert!(stderr(&exported).contains("wrote 1 record(s)"));
+    let rendered = render_to(&path, "local.bib", &["--local"]);
+    assert_eq!(code(&rendered), 0);
     let written = std::fs::read_to_string(path.join("local.bib")).unwrap();
     assert!(written.contains("@misc{Mine"));
     assert!(!written.contains("Aad:2012tfa"));
 
     assert_eq!(code(&bibi(&path, &["check", "local.bib", "--local"])), 0);
     assert_eq!(code(&bibi(&path, &["check", "local.bib"])), 1);
+}
+
+#[test]
+fn check_takes_a_provider_filter_like_list_does() {
+    let (_directory, path) = project();
+    let server = TestServer::new(vec![
+        hits(&[record(1124337, "Aad:2012tfa", "1207.7214", "Observation")]),
+        "@article{Aad:2012tfa,\n  title = {Observation}\n}\n".to_owned(),
+    ]);
+    bibi_against(&path, &server, &["add", "1207.7214"]);
+    std::fs::write(path.join("mine.bib"), "@misc{Mine,title={Mine}}\n").unwrap();
+    bibi(&path, &["add", "-f", "mine.bib", "--force-local"]);
+
+    render_to(&path, "inspire.bib", &["--provider", "inspire"]);
+    // `--provider` was excluded from the rendering filters only because on
+    // `export` it named the provider to sync. It is a plain filter now.
+    assert_eq!(
+        code(&bibi(
+            &path,
+            &["check", "inspire.bib", "--provider", "inspire"]
+        )),
+        0
+    );
+    assert_eq!(code(&bibi(&path, &["check", "inspire.bib"])), 1);
 }
 
 #[test]

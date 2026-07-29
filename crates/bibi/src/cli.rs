@@ -40,8 +40,6 @@ pub enum Command {
     Show(ShowArgs),
     /// Refresh managed records from their providers
     Sync(SyncArgs),
-    /// Render the bibliography
-    Export(ExportArgs),
     /// Verify a rendered bibliography against the manifest
     Check(CheckArgs),
     /// Retrieve a record's PDF or source package
@@ -109,7 +107,11 @@ pub struct ListArgs {
     pub filter: FilterArgs,
 }
 
-/// The listing filters, shared with the commands that render a bibliography.
+/// The filters that select records, shared by `list` and `check`.
+///
+/// One set, `--provider` included. The two were split while `export` existed,
+/// because there `--provider` named the provider to *sync* first and could not
+/// also mean a filter. Nothing names a provider to sync any more.
 #[derive(Args, Debug, Default)]
 pub struct FilterArgs {
     /// Only records owned by this provider
@@ -193,42 +195,6 @@ pub struct SyncArgs {
     pub dry_run: bool,
 }
 
-/// The filters a rendered bibliography may be narrowed by.
-///
-/// Deliberately without `--provider`: on `export` that flag names the provider
-/// to sync first and must never limit what is rendered, and `check` has to
-/// accept exactly the options `export` does or the two could never agree.
-#[derive(Args, Debug, Default)]
-pub struct RenderFilterArgs {
-    /// Only records with this substring in an author or collaboration
-    #[arg(long, value_name = "TEXT")]
-    pub author: Option<String>,
-    /// Only records with this substring in the title
-    #[arg(long, value_name = "TEXT")]
-    pub title: Option<String>,
-    /// Only records from this year
-    #[arg(long, value_name = "YEAR")]
-    pub year: Option<i32>,
-    /// Only records no provider refreshes
-    #[arg(long)]
-    pub local: bool,
-}
-
-#[derive(Args, Debug)]
-pub struct ExportArgs {
-    /// Refresh this provider's records before rendering
-    #[arg(long, value_name = "NAME")]
-    pub provider: Option<String>,
-    /// Force the preliminary sync
-    #[arg(long, requires = "provider")]
-    pub force: bool,
-    /// Write here instead of `references.bib` beside the manifest
-    #[arg(short = 'o', long, value_name = "FILE")]
-    pub output: Option<PathBuf>,
-    #[command(flatten)]
-    pub filter: RenderFilterArgs,
-}
-
 #[derive(Args, Debug)]
 pub struct CheckArgs {
     /// The bibliography to verify
@@ -237,8 +203,9 @@ pub struct CheckArgs {
     /// Describe the first difference on drift
     #[arg(long)]
     pub diff: bool,
+    /// The same filters `list` selects with, so a filtered view can be verified
     #[command(flatten)]
-    pub filter: RenderFilterArgs,
+    pub filter: FilterArgs,
 }
 
 #[derive(Args, Debug)]

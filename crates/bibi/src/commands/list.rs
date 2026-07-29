@@ -1,7 +1,7 @@
 //! `bibi list`.
 
 use crate::{
-    cli::{FilterArgs, ListArgs, ListFormat, RenderFilterArgs},
+    cli::{FilterArgs, ListArgs, ListFormat},
     output,
 };
 use anyhow::Result;
@@ -25,17 +25,6 @@ pub fn filter(services: &Services, args: &FilterArgs) -> Result<RecordFilter> {
         title: args.title.clone(),
         year: args.year,
     })
-}
-
-/// The same, for the narrower set a rendered bibliography accepts.
-pub fn render_filter(services: &Services, args: &RenderFilterArgs) -> RecordFilter {
-    RecordFilter {
-        provider: None,
-        unrefreshable_providers: args.local.then(|| services.providers.unrefreshable_names()),
-        author: args.author.clone(),
-        title: args.title.clone(),
-        year: args.year,
-    }
 }
 
 pub fn run(services: &Services, target: Option<&Path>, args: ListArgs) -> Result<bool> {
