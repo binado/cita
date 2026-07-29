@@ -89,6 +89,8 @@ dependencies = [
  "clap",
  "clap_complete",
  "opener",
+ "serde_json",
+ "tempfile",
  "terminal_size",
  "tokio",
 ]
@@ -105,7 +107,9 @@ dependencies = [
  "directories",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -175,6 +179,7 @@ dependencies = [
  "bibi-bibtex",
  "bibi-core",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

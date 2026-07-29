@@ -12,3 +12,6 @@ authors.workspace = true
 bibi-bibtex = { workspace = true }
 bibi-core = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
