@@ -1,0 +1,40 @@
+schema = 1
+
+[[records]]
+id = "d760f219-9098-4b49-9f62-10cbbcc22b11"
+key = "Aad:2012tfa"
+provider = "inspire"
+provider_id = "1124337"
+revision = "2026-07-27T12:34:56+00:00"
+doi = "10.1016/j.physletb.2012.08.020"
+arxiv = "1207.7214"
+title = "Observation of a new particle"
+authors = [
+    "Aad, G.",
+    "Abajyan, T.",
+]
+collaborations = ["ATLAS"]
+year = 2012
+bibtex = """
+@article{Aad:2012tfa,
+  author = {Aad, Georges and others},
+  collaboration = {ATLAS},
+  title = {{Observation of a new particle}},
+  eprint = {1207.7214},
+  doi = {10.1016/j.physletb.2012.08.020},
+  year = {2012}
+}"""
+
+[[records]]
+id = "8f14e45f-ceea-467a-9f38-a2f2b1a1f1c9"
+key = "Zenodo:2024"
+provider = "local"
+title = "A tool"
+authors = []
+collaborations = []
+bibtex = """
+@software{upstream-key,
+  title = {A tool},
+  author = {Roe, Richard},
+  year = 2024
+}"""
