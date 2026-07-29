@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use bibi_application::domain::ManifestStore;
 use bibi_application::{PlatformPaths, Services, TargetResolver, TargetSelection};
+use bibi_inspire::{InspireProvider, Transport};
 use bibi_provider::{LocalProvider, Provider, ProviderRegistry};
 use std::sync::Arc;
 
@@ -15,8 +16,37 @@ use std::sync::Arc;
 ///
 /// No provider is selected by a `match` inside command code; adding one is a
 /// new crate plus one line here.
+/// A test-only override for INSPIRE's base URL.
+///
+/// The CLI suite drives the binary against a local listener through this, so
+/// that command-level tests stay hermetic. It is not a configuration surface:
+/// v1 ships no configuration file, and nothing about ordinary use reads it.
+pub const INSPIRE_BASE_URL_ENV: &str = "BIBI_INSPIRE_BASE_URL";
+
 pub fn providers() -> Result<ProviderRegistry> {
-    let providers: Vec<Arc<dyn Provider>> = vec![Arc::new(LocalProvider::new())];
+    let mut builder = Transport::builder();
+    if let Some(base_url) = std::env::var_os(INSPIRE_BASE_URL_ENV).filter(|value| !value.is_empty())
+    {
+        builder = builder.base_url(base_url.to_string_lossy().into_owned());
+    }
+    let transport = builder
+        // Retries are reported as they happen: a command that pauses for five
+        // seconds should say why rather than appear to hang.
+        .on_retry(|event| {
+            crate::output::warn(format!(
+                "rate limited; retrying in {}s ({}/{}): {}",
+                event.delay.as_secs(),
+                event.attempt,
+                event.max_retries,
+                event.resource
+            ));
+        })
+        .build()
+        .context("building the INSPIRE client")?;
+    let providers: Vec<Arc<dyn Provider>> = vec![
+        Arc::new(InspireProvider::with_transport(transport)),
+        Arc::new(LocalProvider::new()),
+    ];
     Ok(ProviderRegistry::new(providers))
 }
 

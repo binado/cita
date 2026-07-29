@@ -1,4 +1,11 @@
 //! The compiled binary: exit status, exact stdout, and files on disk.
+//!
+//! Provider-backed commands run against a local listener through the test-only
+//! base-URL override, so the suite never depends on the real network.
+
+mod support;
+
+use support::{TestServer, hits, record};
 
 use std::{
     path::{Path, PathBuf},
@@ -194,14 +201,83 @@ fn the_global_manifest_is_an_ordinary_project_at_a_fixed_path() {
     assert!(!path.join("bibi.toml").exists(), "-g selects a target only");
 }
 
+/// Run `bibi` with INSPIRE pointed at a local listener.
+fn bibi_against(directory: &Path, server: &TestServer, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_bibi"))
+        .current_dir(directory)
+        .env("BIBI_GLOBAL_MANIFEST", directory.join("global.toml"))
+        .env("BIBI_INSPIRE_BASE_URL", &server.base_url)
+        .args(args)
+        .output()
+        .expect("running bibi")
+}
+
 #[test]
-fn a_locator_no_installed_provider_holds_is_an_item_failure() {
+fn adding_a_locator_adopts_the_providers_texkey_and_stores_its_bibtex() {
     let (_directory, path) = project();
-    // This build carries only the local provider, which resolves nothing.
-    let output = bibi(&path, &["add", "1207.7214"]);
+    let server = TestServer::new(vec![
+        hits(&[record(
+            1124337,
+            "Aad:2012tfa",
+            "1207.7214",
+            "Observation of a new particle",
+        )]),
+        "@article{Aad:2012tfa,\n  title = {Observation of a new particle}\n}\n".to_owned(),
+    ]);
+
+    let output = bibi_against(&path, &server, &["add", "1207.7214"]);
+    assert_eq!(code(&output), 0);
+    assert!(stdout(&output).starts_with("@article{Aad:2012tfa,"));
+
+    // The record is provider-owned, with a handle and a token to refresh by.
+    let json = bibi(&path, &["list", "--format", "json"]);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout(&json)).unwrap();
+    assert_eq!(parsed[0]["key"], "Aad:2012tfa");
+    assert_eq!(parsed[0]["provider"], "inspire");
+    assert_eq!(parsed[0]["provider_id"], "1124337");
+    assert_eq!(parsed[0]["revision"], "2026-01-01T00:00:00+00:00");
+    assert_eq!(parsed[0]["arxiv"], "1207.7214");
+    assert_eq!(parsed[0]["collaborations"][0], "ATLAS");
+    // Two requests: one structured search, one BibTeX search.
+    assert_eq!(server.requests().len(), 2);
+}
+
+#[test]
+fn a_locator_no_provider_holds_is_an_item_failure() {
+    let (_directory, path) = project();
+    let server = TestServer::new(vec![hits(&[])]);
+    let output = bibi_against(&path, &server, &["add", "2401.99999"]);
     assert_eq!(code(&output), 1);
     assert!(stderr(&output).contains("no provider holds a record"));
     assert!(!path.join("bibi.toml").exists());
+}
+
+#[test]
+fn an_imported_entry_a_provider_holds_is_upgraded_but_keeps_its_key() {
+    let (_directory, path) = project();
+    let server = TestServer::new(vec![
+        hits(&[record(
+            1124337,
+            "Aad:2012tfa",
+            "1207.7214",
+            "Observation of a new particle",
+        )]),
+        "@article{Aad:2012tfa,\n  title = {Provider formatting}\n}\n".to_owned(),
+    ]);
+    std::fs::write(
+        path.join("colleague.bib"),
+        "@article{TheirKey:2012,\n  title = {Their formatting},\n  eprint = {1207.7214}\n}\n",
+    )
+    .unwrap();
+
+    let output = bibi_against(&path, &server, &["add", "-f", "colleague.bib"]);
+    assert_eq!(code(&output), 0);
+    // The colleague's citation key survives; the provider's bytes replace theirs.
+    assert!(stdout(&output).contains("@article{TheirKey:2012,"));
+    assert!(stdout(&output).contains("Provider formatting"));
+    let manifest = std::fs::read_to_string(path.join("bibi.toml")).unwrap();
+    assert!(manifest.contains("provider = \"inspire\""));
+    assert!(manifest.contains("@article{Aad:2012tfa,"));
 }
 
 #[test]
