@@ -5,5 +5,6 @@ pub mod check;
 pub mod documents;
 pub mod init;
 pub mod list;
+pub mod provider;
 pub mod records;
 pub mod sync;

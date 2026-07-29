@@ -1,9 +1,11 @@
 //! stdout carries the result; stderr carries everything meant for a human.
 
+use crate::cli::Field;
 use anstyle::{AnsiColor, Style};
 use anyhow::Context;
 use bibi_application::domain::Record;
 use bibi_application::{BatchReport, ItemFailure, SkippedItem};
+use bibi_documents::{ArtifactKind, public_url};
 use std::io::{IsTerminal, Write};
 
 /// Write a command's result to stdout.
@@ -98,6 +100,66 @@ pub fn table(records: &[Record]) -> String {
         ));
     }
     rendered
+}
+
+/// Render one tab-separated line per record, in the order the fields were given.
+///
+/// Line-oriented output for a pipeline, so an absent value is an empty column
+/// rather than a skipped line: dropping a line would desynchronize the output
+/// from the records it describes, and every `paste`, `cut`, or `xargs` reading
+/// it would silently pair the wrong values. With one field this is a bare
+/// column, which is what makes `--fields key` a drop-in for a shell loop.
+///
+/// Nothing here is truncated or aligned. That is the difference between this
+/// and [`table`]: a table is for a person looking at a terminal, and these
+/// bytes are for another program.
+pub fn fields(records: &[Record], fields: &[Field]) -> anyhow::Result<String> {
+    let mut rendered = String::new();
+    for record in records {
+        for (at, field) in fields.iter().enumerate() {
+            if at > 0 {
+                rendered.push('\t');
+            }
+            rendered.push_str(&value(record, *field)?);
+        }
+        rendered.push('\n');
+    }
+    Ok(rendered)
+}
+
+/// One field of one record, absent rendering as the empty string.
+fn value(record: &Record, field: Field) -> anyhow::Result<String> {
+    let rendered = match field {
+        Field::Key => record.key.to_string(),
+        Field::Title => record.description.title.clone(),
+        Field::Year => record
+            .description
+            .year
+            .map(|year| year.to_string())
+            .unwrap_or_default(),
+        Field::Provider => record.provenance.provider.to_string(),
+        Field::Doi => record
+            .identifiers
+            .doi
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        Field::Arxiv => record
+            .identifiers
+            .arxiv
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        // The URL `fetch --url` would print, derived rather than stored. Pure:
+        // it builds an address and retrieves nothing.
+        Field::ArxivUrl => match &record.identifiers.arxiv {
+            None => String::new(),
+            Some(arxiv) => public_url(arxiv, ArtifactKind::Pdf)
+                .context("building an arXiv URL")?
+                .to_string(),
+        },
+    };
+    Ok(rendered)
 }
 
 fn truncate(value: &str, width: usize) -> String {

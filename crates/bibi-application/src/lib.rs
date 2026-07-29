@@ -36,7 +36,7 @@ pub mod domain {
     pub use bibi_bibtex::CitationKey;
     pub use bibi_core::{ProviderName, Record, RecordFilter, Selector};
     pub use bibi_documents::ArtifactClient;
-    pub use bibi_manifest::ManifestStore;
+    pub use bibi_manifest::{Manifest, ManifestStore};
 }
 
 pub use add::{
@@ -46,7 +46,7 @@ pub use add::{
 pub use check::{CheckOutcome, check};
 pub use documents::{FetchRequest, FetchTarget, fetch};
 pub use error::Error;
-pub use list::{ListJsonRecord, ListRequest, list, to_json, to_keys};
+pub use list::{ListJsonRecord, ListRequest, list, to_json};
 pub use records::{RemoveReport, RemovedRecord, init, remove, rename, show};
 pub use render::{RenderOptions, render_manifest, render_records};
 pub use reports::{BatchReport, ItemFailure, SkipReason, SkippedItem};

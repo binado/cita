@@ -26,6 +26,7 @@ cargo doc --workspace --no-deps          # CI runs this with -D warnings
 cargo run -p bibi -- add 1207.7214
 cargo run -p bibi -- add -f local.bib
 cargo run -p bibi -- list --format json
+cargo run -p bibi -- list --fields key,year,arxiv-url
 cargo run -p bibi -- sync
 cargo run -p bibi -- list --format bibtex > references.bib
 cargo run -p bibi -- check references.bib
@@ -163,6 +164,18 @@ the shell decides whether and where that becomes a file, which is what keeps a
 operations; nothing renders and refreshes in one command. `list` and `check`
 share one filter set, `--provider` included, so a filtered view can be rendered
 and then verified under the same options.
+
+`--format` says how to encode a listing; `--fields` says what to put in it, as
+tab-separated columns. They are mutually exclusive. `--fields arxiv-url` is how
+a shell downloads a selection in bulk, which is what keeps `fetch` a command
+that acquires one file rather than a downloader.
+
+**`--provider` accepts a provider this build carries *or* one the manifest
+already names.** Filtering never has to *call* a provider, so a manifest written
+by a later build stays filterable by an older one; but a name neither knows is
+an error rather than an empty listing. `add` and `sync` do call the provider, so
+they require it to be installed. The grammar `ProviderName` enforces is never
+shown to a user — a rejected name is answered with the names that would work.
 
 stdout carries the command's result in its most pipeable form; stderr carries
 everything meant for a human. Skips exit zero, failures exit one, Clap usage

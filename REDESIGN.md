@@ -932,7 +932,7 @@ that binds the wrong record corrupts data.
 | `add -f <file>` | Resolve each entry; definitively absent entries become local (§6) | `--provider`, `--force-local`, `--overwrite` |
 | `remove <selector>…` | Delete records, emitting them | `--dry-run` |
 | `rename <selector> <key>` | Change a local citation key (I4) | |
-| `list` | Filtered listing | `--format {table,bibtex,json,keys}`, `--provider`, `--author`, `--title`, `--year`, `--local` |
+| `list` | Filtered listing | `--format {table,bibtex,json}`, `--fields <field>…`, `--provider`, `--author`, `--title`, `--year`, `--local` |
 | `show <selector>` | Emit the stored record as locally keyed BibTeX | |
 | `sync` | Conditional or forced refresh (§5) | `--provider <name>`, `--force`, `--dry-run` |
 | `export` | Optionally sync one provider, then render | `--provider <name>`, `--force`, `--output <path>`, filters |

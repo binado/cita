@@ -62,7 +62,7 @@ Rust 1.88 or newer.
 | `bibi add -f <file>` | Resolve each entry in a `.bib`; keep the rest as local records |
 | `bibi remove <selector>…` | Delete records, emitting what was deleted |
 | `bibi rename <selector> <key>` | Change a local citation key |
-| `bibi list` | List records as a table, `keys`, `bibtex`, or `json` |
+| `bibi list` | List records as a table, `bibtex`, or `json`, or as `--fields` columns |
 | `bibi show <selector>` | Emit one record as BibTeX |
 | `bibi sync` | Refresh what changed upstream |
 | `bibi check [bibfile]` | Verify a rendered bibliography, byte for byte |
@@ -91,6 +91,21 @@ nothing about whether a work exists.
 Duplicates are detected by DOI, arXiv id, and provider identity, and refused
 unless you pass `--overwrite`. A refused duplicate is a skip, not a failure:
 `bibi add <locator> && make` proceeds when the reference was already there.
+
+### Listing
+
+`--format` says how to encode a listing; `--fields` says what to put in it, as
+tab-separated columns. An absent value is an empty column rather than a missing
+line, so the output stays aligned with the records it describes.
+
+```console
+$ bibi list --fields key
+$ bibi list --fields key,year,title --year 2024
+$ bibi list --fields arxiv-url | xargs -n1 curl -O   # the whole selection
+```
+
+That last one is why `fetch` never grew a bulk mode: the shell already knows how
+to run something over a list.
 
 ### Syncing
 

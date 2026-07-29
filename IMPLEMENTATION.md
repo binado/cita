@@ -1461,16 +1461,21 @@ records in local-key order. `--provider`, `--author`, `--title`, `--year`, and
 The `--local` filter asks the provider registry for the ingest-without-refresh
 capability; it does not compare the stored provider name with the string
 `"local"`. `--provider <name>`, by contrast, is a pure manifest query and never
-requires that provider to be installed: it compares stored provider names and
-returns an empty listing rather than an error. Only workflows that must *call* a
-provider report unavailability.
+requires that provider to be installed: it compares stored provider names, so a
+provider this build does not carry still filters to the records it owns. The
+binary checks the name against the providers it carries *plus* those the
+manifest already names, so a name nothing knows is reported rather than silently
+matching nothing. Only workflows that must *call* a provider — `add`, `sync` —
+require it to be installed.
 
 Output adapters:
 
 - `table`: rows sized/formatted by the binary;
-- `keys`: one local key per line;
 - `bibtex`: shared deterministic renderer;
-- `json`: a schema-1 `ListJsonRecord` array.
+- `json`: a schema-1 `ListJsonRecord` array;
+- `--fields <field>…`: tab-separated columns, one line per record, absent values
+  rendered as empty columns. Mutually exclusive with `--format`, since a format
+  says how to encode and a field says what to include.
 
 `ListJsonRecord` contains exactly the fields specified in `REDESIGN.md` and
 never contains payload. Optional values serialize as JSON `null`. The

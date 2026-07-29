@@ -2,7 +2,7 @@
 
 use crate::error::Error;
 use bibi_core::{Record, RecordFilter};
-use bibi_manifest::ManifestStore;
+use bibi_manifest::Manifest;
 use serde::Serialize;
 
 /// Which records to list.
@@ -12,16 +12,22 @@ pub struct ListRequest {
     pub filter: RecordFilter,
 }
 
-/// Load and filter, returning records in local-key order.
+/// Filter a loaded manifest, returning records in local-key order.
 ///
-/// `--provider <name>` is a pure manifest query: the named provider need not be
-/// installed, and an uninstalled one yields an empty listing rather than an
-/// error, because listing never has to *call* it. `--local` is answered by the
-/// caller filling [`RecordFilter::unrefreshable_providers`] from the registry's
-/// capabilities, never by comparing a stored provider name with a literal.
-pub fn list(store: &ManifestStore, request: &ListRequest) -> Result<Vec<Record>, Error> {
-    let manifest = store.load()?.manifest;
-    Ok(manifest.filter(&request.filter).cloned().collect())
+/// Pure, like [`render_manifest`](crate::render_manifest): the caller loads the
+/// manifest, so listing has no I/O of its own and the same bytes always yield
+/// the same records.
+///
+/// Filtering by provider is a pure manifest query — an uninstalled provider
+/// simply matches nothing here, because listing never has to *call* it. Whether
+/// naming such a provider is *useful* is the adapter's question, and the binary
+/// answers it before building the filter by checking the name against the
+/// providers it carries plus those this manifest already names. `--local` is
+/// answered by the caller filling [`RecordFilter::unrefreshable_providers`]
+/// from the registry's capabilities, never by comparing a stored provider name
+/// with a literal.
+pub fn list(manifest: &Manifest, request: &ListRequest) -> Vec<Record> {
+    manifest.filter(&request.filter).cloned().collect()
 }
 
 /// The stable schema-1 JSON shape of one record.
@@ -80,13 +86,4 @@ pub fn to_json(records: &[Record]) -> Result<String, Error> {
     let mut rendered = serde_json::to_string_pretty(&projected)?;
     rendered.push('\n');
     Ok(rendered)
-}
-
-/// One local key per line.
-pub fn to_keys(records: &[Record]) -> String {
-    records
-        .iter()
-        .map(|record| record.key.to_string())
-        .map(|key| key + "\n")
-        .collect()
 }

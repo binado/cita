@@ -7,7 +7,7 @@
 
 use bibi_application::{
     AddRequest, CheckOutcome, RenderOptions, Services, SyncRequest, add_locators, check,
-    domain::ManifestStore, render_manifest, sync,
+    domain::Manifest, domain::ManifestStore, render_manifest, sync,
 };
 use bibi_core::{ProviderName, RecordFilter};
 use bibi_provider::{
@@ -34,6 +34,11 @@ impl Project {
 
     fn store(&self) -> ManifestStore {
         ManifestStore::new(self.directory.path().join("bibi.toml"))
+    }
+
+    /// The manifest as the commands see it, loaded fresh.
+    fn loaded(&self) -> Manifest {
+        self.store().load().unwrap().manifest
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -177,19 +182,19 @@ async fn check_matches_drifts_and_reports_a_missing_file_as_missing() {
 
     // Missing is its own answer, not drift against nothing.
     assert!(matches!(
-        check(&project.store(), &bibliography, &RenderOptions::default()).unwrap(),
+        check(&project.loaded(), &bibliography, &RenderOptions::default()).unwrap(),
         CheckOutcome::Missing { .. }
     ));
 
     std::fs::write(&bibliography, project.render(RecordFilter::default())).unwrap();
     assert!(matches!(
-        check(&project.store(), &bibliography, &RenderOptions::default()).unwrap(),
+        check(&project.loaded(), &bibliography, &RenderOptions::default()).unwrap(),
         CheckOutcome::Match { .. }
     ));
 
     // A hand edit to the rendered file is drift.
     std::fs::write(&bibliography, "@article{Alpha:2012,title={Edited}}\n").unwrap();
-    let outcome = check(&project.store(), &bibliography, &RenderOptions::default()).unwrap();
+    let outcome = check(&project.loaded(), &bibliography, &RenderOptions::default()).unwrap();
     let CheckOutcome::Drift { summary, .. } = &outcome else {
         panic!("expected drift, got {outcome:?}");
     };
@@ -220,12 +225,12 @@ async fn check_accepts_the_filters_the_rendering_was_made_with() {
         filter: filter.clone(),
     };
     assert!(matches!(
-        check(&project.store(), &subset, &options).unwrap(),
+        check(&project.loaded(), &subset, &options).unwrap(),
         CheckOutcome::Match { .. }
     ));
     // And drifts against the unfiltered rendering, which holds one more record.
     assert!(matches!(
-        check(&project.store(), &subset, &RenderOptions::default()).unwrap(),
+        check(&project.loaded(), &subset, &RenderOptions::default()).unwrap(),
         CheckOutcome::Drift { .. }
     ));
 }
@@ -255,7 +260,7 @@ async fn a_manifest_change_makes_a_previously_matching_bibliography_drift() {
     // The file the user committed is now stale, and `check` is how that
     // boundary is covered without making the file maintained state.
     assert!(matches!(
-        check(&project.store(), &bibliography, &RenderOptions::default()).unwrap(),
+        check(&project.loaded(), &bibliography, &RenderOptions::default()).unwrap(),
         CheckOutcome::Drift { .. }
     ));
 }

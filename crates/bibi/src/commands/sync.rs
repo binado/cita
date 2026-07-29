@@ -2,7 +2,7 @@
 
 use crate::{cli::SyncArgs, output};
 use anyhow::Result;
-use bibi_application::{Services, SyncReport, SyncRequest, domain::ProviderName, sync};
+use bibi_application::{Services, SyncReport, SyncRequest, sync};
 use std::path::Path;
 
 pub async fn run(services: &Services, target: Option<&Path>, args: SyncArgs) -> Result<bool> {
@@ -14,7 +14,7 @@ pub async fn run(services: &Services, target: Option<&Path>, args: SyncArgs) -> 
             provider: args
                 .provider
                 .as_deref()
-                .map(ProviderName::new)
+                .map(|value| crate::commands::provider::installed(value, &services.providers))
                 .transpose()?,
             force: args.force,
             dry_run: args.dry_run,

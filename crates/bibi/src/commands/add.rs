@@ -2,7 +2,7 @@
 
 use crate::{cli::AddArgs, output};
 use anyhow::{Result, bail};
-use bibi_application::domain::{CitationKey, ProviderName};
+use bibi_application::domain::CitationKey;
 use bibi_application::{
     AddFileRequest, AddKind, AddReport, AddRequest, InputSource, Services, add_file, add_locators,
 };
@@ -13,7 +13,7 @@ pub async fn run(services: &Services, target: Option<&Path>, args: AddArgs) -> R
     let provider = args
         .provider
         .as_deref()
-        .map(ProviderName::new)
+        .map(|value| crate::commands::provider::installed(value, &services.providers))
         .transpose()?;
 
     let report = match &args.file {

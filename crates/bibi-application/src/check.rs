@@ -11,7 +11,7 @@ use crate::{
     error::Error,
     render::{RenderOptions, render_manifest},
 };
-use bibi_manifest::ManifestStore;
+use bibi_manifest::Manifest;
 use std::path::{Path, PathBuf};
 
 /// Whether a rendered bibliography still matches the manifest.
@@ -52,12 +52,11 @@ impl CheckOutcome {
 /// Always offline, and it never writes either file: a check that could mutate
 /// would not be a check.
 pub fn check(
-    store: &ManifestStore,
+    manifest: &Manifest,
     path: &Path,
     options: &RenderOptions,
 ) -> Result<CheckOutcome, Error> {
-    let manifest = store.load()?.manifest;
-    let expected = render_manifest(&manifest, options)?;
+    let expected = render_manifest(manifest, options)?;
     let found = match std::fs::read_to_string(path) {
         Ok(found) => found,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

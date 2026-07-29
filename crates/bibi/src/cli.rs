@@ -100,6 +100,15 @@ pub struct ListArgs {
     /// How to present the listing
     #[arg(long, value_enum, default_value_t = ListFormat::Table)]
     pub format: ListFormat,
+    /// Emit these fields as tab-separated columns
+    #[arg(
+        long,
+        value_enum,
+        value_delimiter = ',',
+        value_name = "FIELD",
+        conflicts_with = "format"
+    )]
+    pub fields: Vec<Field>,
     #[command(flatten)]
     pub filter: FilterArgs,
 }
@@ -132,12 +141,33 @@ pub struct FilterArgs {
 pub enum ListFormat {
     /// A human-readable table
     Table,
-    /// One citation key per line
-    Keys,
     /// The stored entries, as a bibliography
     Bibtex,
     /// The schema-1 metadata projection
     Json,
+}
+
+/// One column of a `--fields` listing.
+///
+/// A format says how to encode a listing; a field says what to put in it. They
+/// are different questions, which is why one citation key per line is
+/// `--fields key` rather than a fourth member of [`ListFormat`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum Field {
+    /// The local citation key
+    Key,
+    /// The title
+    Title,
+    /// The publication year
+    Year,
+    /// The owning provider
+    Provider,
+    /// The DOI
+    Doi,
+    /// The arXiv identifier
+    Arxiv,
+    /// The public arXiv PDF URL, as `fetch --url` would print it
+    ArxivUrl,
 }
 
 #[derive(Args, Debug)]

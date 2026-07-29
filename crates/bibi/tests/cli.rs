@@ -97,12 +97,12 @@ fn adding_the_same_file_twice_skips_and_still_exits_zero() {
 }
 
 #[test]
-fn listing_formats_are_exactly_what_a_pipeline_expects() {
+fn listing_outputs_are_exactly_what_a_pipeline_expects() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
     bibi(&path, &["add", "-f", "library.bib"]);
 
-    let keys = bibi(&path, &["list", "--format", "keys"]);
+    let keys = bibi(&path, &["list", "--fields", "key"]);
     assert_eq!(stdout(&keys), "astropy:2022\nnotes:2026\n");
 
     let bibtex = bibi(&path, &["list", "--format", "bibtex"]);
@@ -114,8 +114,122 @@ fn listing_formats_are_exactly_what_a_pipeline_expects() {
     assert_eq!(parsed[0]["key"], "astropy:2022");
     assert!(parsed[0].get("bibtex").is_none());
 
-    let filtered = bibi(&path, &["list", "--format", "keys", "--author", "roe"]);
+    let filtered = bibi(&path, &["list", "--fields", "key", "--author", "roe"]);
     assert_eq!(stdout(&filtered), "notes:2026\n");
+}
+
+#[test]
+fn fields_are_tab_separated_and_an_absent_value_keeps_its_column() {
+    let (_directory, path) = project();
+    let server = TestServer::new(vec![
+        hits(&[record(1124337, "Aad:2012tfa", "1207.7214", "Observation")]),
+        "@article{Aad:2012tfa,\n  title = {Observation}\n}\n".to_owned(),
+    ]);
+    bibi_against(&path, &server, &["add", "1207.7214"]);
+    // A local entry carries no arXiv id, so its derived columns are empty.
+    std::fs::write(path.join("mine.bib"), "@misc{Mine,title={Mine}}\n").unwrap();
+    bibi(&path, &["add", "-f", "mine.bib", "--force-local"]);
+
+    let listed = bibi(&path, &["list", "--fields", "key,provider,arxiv,arxiv-url"]);
+    assert_eq!(code(&listed), 0);
+    assert_eq!(
+        stdout(&listed),
+        "Aad:2012tfa\tinspire\t1207.7214\thttps://arxiv.org/pdf/1207.7214\n\
+         Mine\tlocal\t\t\n"
+    );
+
+    // A repeated field is a repeated column, and order is the order given.
+    let reordered = bibi(&path, &["list", "--fields", "provider,key", "--local"]);
+    assert_eq!(stdout(&reordered), "local\tMine\n");
+}
+
+/// A manifest naming a provider this build does not carry.
+///
+/// Hand-written rather than produced by `add`, because there is no way to make
+/// this build create an `ads` record — which is the point: a manifest written
+/// by a later build has to remain readable by this one.
+const FOREIGN: &str = "schema = 1\n\n\
+    [[records]]\n\
+    id = \"7641d991-6a03-4795-b302-82b2c0cb3adc\"\n\
+    key = \"Someone:2030abc\"\n\
+    provider = \"ads\"\n\
+    provider_id = \"2030ApJ...900..1X\"\n\
+    title = \"A later build wrote this\"\n\
+    year = 2030\n\
+    bibtex = \"@article{Someone:2030abc,\\n  title = {A later build wrote this}\\n}\"\n";
+
+#[test]
+fn an_unknown_provider_names_the_ones_that_would_have_worked() {
+    let (_directory, path) = project();
+    std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
+    bibi(&path, &["add", "-f", "library.bib"]);
+
+    // Wrong case is the common mistake, and the grammar that rejects it is not
+    // the user's problem — the names that would work are.
+    let shouted = bibi(&path, &["list", "--provider", "TEST"]);
+    assert_eq!(code(&shouted), 1);
+    assert_eq!(
+        stderr(&shouted).trim_end(),
+        "bibi: provider `TEST` not found. Known providers: inspire, local"
+    );
+    assert!(!stderr(&shouted).contains("[a-z]"), "no regex is shown");
+
+    // A well-formed name nothing knows is the same mistake, not an empty list.
+    let absent = bibi(&path, &["list", "--provider", "ads"]);
+    assert_eq!(code(&absent), 1);
+    assert!(stdout(&absent).is_empty());
+    assert!(stderr(&absent).contains("provider `ads` not found"));
+
+    // `check` shares the filter, so it shares the check.
+    let checked = bibi(&path, &["check", "--provider", "ads"]);
+    assert_eq!(code(&checked), 1);
+    assert!(stderr(&checked).contains("provider `ads` not found"));
+}
+
+#[test]
+fn a_provider_only_the_manifest_knows_is_still_filterable() {
+    let (_directory, path) = project();
+    std::fs::write(path.join("bibi.toml"), FOREIGN).unwrap();
+
+    // This build carries no `ads` provider and cannot refresh the record, but
+    // the record is here, so filtering to it is a question with an answer.
+    let listed = bibi(&path, &["list", "--provider", "ads", "--fields", "key"]);
+    assert_eq!(code(&listed), 0);
+    assert_eq!(stdout(&listed), "Someone:2030abc\n");
+
+    // Naming it where it must actually be called still fails, and says why.
+    let synced = bibi(&path, &["sync", "--provider", "ads"]);
+    assert_eq!(code(&synced), 1);
+    assert_eq!(
+        stderr(&synced).trim_end(),
+        "bibi: provider `ads` not found. Installed providers: inspire, local"
+    );
+
+    // `add` refuses before it resolves anything: no base URL is configured
+    // here, so reaching the network at all would hang or fail differently.
+    let added = bibi(&path, &["add", "--provider", "ads", "1207.7214"]);
+    assert_eq!(code(&added), 1);
+    assert!(stderr(&added).contains("Installed providers: inspire, local"));
+}
+
+#[test]
+fn fields_and_format_are_mutually_exclusive() {
+    let (_directory, path) = project();
+    std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
+    bibi(&path, &["add", "-f", "library.bib"]);
+
+    // Clap owns this one: a format says how to encode, a field says what to
+    // include, and asking for both at once has no answer.
+    let both = bibi(&path, &["list", "--fields", "key", "--format", "json"]);
+    assert_eq!(code(&both), 2);
+
+    // The default format must not count as having been given.
+    let alone = bibi(&path, &["list", "--fields", "key"]);
+    assert_eq!(code(&alone), 0);
+
+    let unknown = bibi(&path, &["list", "--fields", "titel"]);
+    assert_eq!(code(&unknown), 2);
+    assert!(stderr(&unknown).contains("possible values"));
 }
 
 #[test]
@@ -151,7 +265,7 @@ fn rename_rewrites_only_the_key_and_remove_emits_what_it_deleted() {
     assert_eq!(code(&removed), 0);
     assert!(stdout(&removed).contains("@unpublished{Roe:2026,"));
     assert_eq!(
-        stdout(&bibi(&path, &["list", "--format", "keys"])),
+        stdout(&bibi(&path, &["list", "--fields", "key"])),
         "astropy:2022\n"
     );
 }
@@ -170,7 +284,7 @@ fn removing_the_same_record_twice_is_a_successful_skip() {
     );
     assert!(stderr(&removed).contains("already removed"));
     assert_eq!(
-        stdout(&bibi(&path, &["list", "--format", "keys"])),
+        stdout(&bibi(&path, &["list", "--fields", "key"])),
         "astropy:2022\n"
     );
 }
@@ -207,7 +321,7 @@ fn an_explicit_path_targets_another_project_without_searching_upwards() {
     assert!(stderr(&output).contains("no manifest"));
 
     // The parent's manifest is reachable by naming it.
-    let explicit = bibi(&nested, &["list", "--format", "keys", "-p", "../bibi.toml"]);
+    let explicit = bibi(&nested, &["list", "--fields", "key", "-p", "../bibi.toml"]);
     assert_eq!(code(&explicit), 0);
     assert_eq!(stdout(&explicit), "astropy:2022\nnotes:2026\n");
 }
@@ -424,7 +538,7 @@ fn rendering_and_check_honor_local() {
     std::fs::write(path.join("mine.bib"), "@misc{Mine,title={Mine}}\n").unwrap();
     bibi(&path, &["add", "-f", "mine.bib", "--force-local"]);
 
-    let listed = bibi(&path, &["list", "--format", "keys", "--local"]);
+    let listed = bibi(&path, &["list", "--fields", "key", "--local"]);
     assert_eq!(code(&listed), 0);
     assert_eq!(stdout(&listed), "Mine\n");
 

@@ -7,12 +7,13 @@ use std::path::Path;
 
 pub fn run(services: &Services, target: Option<&Path>, args: CheckArgs) -> Result<bool> {
     let store = crate::bootstrap::store(target)?;
+    let manifest = store.load()?.manifest;
     let path = crate::bootstrap::resolver()?.input(&args.bibfile);
     let outcome = check(
-        &store,
+        &manifest,
         &path,
         &RenderOptions {
-            filter: crate::commands::list::filter(services, &args.filter)?,
+            filter: crate::commands::list::filter(services, &manifest, &args.filter)?,
         },
     )?;
     match &outcome {

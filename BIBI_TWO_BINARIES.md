@@ -147,9 +147,10 @@ the strongest reason to reconsider a dedicated file-writing command.
 
 ```text
 bibi list
-bibi list --format keys
 bibi list --format json
 bibi list --format bibtex
+bibi list --fields key
+bibi list --fields key,year,arxiv-url
 ```
 
 It retains these lightweight, project-local filters:
@@ -169,9 +170,14 @@ language.
 The supported formats are:
 
 - `table`, the default human-readable view;
-- `keys`, one local citation key per line;
 - `json`, the stable metadata-only automation view;
 - `bibtex`, the deterministic rendering of the selected records.
+
+A format says how to encode a listing; `--fields` says what to put in it, as
+tab-separated columns drawn from `key`, `title`, `year`, `provider`, `doi`,
+`arxiv`, and `arxiv-url`. `--fields key` is one citation key per line, and
+`--fields arxiv-url` is how a shell downloads a selection in bulk — which is
+what keeps `fetch` a command that acquires one file rather than a downloader.
 
 `show` remains distinct because it resolves exactly one selector and emits
 exactly one locally re-keyed BibTeX entry.
