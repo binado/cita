@@ -61,13 +61,22 @@ pub enum Error {
     /// A stored value is not a valid domain value.
     #[error("record `{key}` has an invalid `{field}` field: {source}")]
     InvalidField {
-        /// The record's local key, or its id when the key itself is invalid.
+        /// The record's local key.
         key: String,
         /// Which field was rejected.
         field: &'static str,
         /// The underlying failure.
         #[source]
         source: bibi_core::Error,
+    },
+    /// A record's `key` field is not a safe citation key.
+    #[error("record `{id}` has an invalid `key` field: {source}")]
+    InvalidKey {
+        /// The record's id, since its key is the invalid value.
+        id: String,
+        /// The underlying failure.
+        #[source]
+        source: bibi_bibtex::Error,
     },
     /// A stored payload is not one valid standalone entry.
     #[error("record `{key}` has an invalid payload: {source}")]

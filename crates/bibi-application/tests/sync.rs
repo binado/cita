@@ -330,7 +330,7 @@ async fn a_replaced_identifier_fails_its_record_while_an_added_one_is_reported()
     let mut gains_a_doi = provider_metadata("1", Some("r2"), "Title 1");
     gains_a_doi.identifiers.doi = Some(bibi_core::Doi::new("10.1/new").unwrap());
     let mut replaces_an_arxiv_id = provider_metadata("2", Some("r2"), "Title 2");
-    replaces_an_arxiv_id.identifiers.arxiv = Some(bibi_core::ArxivId::new("2999.99999").unwrap());
+    replaces_an_arxiv_id.identifiers.arxiv = Some(bibi_core::ArxivId::new("2912.99999").unwrap());
 
     let provider = Arc::new(
         FakeProvider::new("inspire")

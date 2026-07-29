@@ -110,8 +110,8 @@ impl RecordWire {
             move |source: bibi_core::Error| Error::InvalidField { key, field, source }
         };
         let id = BibiId::from_str(&self.id).map_err(field("id"))?;
-        let key = CitationKey::new(self.key.clone()).map_err(|source| Error::InvalidPayload {
-            key: label.clone(),
+        let key = CitationKey::new(self.key.clone()).map_err(|source| Error::InvalidKey {
+            id: self.id.clone(),
             source,
         })?;
         let payload =
@@ -242,6 +242,15 @@ mod tests {
                 field: "provider",
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn an_invalid_key_field_is_named_as_the_key_not_the_payload() {
+        let source = "schema = 1\n\n[[records]]\nid = \"d760f219-9098-4b49-9f62-10cbbcc22b11\"\nkey = \"bad key\"\nprovider = \"local\"\ntitle = \"T\"\nbibtex = \"@misc{K,title={T}}\"\n";
+        assert!(matches!(
+            parse(path(), source),
+            Err(Error::InvalidKey { .. })
         ));
     }
 }

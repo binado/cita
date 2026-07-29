@@ -64,11 +64,15 @@ pub async fn fetch(
             record.key
         ))
     })?;
+    // A URL is a function of the identifier and arXiv's public address alone,
+    // so reporting one must not require a usable cache root.
+    if request.url {
+        return Ok(FetchTarget::Url(
+            bibi_documents::pdf_url(&arxiv)?.to_string(),
+        ));
+    }
     let documents = services.documents()?;
 
-    if request.url {
-        return Ok(FetchTarget::Url(documents.pdf_url(&arxiv)?.to_string()));
-    }
     let kind = if request.source {
         ArtifactKind::Source
     } else {

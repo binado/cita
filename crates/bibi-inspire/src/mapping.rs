@@ -37,19 +37,32 @@ pub struct MappedRecord {
     pub texkeys: Vec<String>,
 }
 
+/// Parse a search response's envelope, leaving the hits unmapped.
+///
+/// Separate from [`map_search`] so a caller can map hits individually: one
+/// malformed record then fails on its own instead of failing every record the
+/// response carried. Only a response that cannot be read at all is an error
+/// here.
+pub(crate) fn parse_search(raw: &RawJson) -> Result<SearchResponse, MappingError> {
+    serde_json::from_str(raw.as_str()).map_err(|error| MappingError::InvalidValue {
+        provider: crate::error::provider(),
+        kind: "JSON response",
+        value: error.to_string(),
+    })
+}
+
 /// Map a search response into records, in response order.
 pub fn map_search(raw: &RawJson) -> Result<Vec<MappedRecord>, MappingError> {
-    let response: SearchResponse =
-        serde_json::from_str(raw.as_str()).map_err(|error| MappingError::InvalidValue {
-            provider: crate::error::provider(),
-            kind: "JSON response",
-            value: error.to_string(),
-        })?;
-    response.hits.hits.iter().map(map_record).collect()
+    parse_search(raw)?
+        .hits
+        .hits
+        .iter()
+        .map(map_record)
+        .collect()
 }
 
 /// Map one literature record.
-fn map_record(record: &LiteratureRecord) -> Result<MappedRecord, MappingError> {
+pub(crate) fn map_record(record: &LiteratureRecord) -> Result<MappedRecord, MappingError> {
     let id = record
         .record_id()
         .ok_or_else(|| error::missing_field("id"))?;

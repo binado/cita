@@ -20,4 +20,4 @@ pub use clean::{CleanMode, CleanReport};
 pub use error::Error;
 pub use path::{ArtifactKind, DOCUMENTS};
 pub use source::ArchiveLimits;
-pub use store::{DocumentStore, DocumentStoreBuilder, FetchOutcome, FetchPolicy};
+pub use store::{DocumentStore, DocumentStoreBuilder, FetchOutcome, FetchPolicy, pdf_url};

@@ -309,39 +309,43 @@ pub async fn verify_contract(provider: &dyn Provider, locators: &[Locator]) {
         "a provider that neither refreshes nor ingests can own no record"
     );
 
-    if let Ok(resolutions) = provider.resolve(locators).await {
-        assert_eq!(
-            resolutions.len(),
-            locators.len(),
-            "resolve must answer every locator, positionally"
-        );
-        for (locator, resolution) in locators.iter().zip(&resolutions) {
-            match resolution {
-                Resolution::Found(record) => {
-                    assert_eq!(
-                        record.provenance.provider, name,
-                        "a provider must name itself in the records it returns"
-                    );
-                    assert!(
-                        !capabilities.refresh || record.provenance.provider_id.is_some(),
-                        "a refreshing provider must supply a handle to refresh with"
-                    );
-                    assert!(
-                        record.provenance.revision.is_none()
-                            || record.provenance.provider_id.is_some(),
-                        "a revision without a provider id can never be used"
-                    );
-                    assert!(
-                        !record.description.title.trim().is_empty(),
-                        "a record with no title cannot be stored"
-                    );
-                }
-                Resolution::UnsupportedLocator => assert!(
-                    !capabilities.supports(locator),
-                    "a provider must resolve the locator kinds it declares"
-                ),
-                Resolution::NotFound => {}
+    // A call-level error here is not a per-locator outcome: the suite runs
+    // against a hermetically served instance, so a conforming provider answers
+    // every probe. Letting `Err` slide would certify a provider whose every
+    // resolution fails in the app.
+    let resolutions = provider.resolve(locators).await.expect(
+        "a conforming provider answers probe locators, per locator, without a call-level error",
+    );
+    assert_eq!(
+        resolutions.len(),
+        locators.len(),
+        "resolve must answer every locator, positionally"
+    );
+    for (locator, resolution) in locators.iter().zip(&resolutions) {
+        match resolution {
+            Resolution::Found(record) => {
+                assert_eq!(
+                    record.provenance.provider, name,
+                    "a provider must name itself in the records it returns"
+                );
+                assert!(
+                    !capabilities.refresh || record.provenance.provider_id.is_some(),
+                    "a refreshing provider must supply a handle to refresh with"
+                );
+                assert!(
+                    record.provenance.revision.is_none() || record.provenance.provider_id.is_some(),
+                    "a revision without a provider id can never be used"
+                );
+                assert!(
+                    !record.description.title.trim().is_empty(),
+                    "a record with no title cannot be stored"
+                );
             }
+            Resolution::UnsupportedLocator => assert!(
+                !capabilities.supports(locator),
+                "a provider must resolve the locator kinds it declares"
+            ),
+            Resolution::NotFound => {}
         }
     }
 

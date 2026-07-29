@@ -291,6 +291,17 @@ fn parent_of(path: &Path) -> Result<&Path, Error> {
     })
 }
 
+/// The public URL of a work's PDF under arXiv's default base address.
+///
+/// A free function rather than a store method because reporting a URL needs
+/// no cache at all: `fetch --url` must answer even when the cache root is
+/// unusable. A configured store may point elsewhere; [`DocumentStore::pdf_url`]
+/// honors that.
+pub fn pdf_url(id: &ArxivId) -> Result<Url, Error> {
+    let base = Url::parse(DEFAULT_BASE_URL).expect("the default base URL is valid");
+    artifact_url(&base, "pdf", id)
+}
+
 /// `<base>/<endpoint>/<id>`, with the identifier's own components appended.
 fn artifact_url(base_url: &Url, endpoint: &str, id: &ArxivId) -> Result<Url, Error> {
     let mut url = base_url.clone();
@@ -392,6 +403,13 @@ mod tests {
                 .unwrap()
                 .as_str(),
             "https://arxiv.org/pdf/hep-th/9901001"
+        );
+        // The free function answers the same URL without a store at all.
+        assert_eq!(
+            pdf_url(&ArxivId::new("1207.7214v2").unwrap())
+                .unwrap()
+                .as_str(),
+            "https://arxiv.org/pdf/1207.7214"
         );
     }
 

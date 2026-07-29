@@ -21,10 +21,14 @@ impl Doi {
     pub fn new(value: impl AsRef<str>) -> Result<Self, Error> {
         let value = value.as_ref().trim();
         let valid = value.starts_with("10.")
-            && !value.bytes().any(|byte| byte.is_ascii_whitespace())
+            && !value.chars().any(char::is_whitespace)
             && value.split_once('/').is_some_and(|(registrant, suffix)| {
+                // The registrant code may be subdivided with periods, as in
+                // `10.1000.1/abc`; each subdivision is a nonempty digit run.
                 registrant.len() > 3
-                    && registrant[3..].bytes().all(|byte| byte.is_ascii_digit())
+                    && registrant[3..].split('.').all(|part| {
+                        !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())
+                    })
                     && !suffix.is_empty()
             });
         if valid {
@@ -123,12 +127,20 @@ fn strip_version(value: &str) -> &str {
     }
 }
 
+/// The `MM` of a `YYMM` or `YYMMNNN` field must name a real month.
+fn valid_month(digits: &str) -> bool {
+    digits[2..4]
+        .parse::<u8>()
+        .is_ok_and(|month| (1..=12).contains(&month))
+}
+
 /// `YYMM.NNNN` or `YYMM.NNNNN`.
 fn is_modern(value: &str) -> bool {
     let mut parts = value.split('.');
-    matches!((parts.next(), parts.next(), parts.next()), (Some(month), Some(number), None)
-        if month.len() == 4
-            && month.bytes().all(|byte| byte.is_ascii_digit())
+    matches!((parts.next(), parts.next(), parts.next()), (Some(yymm), Some(number), None)
+        if yymm.len() == 4
+            && yymm.bytes().all(|byte| byte.is_ascii_digit())
+            && valid_month(yymm)
             && (number.len() == 4 || number.len() == 5)
             && number.bytes().all(|byte| byte.is_ascii_digit()))
 }
@@ -136,12 +148,17 @@ fn is_modern(value: &str) -> bool {
 /// `archive/YYMMNNN`, optionally with a subject class such as `math.CO`.
 fn is_legacy(value: &str) -> bool {
     value.split_once('/').is_some_and(|(archive, number)| {
+        // At least one letter: `.` and `..` are legal in the grammar above but
+        // are path components, not archives, and the document cache joins the
+        // archive as a directory.
         !archive.is_empty()
             && archive
                 .bytes()
                 .all(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'.' | b'-'))
+            && archive.bytes().any(|byte| byte.is_ascii_alphabetic())
             && number.len() == 7
             && number.bytes().all(|byte| byte.is_ascii_digit())
+            && valid_month(number)
     })
 }
 
@@ -211,9 +228,17 @@ mod tests {
             "10.1000",
             "doi:10.1000/abc",
             "10.1000/a b",
+            "10.1000/ab\u{a0}c",
+            "10.1000./abc",
+            "10..1000/abc",
         ] {
             assert!(Doi::new(value).is_err(), "{value}");
         }
+    }
+
+    #[test]
+    fn dois_accept_dotted_registrant_codes() {
+        assert_eq!(Doi::new("10.1000.1/ABC").unwrap().as_str(), "10.1000.1/abc");
     }
 
     #[test]
@@ -239,6 +264,13 @@ mod tests {
             "1207.721456",
             "12007.7214",
             "hep-th/990100",
+            // No month 00 or 13 exists.
+            "9913.00001",
+            "0000.0001",
+            "hep-th/0013001",
+            // `.` and `..` are path components, not archives.
+            "./1234567",
+            "../1234567",
         ] {
             assert!(ArxivId::new(value).is_err(), "{value}");
         }

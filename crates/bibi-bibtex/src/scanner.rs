@@ -140,7 +140,13 @@ impl<'a> Scanner<'a> {
             }
             self.at += 1;
         }
-        let end = start + self.source[start..self.at].trim_end().len();
+        // The key grammar is ASCII, so only ASCII whitespace is trimmed here:
+        // a trailing NBSP must stay in the span and fail the safe-key check,
+        // not vanish into a recorded key that differs from the file's bytes.
+        let end = start
+            + self.source[start..self.at]
+                .trim_end_matches(|c: char| c.is_ascii_whitespace())
+                .len();
         let key = &self.source[start..end];
         if !is_safe_key(key) {
             return Err(Error::InvalidKey {
@@ -426,6 +432,9 @@ mod tests {
             "@misc{bad key,title={T}}",
             "@misc{,title={T}}",
             "@misc{a/b}",
+            // Trailing non-ASCII whitespace is part of the key, not trivia:
+            // trimming it would record a key the file's bytes do not contain.
+            "@misc{A\u{a0},title={T}}",
         ] {
             assert!(
                 matches!(scan(source), Err(Error::InvalidKey { .. })),

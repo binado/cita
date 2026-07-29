@@ -72,7 +72,7 @@ pub async fn export(
             // partial-batch rule, but no bibliography is written: a rendered
             // file that silently omits a record's update is worse than none.
             return Err(Error::SyncFailed {
-                failures: synced.failures.len(),
+                failures: synced.failures,
             });
         }
         report = Some(synced);

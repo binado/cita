@@ -463,6 +463,28 @@ fn fetch_reports_a_url_without_downloading_anything() {
 }
 
 #[test]
+fn fetch_url_answers_even_when_the_cache_root_is_unusable() {
+    let (_directory, path) = project();
+    let server = TestServer::new(vec![
+        hits(&[record(1124337, "Aad:2012tfa", "1207.7214", "Observation")]),
+        "@article{Aad:2012tfa,\n  title = {Observation}\n}\n".to_owned(),
+    ]);
+    bibi_against(&path, &server, &["add", "1207.7214"]);
+
+    // The filesystem root is not a cache root bibi may own, but --url is a
+    // question about arXiv's public address, not about the cache.
+    let output = Command::new(env!("CARGO_BIN_EXE_bibi"))
+        .current_dir(&path)
+        .env("BIBI_GLOBAL_MANIFEST", path.join("global.toml"))
+        .env("BIBI_CACHE_ROOT", "/")
+        .args(["fetch", "Aad:2012tfa", "--url"])
+        .output()
+        .expect("running bibi");
+    assert_eq!(code(&output), 0);
+    assert_eq!(stdout(&output), "https://arxiv.org/pdf/1207.7214\n");
+}
+
+#[test]
 fn fetching_a_record_without_an_arxiv_id_explains_why_it_cannot() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();

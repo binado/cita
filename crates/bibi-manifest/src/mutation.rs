@@ -18,11 +18,11 @@ impl ManifestCandidate {
     /// keeps a mistake there from producing a candidate that fails validation
     /// as a whole and discards an entire batch.
     pub fn insert(&mut self, record: Record) -> Result<(), Error> {
-        if self.get(&record.id).is_some() {
+        if let Some(existing) = self.get(&record.id) {
             return Err(Error::Duplicate {
                 kind: "record id",
                 value: record.id.to_string(),
-                first: record.key.to_string(),
+                first: existing.key.to_string(),
                 second: record.key.to_string(),
             });
         }
@@ -128,6 +128,22 @@ mod tests {
             Err(Error::KeyInUse { .. })
         ));
         assert_eq!(candidate.records().len(), 2);
+    }
+
+    #[test]
+    fn insert_rejects_a_repeated_record_id_and_names_both_records() {
+        let mut candidate = candidate();
+        let mut repeated = record("NewKey", "inspire", "99");
+        repeated.id = candidate.records()[0].id;
+        assert!(matches!(
+            candidate.insert(repeated),
+            Err(Error::Duplicate {
+                kind: "record id",
+                ref first,
+                ref second,
+                ..
+            }) if first == "Alpha" && second == "NewKey"
+        ));
     }
 
     #[test]

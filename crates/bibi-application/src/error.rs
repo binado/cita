@@ -1,3 +1,4 @@
+use crate::reports::ItemFailure;
 use std::path::PathBuf;
 use thiserror::Error as ThisError;
 
@@ -42,11 +43,17 @@ pub enum Error {
     /// A preliminary sync failed, so no bibliography was written.
     ///
     /// The sync's own validated updates were committed; what is refused is
-    /// producing a bibliography that would silently omit whatever failed.
-    #[error("{failures} record(s) failed to refresh; no bibliography was written")]
+    /// producing a bibliography that would silently omit whatever failed. The
+    /// per-record failures ride along: a count alone would send the user to
+    /// re-run `sync` just to learn what failed.
+    #[error(
+        "{} record(s) failed to refresh; no bibliography was written:\n{}",
+        .failures.len(),
+        describe_failures(.failures)
+    )]
     SyncFailed {
-        /// How many records failed.
-        failures: usize,
+        /// Which records failed, and why.
+        failures: Vec<ItemFailure>,
     },
     /// The platform's configuration or cache directory could not be located.
     #[error("could not locate the platform {what} directory")]
@@ -69,4 +76,13 @@ impl Error {
     pub(crate) fn usage(message: impl Into<String>) -> Self {
         Self::Usage(message.into())
     }
+}
+
+/// One line per failed record, for the `SyncFailed` display.
+fn describe_failures(failures: &[ItemFailure]) -> String {
+    failures
+        .iter()
+        .map(|failure| format!("`{}`: {}", failure.item, failure.message))
+        .collect::<Vec<_>>()
+        .join("\n")
 }

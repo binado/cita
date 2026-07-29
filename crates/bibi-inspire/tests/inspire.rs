@@ -255,6 +255,159 @@ async fn refresh_asks_only_for_the_narrowed_fields_and_answers_every_request() {
 }
 
 #[tokio::test]
+async fn one_unmappable_record_fails_only_itself_in_a_refresh() {
+    // Record 2 has no usable title: it cannot be mapped, but the records
+    // asked for alongside it must still refresh.
+    let server = TestServer::new(vec![Reply::ok(hits(vec![
+        record(1, "First:2012", None, None),
+        serde_json::json!({"id": 2, "metadata": {"titles": []}}),
+        record(3, "Third:2014", None, None),
+    ]))]);
+    let provider = provider(&server, Arc::new(TestClock::new()));
+    let requests = [1u64, 2, 3]
+        .map(|id| RefreshRequest {
+            bibi_id: BibiId::new(),
+            provider_id: ProviderId::new(id.to_string()).unwrap(),
+            stored_revision: None,
+        })
+        .to_vec();
+
+    let items = provider.refresh_metadata(&requests).await;
+    assert_eq!(items.len(), 3, "one outcome per requested record");
+    assert!(
+        matches!(items[0].result, Ok(RefreshState::Metadata(_))),
+        "{:?}",
+        items[0].result
+    );
+    assert!(
+        matches!(items[1].result, Err(ProviderError::Mapping(_))),
+        "the unmappable record fails, on its own: {:?}",
+        items[1].result
+    );
+    assert!(
+        matches!(items[2].result, Ok(RefreshState::Metadata(_))),
+        "{:?}",
+        items[2].result
+    );
+}
+
+#[tokio::test]
+async fn a_failed_batch_fails_only_its_own_records_in_a_refresh() {
+    // 101 records force two batches; the second cannot be retrieved.
+    let first_batch = (1..=100u64)
+        .map(|id| record(id, &format!("Key:{id}"), None, None))
+        .collect();
+    let server = TestServer::new(vec![
+        Reply::ok(hits(first_batch)),
+        Reply::status(500, "upstream is unwell"),
+    ]);
+    let provider = provider(&server, Arc::new(TestClock::new()));
+    let requests = (1..=101u64)
+        .map(|id| RefreshRequest {
+            bibi_id: BibiId::new(),
+            provider_id: ProviderId::new(id.to_string()).unwrap(),
+            stored_revision: None,
+        })
+        .collect::<Vec<_>>();
+
+    let items = provider.refresh_metadata(&requests).await;
+    assert_eq!(items.len(), 101, "one outcome per requested record");
+    assert!(
+        items[..100]
+            .iter()
+            .all(|item| matches!(item.result, Ok(RefreshState::Metadata(_)))),
+        "the retrieved batch refreshes"
+    );
+    assert!(
+        matches!(items[100].result, Err(ProviderError::Retrieval(_))),
+        "only the failed batch's record fails: {:?}",
+        items[100].result
+    );
+    assert_eq!(server.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn an_unreadable_search_response_fails_the_batch_items_instead_of_absenting_them() {
+    let server = TestServer::new(vec![Reply::ok("not json at all")]);
+    let provider = provider(&server, Arc::new(TestClock::new()));
+    let requests = vec![RefreshRequest {
+        bibi_id: BibiId::new(),
+        provider_id: ProviderId::new("1").unwrap(),
+        stored_revision: None,
+    }];
+    let items = provider.refresh_metadata(&requests).await;
+    assert!(
+        matches!(items[0].result, Err(ProviderError::Mapping(_))),
+        "a response that cannot be read is a failure, not absence: {:?}",
+        items[0].result
+    );
+}
+
+#[tokio::test]
+async fn a_provider_id_inspire_cannot_read_fails_its_own_item_only() {
+    let server = TestServer::new(vec![Reply::ok(hits(vec![record(
+        2,
+        "Second:2013",
+        None,
+        None,
+    )]))]);
+    let provider = provider(&server, Arc::new(TestClock::new()));
+    let requests = vec![
+        RefreshRequest {
+            bibi_id: BibiId::new(),
+            provider_id: ProviderId::new("not-a-number").unwrap(),
+            stored_revision: None,
+        },
+        RefreshRequest {
+            bibi_id: BibiId::new(),
+            provider_id: ProviderId::new("2").unwrap(),
+            stored_revision: None,
+        },
+    ];
+    let items = provider.refresh_metadata(&requests).await;
+    assert!(matches!(items[0].result, Err(ProviderError::Mapping(_))));
+    assert!(matches!(items[1].result, Ok(RefreshState::Metadata(_))));
+    // Only the readable id cost a request.
+    let query = server.query(0);
+    assert!(query.contains("control_number:2"), "{query}");
+    assert!(!query.contains("not-a-number"), "{query}");
+}
+
+#[tokio::test]
+async fn a_record_is_found_by_every_identifier_it_declares() {
+    // The canonical projection keeps the first usable identifier, but a
+    // record carrying several must answer for any of them.
+    let mut found = record(1, "First:2012", None, None);
+    found["metadata"]["dois"] =
+        serde_json::json!([{"value": "10.1/primary"}, {"value": "10.1/secondary"}]);
+    found["metadata"]["arxiv_eprints"] =
+        serde_json::json!([{"value": "1207.7214"}, {"value": "2401.00001"}]);
+    let server = TestServer::new(vec![
+        Reply::ok(hits(vec![found])),
+        Reply::ok(entry("First:2012")),
+    ]);
+    let provider = provider(&server, Arc::new(TestClock::new()));
+
+    let resolutions = provider
+        .resolve(&[
+            Locator::Doi(Doi::new("10.1/secondary").unwrap()),
+            Locator::Arxiv(ArxivId::new("2401.00001").unwrap()),
+        ])
+        .await
+        .unwrap();
+    assert!(
+        matches!(resolutions[0], Resolution::Found(_)),
+        "the secondary DOI resolves: {:?}",
+        resolutions[0]
+    );
+    assert!(
+        matches!(resolutions[1], Resolution::Found(_)),
+        "the secondary eprint resolves: {:?}",
+        resolutions[1]
+    );
+}
+
+#[tokio::test]
 async fn a_payload_fetch_reuses_the_texkeys_the_metadata_pass_learned() {
     let server = TestServer::new(vec![
         Reply::ok(hits(vec![record(1, "First:2012", None, None)])),

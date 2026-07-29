@@ -150,6 +150,19 @@ mod tests {
     }
 
     #[test]
+    fn every_artifact_path_stays_inside_the_arxiv_subtree() {
+        // The clean command owns the whole documents subtree, so an artifact
+        // path must never escape it through a crafted identifier component.
+        let base = documents_root(Path::new("/cache")).join(ARXIV);
+        for id in ["1207.7214", "hep-th/9901001", "math.GT/0309136"] {
+            for kind in [ArtifactKind::Pdf, ArtifactKind::Source] {
+                let path = artifact_path(Path::new("/cache"), &arxiv(id), kind);
+                assert!(path.starts_with(&base), "{path:?} escapes {base:?}");
+            }
+        }
+    }
+
+    #[test]
     fn dangerous_roots_are_refused() {
         assert!(validate_root(Path::new("")).is_err());
         assert!(validate_root(Path::new("/")).is_err());

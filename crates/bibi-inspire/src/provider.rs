@@ -5,9 +5,10 @@ use crate::{
     join::{self, DeclaredKeys},
     mapping::{self, MappedRecord},
     transport::{JOIN_FIELDS, RECORD_FIELDS, Transport},
+    wire::LiteratureRecord,
 };
 use bibi_bibtex::BibtexEntry;
-use bibi_core::{Locator, Provenance, ProviderId, ProviderName, ProviderOwned};
+use bibi_core::{ArxivId, Doi, Locator, Provenance, ProviderId, ProviderName, ProviderOwned};
 use bibi_provider::{
     MappingError, PayloadItem, PayloadRequest, Provider, ProviderCapabilities, ProviderError,
     ProviderFuture, ProviderMetadata, RefreshItem, RefreshRequest, RefreshState, Resolution,
@@ -41,18 +42,27 @@ impl InspireProvider {
         &self.transport
     }
 
-    /// Fetch and map records for a set of query terms.
-    async fn search(&self, terms: &[String]) -> Result<Vec<MappedRecord>, ProviderError> {
-        let mut records = Vec::new();
+    /// Fetch the raw hits for a set of query terms, one batch request per
+    /// [`batching::batch`] chunk.
+    ///
+    /// Hits come back unmapped: matching and mapping are per-hit decisions, and
+    /// one malformed record must not stop the others from answering.
+    async fn search_hits(&self, terms: &[String]) -> Result<Vec<LiteratureRecord>, ProviderError> {
+        let mut hits = Vec::new();
         for batch in batching::batch(terms) {
             let raw = self
                 .transport
                 .search_json(&batching::query(&batch), batch.len(), RECORD_FIELDS)
                 .await
                 .map_err(ProviderError::Retrieval)?;
-            records.extend(mapping::map_search(&raw).map_err(ProviderError::Mapping)?);
+            hits.extend(
+                mapping::parse_search(&raw)
+                    .map_err(ProviderError::Mapping)?
+                    .hits
+                    .hits,
+            );
         }
-        Ok(records)
+        Ok(hits)
     }
 
     /// The texkeys for a batch, from request tokens or from one narrowed request.
@@ -126,8 +136,11 @@ impl Provider for InspireProvider {
     ///
     /// A JSON record carries its own arXiv id, DOI, and control number, so the
     /// association between a result and the locator that asked for it is in the
-    /// payload rather than inferred — no join protocol is needed here. Two
-    /// locators may legitimately resolve to one record; both return it, and the
+    /// payload rather than inferred — no join protocol is needed here. Matching
+    /// runs on the wire record against every identifier it declares: a record
+    /// with two DOIs is found by either, and a hit that cannot be mapped is
+    /// irrelevant unless a locator actually asked for it. Two locators may
+    /// legitimately resolve to one record; both return it, and the
     /// application's duplicate policy collapses them.
     fn resolve<'a>(
         &'a self,
@@ -145,30 +158,45 @@ impl Provider for InspireProvider {
                     .collect());
             }
 
-            let records = self.search(&wanted).await?;
+            let hits = self.search_hits(&wanted).await?;
             let matched = locators
                 .iter()
                 .zip(&terms)
                 .map(|(locator, term)| {
                     term.as_ref()
-                        .and_then(|_| records.iter().find(|record| identifies(record, locator)))
+                        .and_then(|_| hits.iter().find(|hit| identifies_wire(hit, locator)))
                 })
                 .collect::<Vec<_>>();
 
+            // Map each distinct matched record once; a record a locator asked
+            // for that cannot be mapped cannot be stored, and inventing a
+            // placeholder for it is exactly what bibi refuses to do.
+            let mut distinct = matched.iter().flatten().copied().collect::<Vec<_>>();
+            distinct.sort_by_key(|hit| hit.record_id());
+            distinct.dedup_by_key(|hit| hit.record_id());
+            let mut records = Vec::with_capacity(distinct.len());
+            for hit in distinct {
+                records.push(mapping::map_record(hit).map_err(ProviderError::Mapping)?);
+            }
             // One payload request covers every record any locator resolved to.
-            let mut resolved = matched.iter().flatten().copied().collect::<Vec<_>>();
-            resolved.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
-            resolved.dedup_by(|left, right| left.provider_id == right.provider_id);
-            let payloads = self.payloads(&resolved).await?;
+            records.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
+            let payloads = self.payloads(&records.iter().collect::<Vec<_>>()).await?;
 
             locators
                 .iter()
                 .zip(terms)
                 .zip(matched)
-                .map(|((_, term), record)| match (term, record) {
+                .map(|((_, term), hit)| match (term, hit) {
                     (None, _) => Ok(Resolution::UnsupportedLocator),
                     (Some(_), None) => Ok(Resolution::NotFound),
-                    (Some(_), Some(record)) => {
+                    (Some(_), Some(hit)) => {
+                        let record = records
+                            .iter()
+                            .find(|record| {
+                                hit.record_id()
+                                    .is_some_and(|id| record.provider_id.as_str() == id.to_string())
+                            })
+                            .expect("every matched hit was mapped above");
                         let payload =
                             payloads.get(&record.provider_id).cloned().ok_or_else(|| {
                                 // INSPIRE identified the record and then declined to
@@ -197,43 +225,108 @@ impl Provider for InspireProvider {
     }
 
     /// Examine records by stable id, requesting only the narrowed field set.
+    ///
+    /// Every failure is per item, as the contract requires: an id that is not
+    /// a control number, a batch that cannot be retrieved, and a record that
+    /// cannot be mapped each fail their own items and no others, because one
+    /// bad record must not stop a refresh of everything else.
     fn refresh_metadata<'a>(
         &'a self,
         requests: &'a [RefreshRequest],
     ) -> ProviderFuture<'a, Vec<RefreshItem>> {
         Box::pin(async move {
-            let provider_ids = requests
-                .iter()
-                .map(|request| request.provider_id.clone())
-                .collect::<Vec<_>>();
-            let terms = match control_number_terms(&provider_ids) {
-                Ok(terms) => terms,
-                Err(error) => return failed(requests, &error),
-            };
-            let records = match self.search(&terms).await {
-                Ok(records) => records,
-                Err(error) => return failed(requests, &error),
-            };
-            let by_id = records
-                .iter()
-                .map(|record| (record.provider_id.clone(), record))
-                .collect::<HashMap<_, _>>();
+            let mut mapped: HashMap<String, MappedRecord> = HashMap::new();
+            let mut failures: HashMap<String, ProviderError> = HashMap::new();
+
+            let mut queryable = Vec::new();
+            for request in requests {
+                if control_number(request.provider_id.as_str()).is_some() {
+                    queryable.push(request.provider_id.clone());
+                } else {
+                    failures.insert(
+                        request.provider_id.as_str().to_owned(),
+                        ProviderError::Mapping(error::invalid_value(
+                            "INSPIRE record id",
+                            request.provider_id.as_str(),
+                        )),
+                    );
+                }
+            }
+
+            for batch in batching::batch_ids(&queryable) {
+                let terms = control_number_terms(&batch).expect("every id was validated above");
+                let raw = match self
+                    .transport
+                    .search_json(&batching::query(&terms), terms.len(), RECORD_FIELDS)
+                    .await
+                {
+                    Ok(raw) => raw,
+                    Err(error) => {
+                        // A batch that cannot be retrieved fails its own
+                        // records; the others still answer.
+                        let message = error.to_string();
+                        for id in &batch {
+                            failures.insert(
+                                id.as_str().to_owned(),
+                                ProviderError::Retrieval(error::transport(&message)),
+                            );
+                        }
+                        continue;
+                    }
+                };
+                let response = match mapping::parse_search(&raw) {
+                    Ok(response) => response,
+                    Err(error) => {
+                        let message = error.to_string();
+                        for id in &batch {
+                            failures.insert(
+                                id.as_str().to_owned(),
+                                ProviderError::Mapping(MappingError::ContractViolation {
+                                    provider: error::provider(),
+                                    message: message.clone(),
+                                }),
+                            );
+                        }
+                        continue;
+                    }
+                };
+                for hit in &response.hits.hits {
+                    let wire_id = hit.record_id();
+                    match mapping::map_record(hit) {
+                        Ok(record) => {
+                            mapped.insert(record.provider_id.as_str().to_owned(), record);
+                        }
+                        // A record that cannot be mapped fails its own item.
+                        // One without a readable id answers no request at all,
+                        // and its requester reports it absent.
+                        Err(error) => {
+                            if let Some(id) = wire_id {
+                                failures.insert(id.to_string(), ProviderError::Mapping(error));
+                            }
+                        }
+                    }
+                }
+            }
+
             requests
                 .iter()
                 .map(|request| RefreshItem {
                     bibi_id: request.bibi_id,
-                    result: Ok(match by_id.get(&request.provider_id) {
-                        // Absence is a per-record no-op with a warning, not a
-                        // failure: identifiers change and records get merged.
-                        None => RefreshState::Missing,
-                        Some(record) => RefreshState::Metadata(Box::new(ProviderMetadata {
+                    result: match mapped.get(request.provider_id.as_str()) {
+                        Some(record) => Ok(RefreshState::Metadata(Box::new(ProviderMetadata {
                             provider_id: record.provider_id.clone(),
                             revision: record.revision.clone(),
                             identifiers: record.identifiers.clone(),
                             description: record.description.clone(),
                             join_tokens: record.texkeys.clone(),
-                        })),
-                    }),
+                        }))),
+                        // Absence is a per-record no-op with a warning, not a
+                        // failure: identifiers change and records get merged.
+                        None => match failures.remove(request.provider_id.as_str()) {
+                            Some(error) => Err(error),
+                            None => Ok(RefreshState::Missing),
+                        },
+                    },
                 })
                 .collect()
         })
@@ -304,26 +397,6 @@ impl InspireProvider {
     }
 }
 
-/// Fail every request in one call with the same error.
-fn failed(requests: &[RefreshRequest], error: &ProviderError) -> Vec<RefreshItem> {
-    let message = error.to_string();
-    let retrieval = matches!(error, ProviderError::Retrieval(_));
-    requests
-        .iter()
-        .map(|request| RefreshItem {
-            bibi_id: request.bibi_id,
-            result: Err(if retrieval {
-                ProviderError::Retrieval(error::transport(&message))
-            } else {
-                ProviderError::Mapping(MappingError::ContractViolation {
-                    provider: error::provider(),
-                    message: message.clone(),
-                })
-            }),
-        })
-        .collect()
-}
-
 /// The query term that asks for one locator, if INSPIRE handles its kind.
 fn query_term(locator: &Locator) -> Option<String> {
     match locator {
@@ -372,13 +445,26 @@ fn control_number(value: &str) -> Option<u64> {
         .filter(|id| *id > 0)
 }
 
-/// Does this record answer that locator?
-fn identifies(record: &MappedRecord, locator: &Locator) -> bool {
+/// Does this unmapped wire record answer that locator?
+///
+/// Matching runs against every identifier the record declares, not only the
+/// canonical one mapping keeps: a record with two DOIs is found by either of
+/// them. Values bibi cannot normalize cannot match, which is the same policy
+/// mapping applies when projecting the canonical identifiers.
+fn identifies_wire(record: &LiteratureRecord, locator: &Locator) -> bool {
     match locator {
-        Locator::Arxiv(id) => record.identifiers.arxiv.as_ref() == Some(id),
-        Locator::Doi(doi) => record.identifiers.doi.as_ref() == Some(doi),
+        Locator::Arxiv(id) => record
+            .metadata
+            .arxiv_eprints
+            .iter()
+            .any(|eprint| ArxivId::new(&eprint.value).is_ok_and(|candidate| candidate == *id)),
+        Locator::Doi(doi) => record
+            .metadata
+            .dois
+            .iter()
+            .any(|declared| Doi::new(&declared.value).is_ok_and(|candidate| candidate == *doi)),
         Locator::ProviderId(value) => {
-            control_number(value).is_some_and(|id| record.provider_id.as_str() == id.to_string())
+            control_number(value).is_some_and(|id| record.record_id() == Some(id))
         }
     }
 }

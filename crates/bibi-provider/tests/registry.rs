@@ -360,3 +360,16 @@ async fn the_bundled_providers_satisfy_the_contract_suite() {
     )
     .await;
 }
+
+#[tokio::test]
+#[should_panic(expected = "a conforming provider answers probe locators")]
+async fn the_contract_suite_refuses_a_provider_whose_resolve_errors() {
+    let probes = [Locator::Arxiv(
+        bibi_core::ArxivId::new("1207.7214").unwrap(),
+    )];
+    verify_contract(
+        &FakeProvider::new("network").failing_retrieval("down"),
+        &probes,
+    )
+    .await;
+}

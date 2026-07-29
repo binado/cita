@@ -435,7 +435,11 @@ async fn export_writes_nothing_when_the_preliminary_sync_fails() {
     )
     .await
     .unwrap_err();
-    assert!(error.to_string().contains("no bibliography was written"));
+    let message = error.to_string();
+    assert!(message.contains("no bibliography was written"), "{message}");
+    // The failure names the record and the reason, not just a count.
+    assert!(message.contains("Alpha:2012"), "{message}");
+    assert!(message.contains("texkey claimed twice"), "{message}");
     assert!(!project.path("references.bib").exists());
 }
 

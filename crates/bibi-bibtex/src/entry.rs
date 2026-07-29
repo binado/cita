@@ -198,6 +198,9 @@ impl BibtexEntry {
 /// a usable identifier belongs to the domain layer, which validates it anyway.
 fn field_text(value: &str) -> String {
     let value = value.trim();
+    if is_concatenated(value) {
+        return value.to_owned();
+    }
     let inner = value
         .strip_prefix('{')
         .and_then(|value| value.strip_suffix('}'))
@@ -208,6 +211,31 @@ fn field_text(value: &str) -> String {
         })
         .unwrap_or(value);
     inner.trim().to_owned()
+}
+
+/// True when a `#` concatenates at the value's top level.
+///
+/// Delimiter stripping is only safe on one whole delimited token: `{10.1/x} #
+/// {junk}` starts with `{` and ends with `}` but is two tokens, and stripping
+/// would corrupt it. A `#` inside braces or quotes is literal text.
+fn is_concatenated(value: &str) -> bool {
+    let mut depth = 0usize;
+    let mut quoted = false;
+    for byte in value.bytes() {
+        match byte {
+            _ if quoted => {
+                if byte == b'"' {
+                    quoted = false;
+                }
+            }
+            b'{' => depth += 1,
+            b'}' => depth = depth.saturating_sub(1),
+            b'"' if depth == 0 => quoted = true,
+            b'#' if depth == 0 => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -293,6 +321,28 @@ mod tests {
         assert_eq!(
             arxiv.identifier_candidates().arxiv.as_deref(),
             Some("1207.7214")
+        );
+    }
+
+    #[test]
+    fn concatenated_values_are_returned_as_written() {
+        // Two tokens joined by `#` are not one delimited value; stripping the
+        // outer braces would corrupt them.
+        let concatenated = entry("@misc{A, doi = {10.1/x} # {junk}}");
+        assert_eq!(
+            concatenated.identifier_candidates().doi.as_deref(),
+            Some("{10.1/x} # {junk}")
+        );
+        let quoted = entry("@misc{A, doi = \"10.1/x\" # {junk}}");
+        assert_eq!(
+            quoted.identifier_candidates().doi.as_deref(),
+            Some("\"10.1/x\" # {junk}")
+        );
+        // A `#` inside one delimited token is literal text, not concatenation.
+        let literal = entry("@misc{A, doi = {10.1/x # y}}");
+        assert_eq!(
+            literal.identifier_candidates().doi.as_deref(),
+            Some("10.1/x # y")
         );
     }
 }
