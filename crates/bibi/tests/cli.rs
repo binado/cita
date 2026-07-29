@@ -119,6 +119,28 @@ fn listing_outputs_are_exactly_what_a_pipeline_expects() {
 }
 
 #[test]
+fn the_default_listing_is_a_headed_table_and_never_styles_a_pipe() {
+    let (_directory, path) = project();
+    std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
+    bibi(&path, &["add", "-f", "library.bib"]);
+
+    let listed = bibi(&path, &["list"]);
+    assert_eq!(code(&listed), 0);
+    let rendered = stdout(&listed);
+    for header in ["KEY", "AUTHOR", "YEAR", "ARXIV", "TITLE"] {
+        assert!(
+            rendered.contains(header),
+            "{header} missing from {rendered}"
+        );
+    }
+    assert!(rendered.contains("astropy:2022"), "{rendered}");
+    assert!(rendered.contains("Price-Whelan"), "{rendered}");
+    // Column widths are ambient here, but this is not: stdout is a pipe under
+    // the test harness, so nothing may style it.
+    assert!(!rendered.contains('\u{1b}'), "styling leaked into a pipe");
+}
+
+#[test]
 fn fields_are_tab_separated_and_an_absent_value_keeps_its_column() {
     let (_directory, path) = project();
     let server = TestServer::new(vec![

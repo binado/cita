@@ -42,7 +42,11 @@ pub fn run(services: &Services, target: Option<&Path>, args: ListArgs) -> Result
     );
     let rendered = if args.fields.is_empty() {
         match args.format {
-            ListFormat::Table => output::table(&records),
+            ListFormat::Table => output::table(
+                &records,
+                output::terminal_width(),
+                output::color_enabled(&std::io::stdout()),
+            ),
             ListFormat::Bibtex => render_records(&records)?,
             ListFormat::Json => to_json(&records)?,
         }

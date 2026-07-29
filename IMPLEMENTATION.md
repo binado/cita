@@ -1470,7 +1470,13 @@ require it to be installed.
 
 Output adapters:
 
-- `table`: rows sized/formatted by the binary;
+- `table`: `KEY AUTHOR YEAR ARXIV TITLE`, sized and wrapped by the binary. The
+  title takes the remaining width capped at half the terminal and wraps onto
+  continuation lines indented to its own column; every other column is padded to
+  its widest cell, measured by *display* width rather than `char` count. The
+  author cell is the first collaboration, else the first author's family name
+  with ` et al.` when there are more. `provider` is not a column — it is the same
+  value on nearly every row, and `--fields provider` still asks for it;
 - `bibtex`: shared deterministic renderer;
 - `json`: a schema-1 `ListJsonRecord` array;
 - `--fields <field>…`: tab-separated columns, one line per record, absent values
@@ -1802,7 +1808,7 @@ Use:
 Stdout contains only command results:
 
 - BibTeX for add/remove/rename/show and `list --format bibtex`;
-- keys, table, or JSON for list;
+- a table, JSON, or `--fields` columns for list;
 - absolute path or URL for fetch;
 - no progress prose.
 

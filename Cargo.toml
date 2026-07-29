@@ -43,5 +43,6 @@ terminal_size = "0.4"
 thiserror = "2.0.7"
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "time"] }
 toml = "0.8.19"
+unicode-width = "0.2"
 url = "2.5.4"
 uuid = { version = "1", features = ["v4"] }

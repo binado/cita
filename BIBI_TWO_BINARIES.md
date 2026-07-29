@@ -169,7 +169,8 @@ language.
 
 The supported formats are:
 
-- `table`, the default human-readable view;
+- `table`, the default human-readable view: key, author, year, arXiv id, and a
+  wrapped title, with a styled header row when the destination is a terminal;
 - `json`, the stable metadata-only automation view;
 - `bibtex`, the deterministic rendering of the selected records.
 

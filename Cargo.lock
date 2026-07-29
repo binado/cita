@@ -77,6 +77,7 @@ dependencies = [
  "anstyle",
  "anyhow",
  "bibi-application",
+ "bibi-core",
  "bibi-documents",
  "bibi-inspire",
  "bibi-provider",
@@ -87,6 +88,7 @@ dependencies = [
  "tempfile",
  "terminal_size",
  "tokio",
+ "unicode-width",
 ]
 
 [[package]]
@@ -1412,6 +1414,12 @@ checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
 dependencies = [
  "tinyvec",
 ]
+
+[[package]]
+name = "unicode-width"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 
 [[package]]
 name = "unscanny"

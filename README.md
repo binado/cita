@@ -94,6 +94,20 @@ unless you pass `--overwrite`. A refused duplicate is a skip, not a failure:
 
 ### Listing
 
+```console
+$ bibi list
+KEY                        AUTHOR                    YEAR  ARXIV       TITLE
+Ghoderao:2026lvz           Ghoderao et al.           2026  2607.24734  Gravitational waves from
+                                                                       super-Hubble bubbles
+MartinBarandiaran:2026lnb  Martin Barandiar… et al.  2026  2607.26021  Weighted Webs:
+                                                                       Morphology-Informed Marked
+                                                                       Fields
+```
+
+The title wraps rather than being cut off, and never takes more than half the
+terminal. The header is coloured only when the destination is a terminal;
+`NO_COLOR` turns all styling off everywhere, including warnings.
+
 `--format` says how to encode a listing; `--fields` says what to put in it, as
 tab-separated columns. An absent value is an empty column rather than a missing
 line, so the output stays aligned with the records it describes.

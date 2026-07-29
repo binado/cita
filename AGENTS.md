@@ -170,6 +170,16 @@ tab-separated columns. They are mutually exclusive. `--fields arxiv-url` is how
 a shell downloads a selection in bulk, which is what keeps `fetch` a command
 that acquires one file rather than a downloader.
 
+**`output::table` is pure over its width and colour**, both resolved at the call
+site. Ambient reads inside it would be untestable: `terminal_size` falls back to
+*stdin*, so a layout test would silently take the width of whatever terminal ran
+`cargo test`. Column padding is measured with `unicode-width`, never
+`chars().count()` and never `{:<n$}` — a combining mark is a `char` occupying no
+column, so counting characters shifts every column to its right. All styling,
+not only colour, is suppressed when `NO_COLOR` is set or the stream is not a
+terminal; one policy in `output::color_enabled` serves the table and warnings
+alike.
+
 **`--provider` accepts a provider this build carries *or* one the manifest
 already names.** Filtering never has to *call* a provider, so a manifest written
 by a later build stays filterable by an older one; but a name neither knows is
