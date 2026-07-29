@@ -49,12 +49,14 @@ pub async fn run_fetch(
     let target = result?;
 
     // The result is one line: a path or a URL, so `open $(bibi fetch k)` works.
+    // A successful download is its own signal: the bar cleared at the end of
+    // its run, so an extra `'downloaded'` note would be noise on stderr.
+    // The 'already present' case stays though, because no bar was ever shown
+    // and the path on stdout needs explaining.
     let value = target.as_str().into_owned();
     output::emit(&format!("{value}\n"))?;
-    match &target {
-        FetchTarget::Downloaded(_) => output::note("downloaded"),
-        FetchTarget::Present(_) => output::note("already present; not replaced"),
-        FetchTarget::Url(_) => {}
+    if let FetchTarget::Present(_) = &target {
+        output::note("already present; not replaced");
     }
     if args.open {
         // Opening happens only after a successful result, and the target is
