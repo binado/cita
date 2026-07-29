@@ -1,9 +1,9 @@
 //! What `fetch` decides before it ever reaches the network.
 //!
 //! Downloading itself is covered in `bibi-documents`. What belongs here is the
-//! branching: which artifact was asked for, where it would land, and whether an
-//! occupied destination is an outcome or a collision. None of these paths build
-//! a client, which is what makes them testable without a server.
+//! branching: which artifact was asked for, where it would land, and whether
+//! an occupied destination is a collision. None of these paths build a client,
+//! which is what makes them testable without a server.
 
 use bibi_application::{
     AddRequest, FetchRequest, FetchTarget, Progress, Services, add_locators, domain::ManifestStore,
@@ -103,7 +103,6 @@ async fn a_url_is_answered_without_building_a_client() {
             url: true,
             ..project.request("Aad:2012tfa")
         },
-        false,
         &mut Progress::silent(),
     )
     .await
@@ -120,7 +119,6 @@ async fn a_url_is_answered_without_building_a_client() {
             source: true,
             ..project.request("Aad:2012tfa")
         },
-        false,
         &mut Progress::silent(),
     )
     .await
@@ -129,45 +127,15 @@ async fn a_url_is_answered_without_building_a_client() {
 }
 
 #[tokio::test]
-async fn an_already_present_default_destination_is_an_outcome_when_opening() {
-    let project = project().await;
-    let destination = project.path("1207.7214.pdf");
-    std::fs::write(&destination, "%PDF-1.7\nearlier").unwrap();
-
-    // `--open` asks for the file to be in front of the user, and it already is.
-    let target = fetch(
-        &project.services,
-        &project.store(),
-        &project.request("Aad:2012tfa"),
-        true,
-        &mut Progress::silent(),
-    )
-    .await
-    .unwrap();
-
-    let FetchTarget::Present(path) = &target else {
-        panic!("expected Present, got {target:?}");
-    };
-    assert_eq!(path, &destination);
-    // Reported, never replaced, and no request was made to say so.
-    assert_eq!(
-        std::fs::read_to_string(&destination).unwrap(),
-        "%PDF-1.7\nearlier"
-    );
-}
-
-#[tokio::test]
-async fn the_same_destination_without_opening_is_a_collision() {
+async fn an_already_present_default_destination_is_a_collision() {
     let project = project().await;
     let destination = project.path("1207.7214.pdf");
     std::fs::write(&destination, "mine").unwrap();
 
-    // A plain `fetch` asked for a download and did not get one.
     let error = fetch(
         &project.services,
         &project.store(),
         &project.request("Aad:2012tfa"),
-        false,
         &mut Progress::silent(),
     )
     .await
@@ -178,13 +146,13 @@ async fn the_same_destination_without_opening_is_a_collision() {
 }
 
 #[tokio::test]
-async fn an_explicit_output_is_never_accepted_as_already_present() {
+async fn an_explicit_output_is_never_treated_as_already_present() {
     let project = project().await;
     let named = project.path("higgs.pdf");
     std::fs::write(&named, "mine").unwrap();
 
-    // Even under `--open`: the caller named this path, so treating whatever is
-    // there as the artifact they wanted would be a guess.
+    // The caller named this path, so silently accepting whatever is already
+    // there would be a guess about what they meant.
     let error = fetch(
         &project.services,
         &project.store(),
@@ -192,7 +160,6 @@ async fn an_explicit_output_is_never_accepted_as_already_present() {
             output: Some(PathBuf::from("higgs.pdf")),
             ..project.request("Aad:2012tfa")
         },
-        true,
         &mut Progress::silent(),
     )
     .await
@@ -213,7 +180,6 @@ async fn a_record_without_an_arxiv_identifier_says_so_rather_than_guessing() {
             url: true,
             ..project.request("Roe:2026")
         },
-        false,
         &mut Progress::silent(),
     )
     .await
@@ -283,7 +249,6 @@ async fn a_download_progresses_through_the_recorder_closure() {
         &project.services,
         &project.store(),
         &project.request("Aad:2012tfa"),
-        false,
         &mut progress,
     )
     .await
@@ -322,7 +287,6 @@ async fn a_silent_progress_passes_through_a_real_download_uneventfully() {
         &project.services,
         &project.store(),
         &project.request("Aad:2012tfa"),
-        false,
         &mut progress,
     )
     .await

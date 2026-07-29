@@ -17,7 +17,6 @@ bibi-inspire = { workspace = true }
 bibi-provider = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
-opener = { workspace = true }
 terminal_size = { workspace = true }
 tokio = { workspace = true }
 unicode-width = { workspace = true }

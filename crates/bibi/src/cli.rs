@@ -181,9 +181,6 @@ pub struct FetchArgs {
     /// Print the public URL instead of downloading
     #[arg(long)]
     pub url: bool,
-    /// Open the result after producing it
-    #[arg(long)]
-    pub open: bool,
     /// Download to this exact path instead of the default name
     #[arg(short = 'o', long, value_name = "FILE", conflicts_with = "url")]
     pub output: Option<PathBuf>,

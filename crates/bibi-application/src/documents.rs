@@ -26,8 +26,6 @@ pub struct FetchRequest {
 pub enum FetchTarget {
     /// An artifact downloaded now.
     Downloaded(PathBuf),
-    /// An artifact already at the default destination, which was not replaced.
-    Present(PathBuf),
     /// A public URL, with nothing downloaded.
     Url(String),
 }
@@ -38,7 +36,7 @@ impl FetchTarget {
     /// One value, so that `open $(bibi fetch <selector>)` works.
     pub fn as_str(&self) -> std::borrow::Cow<'_, str> {
         match self {
-            Self::Downloaded(path) | Self::Present(path) => path.to_string_lossy(),
+            Self::Downloaded(path) => path.to_string_lossy(),
             Self::Url(url) => std::borrow::Cow::Borrowed(url),
         }
     }
@@ -51,11 +49,10 @@ impl FetchTarget {
 /// publisher. Keeping the command pointed at one artifact service is what stops
 /// it from becoming a general document acquisition layer.
 ///
-/// `keep_existing` reports rather than fails when the default destination is
-/// already occupied, which is what lets `--open` open a file a previous fetch
-/// downloaded. An explicit `--output` is never treated this way: the caller
-/// named that path, so silently accepting whatever is already there would be a
-/// guess about what they meant.
+/// An occupied destination is always a collision — neither a default name nor
+/// an explicit `--output` is silently accepted. The shell decides what to do
+/// with a file that is already on disk (`open -a Preview 1207.7214.pdf`),
+/// which keeps `bibi fetch` a downloader rather than an opener.
 ///
 /// `progress` records the bytes delivered by the underlying transport. The
 /// caller decides visibility; the no-op [`Progress::silent`] keeps this
@@ -64,7 +61,6 @@ pub async fn fetch(
     services: &Services,
     store: &ManifestStore,
     request: &FetchRequest,
-    keep_existing: bool,
     progress: &mut Progress,
 ) -> Result<FetchTarget, Error> {
     let manifest = store.load()?.manifest;
@@ -89,18 +85,12 @@ pub async fn fetch(
         ));
     }
 
-    let (destination, named) = match &request.output {
-        Some(path) => (absolute(&request.working_directory, path), true),
-        None => (
-            request
-                .working_directory
-                .join(default_filename(&arxiv, kind)),
-            false,
-        ),
+    let destination = match &request.output {
+        Some(path) => absolute(&request.working_directory, path),
+        None => request
+            .working_directory
+            .join(default_filename(&arxiv, kind)),
     };
-    if !named && keep_existing && destination.exists() {
-        return Ok(FetchTarget::Present(destination));
-    }
     services
         .documents()?
         .download_with_progress(&arxiv, kind, &destination, |bytes, total| {

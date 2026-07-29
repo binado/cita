@@ -2,7 +2,7 @@
 
 use crate::{cli::FetchArgs, output};
 use anyhow::{Context, Result};
-use bibi_application::{FetchRequest, FetchTarget, Progress, Services, fetch};
+use bibi_application::{FetchRequest, Progress, Services, fetch};
 use std::path::Path;
 
 pub async fn run_fetch(
@@ -26,9 +26,6 @@ pub async fn run_fetch(
         Progress::visible(args.selector.clone())
     };
 
-    // An already-present default destination is a reportable outcome only when
-    // the user asked to open the result. Otherwise it is a collision: they
-    // asked for a download and did not get one.
     let result = fetch(
         services,
         &store,
@@ -39,7 +36,6 @@ pub async fn run_fetch(
             output: args.output,
             working_directory,
         },
-        args.open,
         &mut progress,
     )
     .await;
@@ -50,18 +46,9 @@ pub async fn run_fetch(
 
     // The result is one line: a path or a URL, so `open $(bibi fetch k)` works.
     // A successful download is its own signal: the bar cleared at the end of
-    // its run, so an extra `'downloaded'` note would be noise on stderr.
-    // The 'already present' case stays though, because no bar was ever shown
-    // and the path on stdout needs explaining.
+    // its run. The shell decides what to do with the file; `bibi fetch` does
+    // not open or launch anything on its own.
     let value = target.as_str().into_owned();
     output::emit(&format!("{value}\n"))?;
-    if let FetchTarget::Present(_) = &target {
-        output::note("already present; not replaced");
-    }
-    if args.open {
-        // Opening happens only after a successful result, and the target is
-        // still written to stdout so the command composes either way.
-        opener::open(value.as_str()).with_context(|| format!("opening {value}"))?;
-    }
     Ok(false)
 }
