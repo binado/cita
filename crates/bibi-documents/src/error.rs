@@ -37,6 +37,16 @@ pub enum Error {
         /// Which artifact.
         kind: &'static str,
     },
+    /// A response exceeded the configured download bound.
+    #[error("arXiv {kind} for {id} exceeds the {limit}-byte download limit")]
+    ArtifactTooLarge {
+        /// The identifier being fetched.
+        id: String,
+        /// Which artifact exceeded its bound.
+        kind: &'static str,
+        /// The maximum accepted response size.
+        limit: usize,
+    },
     /// The response was not the artifact it claimed to be.
     #[error("{id}: {reason}")]
     InvalidArtifact {

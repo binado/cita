@@ -269,10 +269,21 @@ enum EntryResolution {
 /// concern a bare provider id cannot arise here.
 fn resolve_entry(outcomes: &[LocatorOutcome]) -> EntryResolution {
     let mut failure = None;
+    let mut found: Option<Box<ProviderRecord>> = None;
     for outcome in outcomes {
         match outcome {
             LocatorOutcome::Found { record, .. } => {
-                return EntryResolution::Found(record.clone());
+                if let Some(first) = &found {
+                    if !same_provider_record(first, record) {
+                        return EntryResolution::Failed(format!(
+                            "the entry's identifiers resolve to different provider records (`{}` and `{}`)",
+                            provider_identity(first),
+                            provider_identity(record)
+                        ));
+                    }
+                } else {
+                    found = Some(record.clone());
+                }
             }
             LocatorOutcome::Failed { provider, error } => {
                 failure.get_or_insert_with(|| {
@@ -286,8 +297,25 @@ fn resolve_entry(outcomes: &[LocatorOutcome]) -> EntryResolution {
     }
     match failure {
         Some(message) => EntryResolution::Failed(message),
-        None => EntryResolution::Absent,
+        None => found
+            .map(EntryResolution::Found)
+            .unwrap_or(EntryResolution::Absent),
     }
+}
+
+fn same_provider_record(left: &ProviderRecord, right: &ProviderRecord) -> bool {
+    match (left.provenance.identity(), right.provenance.identity()) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn provider_identity(record: &ProviderRecord) -> String {
+    record
+        .provenance
+        .identity()
+        .map(|(provider, id)| format!("{provider}:{id}"))
+        .unwrap_or_else(|| format!("{}:<no stable id>", record.provenance.provider))
 }
 
 /// Hand an entry to the provider that ingests user-supplied BibTeX.
@@ -331,9 +359,21 @@ fn plan(
     explicit_key: bool,
     collisions: CollisionPolicy,
 ) -> Placement {
-    let duplicate = candidate
-        .duplicate_of(&record.identifiers, &record.provenance)
+    let duplicates = candidate
+        .duplicates_of(&record.identifiers, &record.provenance)
         .map(|existing| (existing.id, existing.key.clone()));
+    let duplicates = duplicates.collect::<Vec<_>>();
+    if duplicates.len() > 1 {
+        return Placement::Fail(format!(
+            "this work matches multiple records (`{}`); remove or repair the duplicates before adding it",
+            duplicates
+                .iter()
+                .map(|(_, key)| key.to_string())
+                .collect::<Vec<_>>()
+                .join("`, `")
+        ));
+    }
+    let duplicate = duplicates.into_iter().next();
     let holder = candidate
         .by_key(key)
         .map(|existing| (existing.id, existing.key.clone()));
@@ -407,6 +447,7 @@ fn apply(
                         .map(Record::rendered)
                         .transpose()?
                 }
+                SkipReason::AlreadyRemoved { .. } => None,
             };
             items.skipped.push(SkippedItem {
                 item: item.to_owned(),

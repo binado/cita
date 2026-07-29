@@ -16,6 +16,7 @@ use url::Url;
 
 const DEFAULT_BASE_URL: &str = "https://arxiv.org/";
 const DEFAULT_USER_AGENT: &str = concat!("bibi-documents/", env!("CARGO_PKG_VERSION"));
+const DEFAULT_MAX_PDF_BYTES: usize = 256 * 1024 * 1024;
 const PDF_SIGNATURE: &[u8] = b"%PDF-";
 
 /// Whether a cached copy may be used.
@@ -52,6 +53,7 @@ pub struct DocumentStore {
     base_url: Url,
     http: reqwest::Client,
     limits: ArchiveLimits,
+    max_pdf_bytes: usize,
 }
 
 impl DocumentStore {
@@ -68,6 +70,7 @@ impl DocumentStore {
             user_agent: DEFAULT_USER_AGENT.to_owned(),
             timeout: Duration::from_secs(60),
             limits: ArchiveLimits::default(),
+            max_pdf_bytes: DEFAULT_MAX_PDF_BYTES,
         }
     }
 
@@ -159,7 +162,7 @@ impl DocumentStore {
         id: &ArxivId,
         kind: ArtifactKind,
     ) -> Result<Vec<u8>, Error> {
-        let response =
+        let mut response =
             self.http
                 .get(url.clone())
                 .send()
@@ -181,14 +184,40 @@ impl DocumentStore {
                 status: status.as_u16(),
             });
         }
-        Ok(response
-            .bytes()
-            .await
-            .map_err(|source| Error::Download {
-                url: url.to_string(),
-                source,
-            })?
-            .to_vec())
+        let limit = match kind {
+            ArtifactKind::Pdf => self.max_pdf_bytes,
+            ArtifactKind::Source => self.limits.max_compressed_bytes,
+        };
+        if response
+            .content_length()
+            .is_some_and(|length| length > limit as u64)
+        {
+            return Err(Error::ArtifactTooLarge {
+                id: id.to_string(),
+                kind: kind.label(),
+                limit,
+            });
+        }
+
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|source| Error::Download {
+            url: url.to_string(),
+            source,
+        })? {
+            if bytes
+                .len()
+                .checked_add(chunk.len())
+                .is_none_or(|length| length > limit)
+            {
+                return Err(Error::ArtifactTooLarge {
+                    id: id.to_string(),
+                    kind: kind.label(),
+                    limit,
+                });
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
     }
 
     /// Publish a PDF: validate, write beside the destination, then rename.
@@ -286,6 +315,7 @@ pub struct DocumentStoreBuilder {
     user_agent: String,
     timeout: Duration,
     limits: ArchiveLimits,
+    max_pdf_bytes: usize,
 }
 
 impl DocumentStoreBuilder {
@@ -313,6 +343,12 @@ impl DocumentStoreBuilder {
         self
     }
 
+    /// Override the largest PDF response accepted.
+    pub fn max_pdf_bytes(mut self, max_pdf_bytes: usize) -> Self {
+        self.max_pdf_bytes = max_pdf_bytes;
+        self
+    }
+
     /// Validate the configuration and build the store.
     pub fn build(self) -> Result<DocumentStore, Error> {
         validate_root(&self.cache_root)?;
@@ -331,6 +367,7 @@ impl DocumentStoreBuilder {
             base_url,
             http,
             limits: self.limits,
+            max_pdf_bytes: self.max_pdf_bytes,
         })
     }
 }

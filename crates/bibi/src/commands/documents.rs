@@ -31,7 +31,7 @@ pub async fn run_fetch(
 
     // The result is one line: a path or a URL, so `open $(bibi fetch k)` works.
     let value = target.as_str().into_owned();
-    output::emit(&format!("{value}\n"));
+    output::emit(&format!("{value}\n"))?;
     match &target {
         FetchTarget::Cached(_) => output::note("from the cache"),
         FetchTarget::Downloaded(_) => output::note("downloaded"),

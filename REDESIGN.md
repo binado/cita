@@ -775,7 +775,10 @@ The cache is purely derived and disposable. Removing a record does not delete a
 cache entry, because another project may use the same entry and there is no
 global project registry or reference count. Cache eviction is an explicit global
 operation (`cache clean`) independent of any manifest. Extraction of source
-archives is bounded and refuses unsafe archives.
+archives is bounded and refuses unsafe archives. Downloads are bounded while
+they are received: PDFs at 256 MiB and compressed source packages at 64 MiB, so
+a misleading or absent `Content-Length` cannot turn a fetch into unbounded
+memory growth.
 
 **Deferred — integrity tracking.** A "lockfile" was proposed. The manifest
 already pins exact metadata, so there is no *resolution* to lock; the only thing

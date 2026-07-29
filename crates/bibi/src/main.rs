@@ -38,7 +38,7 @@ async fn run(cli: Cli) -> anyhow::Result<bool> {
     // Completions describe the CLI itself, so they are answered before any
     // platform directory is discovered or any provider is constructed.
     if let Command::Completions(args) = &cli.command {
-        output::emit(&cli::completions(args.shell));
+        output::emit(&cli::completions(args.shell))?;
         return Ok(false);
     }
     let services = bootstrap::services()?;

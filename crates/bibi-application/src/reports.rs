@@ -52,7 +52,7 @@ pub struct SkippedItem {
     pub item: String,
     /// Why it was skipped.
     pub reason: SkipReason,
-    /// The stored record's BibTeX, so a skip still produces usable output.
+    /// The stored record's BibTeX when the command emits skipped records.
     pub bibtex: Option<String>,
 }
 
@@ -69,6 +69,11 @@ pub enum SkipReason {
         /// The key that is taken.
         existing: CitationKey,
     },
+    /// An earlier selector in the same removal already deleted this record.
+    AlreadyRemoved {
+        /// The local key the record had.
+        existing: CitationKey,
+    },
 }
 
 impl std::fmt::Display for SkipReason {
@@ -81,6 +86,12 @@ impl std::fmt::Display for SkipReason {
                 formatter,
                 "citation key `{existing}` already belongs to another record"
             ),
+            Self::AlreadyRemoved { existing } => {
+                write!(
+                    formatter,
+                    "`{existing}` was already removed by an earlier selector"
+                )
+            }
         }
     }
 }

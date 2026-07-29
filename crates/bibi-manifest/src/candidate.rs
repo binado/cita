@@ -166,6 +166,21 @@ impl ManifestCandidate {
         duplicate_position(&self.records, identifiers, provenance, None).map(|at| &self.records[at])
     }
 
+    /// Find every record that already represents this work.
+    ///
+    /// Most callers only need to know whether any duplicate exists. Planning an
+    /// overwrite is different: two identifiers may point at two different
+    /// records, and choosing either would silently discard the other target.
+    pub fn duplicates_of<'a>(
+        &'a self,
+        identifiers: &'a Identifiers,
+        provenance: &'a Provenance,
+    ) -> impl Iterator<Item = &'a Record> {
+        self.records
+            .iter()
+            .filter(move |record| duplicates(record, identifiers, provenance))
+    }
+
     /// The same query, ignoring one record — the one about to be replaced.
     pub fn duplicate_of_excluding(
         &self,
@@ -195,11 +210,14 @@ fn duplicate_position(
     exclude: Option<&BibiId>,
 ) -> Option<usize> {
     records.iter().position(|record| {
-        exclude.is_none_or(|id| record.id != *id)
-            && (record.identifiers.intersects(identifiers)
-                || (provenance.identity().is_some()
-                    && record.provenance.identity() == provenance.identity()))
+        exclude.is_none_or(|id| record.id != *id) && duplicates(record, identifiers, provenance)
     })
+}
+
+fn duplicates(record: &Record, identifiers: &Identifiers, provenance: &Provenance) -> bool {
+    record.identifiers.intersects(identifiers)
+        || (provenance.identity().is_some()
+            && record.provenance.identity() == provenance.identity())
 }
 
 #[cfg(test)]
@@ -323,5 +341,29 @@ mod tests {
                 .duplicate_of(&Identifiers::default(), &unrelated)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn duplicate_detection_can_return_every_possible_target() {
+        let mut by_doi = record("ByDoi", "local", "unused");
+        by_doi.provenance = Provenance::unmanaged(ProviderName::new("local").unwrap());
+        by_doi.identifiers.doi = Some(Doi::new("10.1/shared").unwrap());
+        let mut by_arxiv = record("ByArxiv", "local", "unused");
+        by_arxiv.provenance = Provenance::unmanaged(ProviderName::new("local").unwrap());
+        by_arxiv.identifiers.arxiv = Some(ArxivId::new("1207.7214").unwrap());
+        let mut candidate = ManifestCandidate::empty();
+        candidate.insert(by_doi).unwrap();
+        candidate.insert(by_arxiv).unwrap();
+
+        let identifiers = Identifiers {
+            doi: Some(Doi::new("10.1/shared").unwrap()),
+            arxiv: Some(ArxivId::new("1207.7214v2").unwrap()),
+        };
+        let provenance = Provenance::unmanaged(ProviderName::new("other").unwrap());
+        let matches = candidate
+            .duplicates_of(&identifiers, &provenance)
+            .map(|record| record.key.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(matches, ["ByDoi", "ByArxiv"]);
     }
 }

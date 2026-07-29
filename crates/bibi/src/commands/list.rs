@@ -55,7 +55,7 @@ pub fn run(services: &Services, target: &TargetSelection, args: ListArgs) -> Res
         ListFormat::Bibtex => render_records(&records)?,
         ListFormat::Json => to_json(&records)?,
     };
-    output::emit(&rendered);
+    output::emit(&rendered)?;
     if records.is_empty() && args.format == ListFormat::Table {
         output::note("no records match");
     }

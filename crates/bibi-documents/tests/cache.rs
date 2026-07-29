@@ -1,7 +1,9 @@
 //! The cache against a local server: paths, replacement, and eviction.
 
 use bibi_core::ArxivId;
-use bibi_documents::{ArtifactKind, CleanMode, DocumentStore, FetchOutcome, FetchPolicy};
+use bibi_documents::{
+    ArchiveLimits, ArtifactKind, CleanMode, DocumentStore, Error, FetchOutcome, FetchPolicy,
+};
 use std::{
     io::{BufRead, BufReader, Write},
     net::TcpListener,
@@ -15,14 +17,32 @@ struct Server {
     requests: Arc<Mutex<Vec<String>>>,
 }
 
+enum Reply {
+    Fixed(u16, Vec<u8>),
+    Chunked(Vec<Vec<u8>>),
+}
+
 impl Server {
     fn new(replies: Vec<(u16, Vec<u8>)>) -> Self {
+        Self::serve(
+            replies
+                .into_iter()
+                .map(|(status, body)| Reply::Fixed(status, body))
+                .collect(),
+        )
+    }
+
+    fn chunked(chunks: Vec<Vec<u8>>) -> Self {
+        Self::serve(vec![Reply::Chunked(chunks)])
+    }
+
+    fn serve(replies: Vec<Reply>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("binding a test server");
         let base_url = format!("http://{}/", listener.local_addr().unwrap());
         let requests = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&requests);
         thread::spawn(move || {
-            for (status, body) in replies {
+            for reply in replies {
                 let Ok((mut stream, _)) = listener.accept() else {
                     return;
                 };
@@ -47,13 +67,28 @@ impl Server {
                         .unwrap_or_default()
                         .to_owned(),
                 );
-                let mut response = format!(
-                    "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                )
-                .into_bytes();
-                response.extend_from_slice(&body);
-                let _ = stream.write_all(&response);
+                match reply {
+                    Reply::Fixed(status, body) => {
+                        let mut response = format!(
+                            "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .into_bytes();
+                        response.extend_from_slice(&body);
+                        let _ = stream.write_all(&response);
+                    }
+                    Reply::Chunked(chunks) => {
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                        );
+                        for chunk in chunks {
+                            let _ = write!(stream, "{:x}\r\n", chunk.len());
+                            let _ = stream.write_all(&chunk);
+                            let _ = stream.write_all(b"\r\n");
+                        }
+                        let _ = stream.write_all(b"0\r\n\r\n");
+                    }
+                }
                 let _ = stream.flush();
             }
         });
@@ -253,6 +288,70 @@ async fn a_response_that_is_not_the_artifact_is_refused_and_nothing_is_published
             .join("bibi/documents/arxiv/1207.7214/paper.pdf")
             .exists()
     );
+}
+
+#[tokio::test]
+async fn an_oversized_pdf_is_rejected_from_its_declared_length() {
+    let directory = tempfile::tempdir().unwrap();
+    let body = pdf("too large");
+    let server = Server::new(vec![(200, body.clone())]);
+    let store = DocumentStore::builder(directory.path().join("bibi"))
+        .base_url(&server.base_url)
+        .max_pdf_bytes(body.len() - 1)
+        .build()
+        .unwrap();
+    let id = arxiv("1207.7214");
+
+    let error = store
+        .fetch(&id, ArtifactKind::Pdf, FetchPolicy::UseCache)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::ArtifactTooLarge { .. }));
+    assert!(!store.path_for(&id, ArtifactKind::Pdf).exists());
+}
+
+#[tokio::test]
+async fn a_pdf_exactly_at_the_download_limit_is_accepted() {
+    let directory = tempfile::tempdir().unwrap();
+    let body = pdf("exact");
+    let server = Server::new(vec![(200, body.clone())]);
+    let store = DocumentStore::builder(directory.path().join("bibi"))
+        .base_url(&server.base_url)
+        .max_pdf_bytes(body.len())
+        .build()
+        .unwrap();
+    let id = arxiv("1207.7214");
+
+    store
+        .fetch(&id, ArtifactKind::Pdf, FetchPolicy::UseCache)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read(store.path_for(&id, ArtifactKind::Pdf)).unwrap(),
+        body
+    );
+}
+
+#[tokio::test]
+async fn a_chunked_source_is_stopped_when_it_crosses_the_compressed_limit() {
+    let directory = tempfile::tempdir().unwrap();
+    let server = Server::chunked(vec![vec![0x1f, 0x8b], vec![0, 1, 2]]);
+    let store = DocumentStore::builder(directory.path().join("bibi"))
+        .base_url(&server.base_url)
+        .limits(ArchiveLimits {
+            max_compressed_bytes: 4,
+            ..ArchiveLimits::default()
+        })
+        .build()
+        .unwrap();
+    let id = arxiv("1207.7214");
+
+    let error = store
+        .fetch(&id, ArtifactKind::Source, FetchPolicy::UseCache)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::ArtifactTooLarge { .. }));
+    assert!(!store.path_for(&id, ArtifactKind::Source).exists());
 }
 
 #[tokio::test]

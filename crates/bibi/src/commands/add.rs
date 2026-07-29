@@ -58,7 +58,7 @@ pub async fn run(services: &Services, target: &TargetSelection, args: AddArgs) -
             .await?
         }
     };
-    Ok(present(&report, args.dry_run))
+    present(&report, args.dry_run)
 }
 
 /// Write the BibTeX to stdout and the explanations to stderr.
@@ -66,7 +66,7 @@ pub async fn run(services: &Services, target: &TargetSelection, args: AddArgs) -
 /// Every item bibi was asked about produces an entry on stdout — added,
 /// overwritten, or skipped — so the output is the complete set of entries the
 /// command concerns, usable as input to something else.
-fn present(report: &AddReport, dry_run: bool) -> bool {
+fn present(report: &AddReport, dry_run: bool) -> Result<bool> {
     let mut entries = Vec::new();
     for record in &report.items.successes {
         entries.push(record.bibtex.clone());
@@ -77,7 +77,7 @@ fn present(report: &AddReport, dry_run: bool) -> bool {
         }
     }
     if !entries.is_empty() {
-        output::emit(&(entries.join("\n\n") + "\n"));
+        output::emit(&(entries.join("\n\n") + "\n"))?;
     }
     output::report(&report.items);
 
@@ -96,5 +96,5 @@ fn present(report: &AddReport, dry_run: bool) -> bool {
     } else if report.committed {
         output::note(format!("added {added}, overwrote {overwritten}"));
     }
-    report.items.has_failures()
+    Ok(report.items.has_failures())
 }

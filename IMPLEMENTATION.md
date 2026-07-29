@@ -1204,6 +1204,7 @@ Reuse the current protections:
 - validate `%PDF-` before publishing PDFs;
 - download to a same-directory temporary file;
 - sync and atomically replace on `Force`;
+- cap PDFs at 256 MiB while receiving the response;
 - cap compressed source at 64 MiB;
 - cap decompressed source at 256 MiB;
 - cap extracted regular files at 10,000;

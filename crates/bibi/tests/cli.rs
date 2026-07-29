@@ -157,6 +157,25 @@ fn rename_rewrites_only_the_key_and_remove_emits_what_it_deleted() {
 }
 
 #[test]
+fn removing_the_same_record_twice_is_a_successful_skip() {
+    let (_directory, path) = project();
+    std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
+    bibi(&path, &["add", "-f", "library.bib"]);
+
+    let removed = bibi(&path, &["remove", "notes:2026", "notes:2026"]);
+    assert_eq!(code(&removed), 0);
+    assert_eq!(
+        stdout(&removed).matches("@unpublished{notes:2026,").count(),
+        1
+    );
+    assert!(stderr(&removed).contains("already removed"));
+    assert_eq!(
+        stdout(&bibi(&path, &["list", "--format", "keys"])),
+        "astropy:2022\n"
+    );
+}
+
+#[test]
 fn a_dry_run_changes_nothing_on_disk() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
@@ -448,4 +467,51 @@ fn cache_clean_previews_before_it_removes_and_needs_to_be_told_which() {
 
     // Neither flag is a usage error: eviction is never implicit.
     assert_eq!(code(&bibi(&path, &["cache", "clean"])), 2);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_non_broken_stdout_error_exits_nonzero() {
+    use std::{fs::OpenOptions, process::Stdio};
+
+    let (_directory, path) = project();
+    std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
+    bibi(&path, &["add", "-f", "library.bib"]);
+    let sink = OpenOptions::new().write(true).open("/dev/full").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_bibi"))
+        .current_dir(&path)
+        .env("BIBI_GLOBAL_MANIFEST", path.join("global.toml"))
+        .env("BIBI_CACHE_ROOT", path.join("cache/bibi"))
+        .args(["show", "notes:2026"])
+        .stdout(Stdio::from(sink))
+        .output()
+        .expect("running bibi");
+
+    assert_eq!(code(&output), 1);
+    assert!(stderr(&output).contains("writing stdout"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_closed_stdout_pipe_still_exits_zero() {
+    use std::process::Stdio;
+
+    let (_directory, path) = project();
+    let large = format!("@misc{{Large,title={{{}}}}}\n", "x".repeat(1_000_000));
+    std::fs::write(path.join("large.bib"), large).unwrap();
+    bibi(&path, &["add", "-f", "large.bib", "--force-local"]);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_bibi"))
+        .current_dir(&path)
+        .env("BIBI_GLOBAL_MANIFEST", path.join("global.toml"))
+        .env("BIBI_CACHE_ROOT", path.join("cache/bibi"))
+        .args(["show", "Large"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("running bibi");
+    drop(child.stdout.take());
+    let output = child.wait_with_output().expect("waiting for bibi");
+
+    assert_eq!(code(&output), 0);
 }

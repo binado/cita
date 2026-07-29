@@ -1,6 +1,7 @@
 //! stdout carries the result; stderr carries everything meant for a human.
 
 use anstyle::{AnsiColor, Style};
+use anyhow::Context;
 use bibi_application::domain::Record;
 use bibi_application::{BatchReport, ItemFailure, SkippedItem};
 use std::io::{IsTerminal, Write};
@@ -10,18 +11,17 @@ use std::io::{IsTerminal, Write};
 /// A broken pipe is not an error: `bibi list | head` closes the pipe on
 /// purpose, and reporting that as a failure would be noise on every use of the
 /// tool in a shell pipeline.
-pub fn emit(text: &str) {
+pub fn emit(text: &str) -> anyhow::Result<()> {
     let mut stdout = std::io::stdout().lock();
-    if let Err(error) = stdout.write_all(text.as_bytes())
-        && error.kind() == std::io::ErrorKind::BrokenPipe
-    {
-        quiet_exit();
+    match write(&mut stdout, text) {
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => quiet_exit(),
+        result => result.context("writing stdout"),
     }
-    if let Err(error) = stdout.flush()
-        && error.kind() == std::io::ErrorKind::BrokenPipe
-    {
-        quiet_exit();
-    }
+}
+
+fn write(writer: &mut impl Write, text: &str) -> std::io::Result<()> {
+    writer.write_all(text.as_bytes())?;
+    writer.flush()
 }
 
 fn quiet_exit() -> ! {
@@ -106,4 +106,27 @@ fn truncate(value: &str, width: usize) -> String {
     }
     let kept = width.saturating_sub(1);
     value.chars().take(kept).collect::<String>() + "…"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("sink failed"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn non_broken_write_errors_are_returned() {
+        let error = write(&mut FailingWriter, "result").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+    }
 }

@@ -5,6 +5,7 @@ use bibi_application::{
     add_file, add_locators, domain::CitationKey, domain::ManifestStore, list, remove, rename, show,
     to_json,
 };
+use bibi_core::{ArxivId, Doi};
 use bibi_provider::{
     LocalProvider, Provider, ProviderRegistry,
     testing::{FakeProvider, provider_record},
@@ -324,6 +325,111 @@ async fn importing_resolves_what_it_can_and_keeps_the_rest_locally() {
 }
 
 #[tokio::test]
+async fn importing_refuses_identifiers_that_resolve_to_different_records() {
+    let mut by_doi = provider_record("inspire", "1", "ByDoi", "DOI paper");
+    by_doi.identifiers.doi = Some(Doi::new("10.1/doi-paper").unwrap());
+    let mut by_arxiv = provider_record("inspire", "2", "ByArxiv", "arXiv paper");
+    by_arxiv.identifiers.arxiv = Some(ArxivId::new("1207.7214").unwrap());
+    let network = Arc::new(
+        FakeProvider::new("inspire")
+            .with_record("doi:10.1/doi-paper", by_doi)
+            .with_record("arxiv:1207.7214", by_arxiv),
+    );
+    let project = Project::new(network);
+    let path = project.file(
+        "conflicting.bib",
+        "@article{Conflicting,title={Conflicting},doi={10.1/doi-paper},eprint={1207.7214}}\n",
+    );
+
+    let report = add_file(
+        &project.services,
+        &project.store(),
+        &AddFileRequest {
+            source: InputSource::Path(path),
+            provider: None,
+            overwrite: false,
+            force_local: false,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(report.items.failures.len(), 1);
+    assert!(
+        report.items.failures[0]
+            .message
+            .contains("different provider records")
+    );
+    assert!(!project.store().exists());
+}
+
+#[tokio::test]
+async fn importing_accepts_two_identifiers_for_the_same_provider_record() {
+    let mut record = provider_record("inspire", "1", "Same", "Same paper");
+    record.identifiers.doi = Some(Doi::new("10.1/same").unwrap());
+    record.identifiers.arxiv = Some(ArxivId::new("1207.7214").unwrap());
+    let network = Arc::new(
+        FakeProvider::new("inspire")
+            .with_record("doi:10.1/same", record.clone())
+            .with_record("arxiv:1207.7214", record),
+    );
+    let project = Project::new(network);
+    let path = project.file(
+        "same.bib",
+        "@article{Imported,title={Imported},doi={10.1/same},eprint={1207.7214}}\n",
+    );
+
+    let report = add_file(
+        &project.services,
+        &project.store(),
+        &AddFileRequest {
+            source: InputSource::Path(path),
+            provider: None,
+            overwrite: false,
+            force_local: false,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(report.items.successes.len(), 1);
+    assert!(report.items.failures.is_empty());
+}
+
+#[tokio::test]
+async fn importing_does_not_ignore_a_failure_after_an_identifier_resolved() {
+    let mut record = provider_record("primary", "1", "Found", "Found paper");
+    record.identifiers.doi = Some(Doi::new("10.1/found").unwrap());
+    let primary = Arc::new(FakeProvider::new("primary").with_record("doi:10.1/found", record));
+    let failing = Arc::new(FakeProvider::new("backup").failing_retrieval("timed out"));
+    let project = Project::with(vec![primary, failing, Arc::new(LocalProvider::new())]);
+    let path = project.file(
+        "partial.bib",
+        "@article{Partial,title={Partial},doi={10.1/found},eprint={1207.7214}}\n",
+    );
+
+    let report = add_file(
+        &project.services,
+        &project.store(),
+        &AddFileRequest {
+            source: InputSource::Path(path),
+            provider: None,
+            overwrite: false,
+            force_local: false,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(report.items.failures.len(), 1);
+    assert!(report.items.failures[0].message.contains("timed out"));
+    assert!(!project.store().exists());
+}
+
+#[tokio::test]
 async fn force_local_stores_entries_a_provider_would_have_resolved() {
     let project = Project::new(network());
     let path = project.file(
@@ -451,6 +557,56 @@ async fn two_imported_entries_that_duplicate_each_other_fail_only_one_item() {
 }
 
 #[tokio::test]
+async fn multiple_identifier_targets_fail_one_item_without_discarding_the_batch() {
+    let mut ambiguous = provider_record("inspire", "1", "Combined", "Combined paper");
+    ambiguous.identifiers.doi = Some(Doi::new("10.1/combined").unwrap());
+    ambiguous.identifiers.arxiv = Some(ArxivId::new("1207.7214").unwrap());
+    let new = provider_record("inspire", "2", "New", "New paper");
+    let network = Arc::new(
+        FakeProvider::new("inspire")
+            .with_record("doi:10.1/new", new)
+            .with_record("doi:10.1/combined", ambiguous),
+    );
+    let project = Project::new(network);
+    let path = project.file(
+        "split-identifiers.bib",
+        "@misc{ByDoi,title={By DOI},doi={10.1/combined}}\n\n@misc{ByArxiv,title={By arXiv},eprint={1207.7214}}\n",
+    );
+    add_file(
+        &project.services,
+        &project.store(),
+        &AddFileRequest {
+            source: InputSource::Path(path),
+            provider: None,
+            overwrite: false,
+            force_local: true,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let skipped = add(&project, &["10.1/combined"], AddRequest::default()).await;
+    assert_eq!(skipped.items.failures.len(), 1);
+    assert!(skipped.items.skipped.is_empty());
+
+    let overwritten = add(
+        &project,
+        &["10.1/new", "10.1/combined"],
+        AddRequest {
+            overwrite: true,
+            ..AddRequest::default()
+        },
+    )
+    .await;
+    assert_eq!(overwritten.items.successes.len(), 1);
+    assert_eq!(overwritten.items.failures.len(), 1);
+    assert!(overwritten.committed);
+    let records = list(&project.services, &project.store(), &ListRequest::default()).unwrap();
+    assert_eq!(records.len(), 3, "two originals plus the unrelated success");
+}
+
+#[tokio::test]
 async fn the_local_filter_asks_the_registry_rather_than_matching_a_name() {
     let project = Project::new(network());
     add(&project, &["1207.7214"], AddRequest::default()).await;
@@ -540,6 +696,34 @@ async fn removing_emits_what_it_deleted_and_renaming_preserves_the_payload() {
         list(&project.services, &project.store(), &ListRequest::default())
             .unwrap()
             .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn removing_the_same_record_twice_is_an_idempotent_skip() {
+    let project = Project::new(network());
+    add(&project, &["1207.7214"], AddRequest::default()).await;
+
+    let selectors = ["Aad:2012tfa".to_owned(), "inspire:1124337".to_owned()];
+    let report = remove(&project.store(), &selectors, false).unwrap();
+    assert_eq!(report.items.successes.len(), 1);
+    assert_eq!(report.items.skipped.len(), 1);
+    assert!(report.items.failures.is_empty());
+    assert!(report.committed);
+    assert!(report.items.skipped[0].bibtex.is_none());
+
+    add(&project, &["1207.7214"], AddRequest::default()).await;
+    let dry_run = remove(&project.store(), &selectors, true).unwrap();
+    assert_eq!(dry_run.items.successes.len(), 1);
+    assert_eq!(dry_run.items.skipped.len(), 1);
+    assert!(dry_run.items.failures.is_empty());
+    assert!(!dry_run.committed);
+    assert_eq!(
+        list(&project.services, &project.store(), &ListRequest::default())
+            .unwrap()
+            .len(),
+        1,
+        "the dry run leaves the record in place"
     );
 }
 

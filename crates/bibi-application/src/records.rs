@@ -2,7 +2,7 @@
 
 use crate::{
     error::Error,
-    reports::{BatchReport, ItemFailure},
+    reports::{BatchReport, ItemFailure, SkipReason, SkippedItem},
 };
 use bibi_bibtex::CitationKey;
 use bibi_core::{Record, Selector};
@@ -73,13 +73,13 @@ pub fn remove(
             Ok(record) if removed.contains(&record.id) => {
                 // Two selectors naming one record: the second asks for a state
                 // that already holds, so it is reported rather than failed.
-                items.failures.push(ItemFailure::new(
-                    selector,
-                    format!(
-                        "`{}` was already removed by an earlier selector",
-                        record.key
-                    ),
-                ));
+                items.skipped.push(SkippedItem {
+                    item: selector.clone(),
+                    reason: SkipReason::AlreadyRemoved {
+                        existing: record.key.clone(),
+                    },
+                    bibtex: None,
+                });
             }
             Ok(record) => {
                 let deleted = candidate.remove(&record.id)?;
