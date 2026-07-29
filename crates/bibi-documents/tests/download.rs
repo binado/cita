@@ -1,4 +1,5 @@
-//! Retrieval against a local server: naming, validation, and never clobbering.
+//! Retrieval against a local server: naming, validation, and clobbering only
+//! when forced.
 
 use bibi_core::ArxivId;
 use bibi_documents::{ArtifactClient, ArtifactKind, Error, default_filename};
@@ -146,7 +147,7 @@ async fn a_download_lands_under_the_name_the_caller_chose() {
     let (_directory, path) = destination("wherever.pdf");
 
     client(&server)
-        .download(&arxiv("1207.7214"), ArtifactKind::Pdf, &path)
+        .download(&arxiv("1207.7214"), ArtifactKind::Pdf, &path, false)
         .await
         .unwrap();
 
@@ -167,7 +168,7 @@ async fn the_default_name_is_the_identifier_and_the_kind() {
         .join(default_filename(&id, ArtifactKind::Source));
 
     client(&server)
-        .download(&id, ArtifactKind::Source, &path)
+        .download(&id, ArtifactKind::Source, &path, false)
         .await
         .unwrap();
 
@@ -178,13 +179,13 @@ async fn the_default_name_is_the_identifier_and_the_kind() {
 }
 
 #[tokio::test]
-async fn an_existing_destination_is_never_replaced() {
+async fn an_existing_destination_is_not_replaced_without_force() {
     let server = Server::new(vec![(200, pdf("new"))]);
     let (_directory, path) = destination("1207.7214.pdf");
     std::fs::write(&path, "mine").unwrap();
 
     let error = client(&server)
-        .download(&arxiv("1207.7214"), ArtifactKind::Pdf, &path)
+        .download(&arxiv("1207.7214"), ArtifactKind::Pdf, &path, false)
         .await
         .unwrap_err();
 
@@ -195,12 +196,30 @@ async fn an_existing_destination_is_never_replaced() {
 }
 
 #[tokio::test]
+async fn a_forced_download_replaces_the_occupant() {
+    let server = Server::new(vec![(200, pdf("new"))]);
+    let (_directory, path) = destination("1207.7214.pdf");
+    std::fs::write(&path, "mine").unwrap();
+
+    client(&server)
+        .download(&arxiv("1207.7214"), ArtifactKind::Pdf, &path, true)
+        .await
+        .unwrap();
+
+    assert_eq!(std::fs::read(&path).unwrap(), pdf("new"));
+    assert_eq!(server.requests(), vec!["/pdf/1207.7214"]);
+    // The publish is still a rename from a temporary sibling, so a complete
+    // file exchanged for the occupant is all that remains.
+    assert_eq!(siblings(&path), 1);
+}
+
+#[tokio::test]
 async fn a_holding_page_is_refused_and_writes_nothing() {
     let server = Server::new(vec![(200, b"<!DOCTYPE html><html>".to_vec())]);
     let (_directory, path) = destination("1207.7214.pdf");
 
     let error = client(&server)
-        .download(&arxiv("1207.7214"), ArtifactKind::Pdf, &path)
+        .download(&arxiv("1207.7214"), ArtifactKind::Pdf, &path, false)
         .await
         .unwrap_err();
 
@@ -217,7 +236,7 @@ async fn a_pdf_is_not_a_source_archive() {
     let (_directory, path) = destination("1207.7214.tar.gz");
 
     let error = client(&server)
-        .download(&arxiv("1207.7214"), ArtifactKind::Source, &path)
+        .download(&arxiv("1207.7214"), ArtifactKind::Source, &path, false)
         .await
         .unwrap_err();
 
@@ -231,7 +250,7 @@ async fn a_missing_artifact_says_so_rather_than_reporting_a_status() {
     let (_directory, path) = destination("2401.00001.pdf");
 
     let error = client(&server)
-        .download(&arxiv("2401.00001"), ArtifactKind::Pdf, &path)
+        .download(&arxiv("2401.00001"), ArtifactKind::Pdf, &path, false)
         .await
         .unwrap_err();
 
@@ -245,7 +264,7 @@ async fn any_other_status_is_reported_with_its_code() {
     let (_directory, path) = destination("2401.00001.pdf");
 
     let error = client(&server)
-        .download(&arxiv("2401.00001"), ArtifactKind::Pdf, &path)
+        .download(&arxiv("2401.00001"), ArtifactKind::Pdf, &path, false)
         .await
         .unwrap_err();
 
@@ -265,7 +284,7 @@ async fn a_response_that_grows_past_the_bound_is_abandoned() {
         .max_bytes(64)
         .build()
         .unwrap()
-        .download(&arxiv("2401.00001"), ArtifactKind::Pdf, &path)
+        .download(&arxiv("2401.00001"), ArtifactKind::Pdf, &path, false)
         .await
         .unwrap_err();
 
@@ -292,6 +311,7 @@ async fn the_progress_callback_receives_a_length_and_every_chunk() {
             &arxiv("2401.00001"),
             ArtifactKind::Pdf,
             &path,
+            false,
             move |bytes, total| recorder.lock().unwrap().push((bytes, total)),
         )
         .await
@@ -325,6 +345,7 @@ async fn the_progress_callback_reports_a_known_total_when_the_server_announces_o
             &arxiv("2401.00001"),
             ArtifactKind::Pdf,
             &path,
+            false,
             move |bytes, total| recorder.lock().unwrap().push((bytes, total)),
         )
         .await

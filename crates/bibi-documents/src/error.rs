@@ -49,10 +49,10 @@ pub enum Error {
     },
     /// Something is already at the destination.
     ///
-    /// Retrieval never replaces a file. The caller chose the path — either
-    /// explicitly or through the default naming — and overwriting it would
-    /// discard whatever was there on the strength of a guess about what the
-    /// user meant.
+    /// Retrieval never replaces a file unless the caller passed `force`. The
+    /// caller chose the path — either explicitly or through the default
+    /// naming — and overwriting it would discard whatever was there on the
+    /// strength of a guess about what the user meant.
     #[error("{path} already exists")]
     DestinationExists {
         /// The occupied path.

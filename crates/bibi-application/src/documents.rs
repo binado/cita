@@ -15,8 +15,11 @@ pub struct FetchRequest {
     pub source: bool,
     /// Report the public URL instead of downloading anything.
     pub url: bool,
-    /// Download here instead of to the default name. Never overwritten.
+    /// Download here instead of to the default name. Refused when occupied,
+    /// unless `force` is set.
     pub output: Option<PathBuf>,
+    /// Replace an occupied destination instead of failing on it.
+    pub force: bool,
     /// The directory a default name resolves against.
     pub working_directory: PathBuf,
 }
@@ -49,10 +52,11 @@ impl FetchTarget {
 /// publisher. Keeping the command pointed at one artifact service is what stops
 /// it from becoming a general document acquisition layer.
 ///
-/// An occupied destination is always a collision — neither a default name nor
-/// an explicit `--output` is silently accepted. The shell decides what to do
-/// with a file that is already on disk (`open -a Preview 1207.7214.pdf`),
-/// which keeps `bibi fetch` a downloader rather than an opener.
+/// An occupied destination is a collision unless `force` is set — neither a
+/// default name nor an explicit `--output` is silently accepted. The shell
+/// decides what to do with a file that is already on disk
+/// (`open -a Preview 1207.7214.pdf`), which keeps `bibi fetch` a downloader
+/// rather than an opener.
 ///
 /// `progress` records the bytes delivered by the underlying transport. The
 /// caller decides visibility; the no-op [`Progress::silent`] keeps this
@@ -93,7 +97,7 @@ pub async fn fetch(
     };
     services
         .documents()?
-        .download_with_progress(&arxiv, kind, &destination, |bytes, total| {
+        .download_with_progress(&arxiv, kind, &destination, request.force, |bytes, total| {
             progress.on_chunk(bytes, total);
         })
         .await?;

@@ -170,6 +170,37 @@ async fn an_explicit_output_is_never_treated_as_already_present() {
 }
 
 #[tokio::test]
+async fn force_replaces_an_occupied_destination() {
+    let body = b"%PDF-1.7\nnew".to_vec();
+    let base_url = chunked_server(&body, 8);
+
+    let mut project = project().await;
+    project.services = project.services.with_documents(
+        ArtifactClient::builder()
+            .base_url(&base_url)
+            .build()
+            .unwrap(),
+    );
+    let destination = project.path("1207.7214.pdf");
+    std::fs::write(&destination, "mine").unwrap();
+
+    let target = fetch(
+        &project.services,
+        &project.store(),
+        &FetchRequest {
+            force: true,
+            ..project.request("Aad:2012tfa")
+        },
+        &mut Progress::silent(),
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(target, FetchTarget::Downloaded(_)));
+    assert_eq!(std::fs::read(&destination).unwrap(), body);
+}
+
+#[tokio::test]
 async fn a_record_without_an_arxiv_identifier_says_so_rather_than_guessing() {
     let project = project().await;
 

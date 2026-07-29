@@ -756,12 +756,25 @@ fn fetching_a_record_without_an_arxiv_id_explains_why_it_cannot() {
 }
 
 #[test]
+fn a_forced_fetch_replaces_an_existing_file() {
+    let (_directory, path) = project_with_an_arxiv_record();
+    let destination = path.join("1207.7214.pdf");
+    std::fs::write(&destination, "mine").unwrap();
+
+    let output = bibi_fetching(
+        &path,
+        b"%PDF-1.7\nnew",
+        &["fetch", "Aad:2012tfa", "--force"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(std::fs::read(&destination).unwrap(), b"%PDF-1.7\nnew");
+}
+
+#[test]
 fn there_is_no_document_cache_to_maintain() {
     let (_directory, path) = project();
     // `cache clean` managed a global collection, which is a library concern.
     assert_eq!(code(&bibi(&path, &["cache", "clean", "--all"])), 2);
-    // And `--force` replaced a cached copy, of which there is none.
-    assert_eq!(code(&bibi(&path, &["fetch", "Aad:2012tfa", "--force"])), 2);
 }
 
 #[cfg(target_os = "linux")]

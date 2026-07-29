@@ -184,6 +184,9 @@ pub struct FetchArgs {
     /// Download to this exact path instead of the default name
     #[arg(short = 'o', long, value_name = "FILE", conflicts_with = "url")]
     pub output: Option<PathBuf>,
+    /// Overwrite the destination if it already exists
+    #[arg(short = 'f', long, conflicts_with = "url")]
+    pub force: bool,
     /// Suppress the download progress bar even on a terminal
     #[arg(long = "no-progress")]
     pub no_progress: bool,

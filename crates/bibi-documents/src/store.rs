@@ -35,19 +35,22 @@ impl ArtifactClient {
         }
     }
 
-    /// Download one artifact to `destination`, which must not already exist.
+    /// Download one artifact to `destination`, which must not already exist
+    /// unless `force` is set.
     ///
     /// The bytes are validated for their kind before anything is published, and
     /// published through a temporary sibling so a destination never holds a
-    /// partial download. The final rename refuses to clobber, so two concurrent
-    /// fetches cannot silently produce one winner.
+    /// partial download. Without `force` the final rename refuses to clobber,
+    /// so two concurrent fetches cannot silently produce one winner; with
+    /// `force` the rename atomically replaces whatever is there.
     pub async fn download(
         &self,
         id: &ArxivId,
         kind: ArtifactKind,
         destination: &Path,
+        force: bool,
     ) -> Result<(), Error> {
-        self.download_with_progress(id, kind, destination, |_, _| {})
+        self.download_with_progress(id, kind, destination, force, |_, _| {})
             .await
     }
 
@@ -63,12 +66,13 @@ impl ArtifactClient {
         id: &ArxivId,
         kind: ArtifactKind,
         destination: &Path,
+        force: bool,
         mut on_chunk: P,
     ) -> Result<(), Error>
     where
         P: FnMut(usize, Option<u64>) + Send,
     {
-        if destination.exists() {
+        if !force && destination.exists() {
             return Err(Error::DestinationExists {
                 path: destination.to_path_buf(),
             });
@@ -76,7 +80,7 @@ impl ArtifactClient {
         let url = artifact_url(&self.base_url, id, kind)?;
         let bytes = self.fetch(&url, id, kind, &mut on_chunk).await?;
         validate(&bytes, id, kind)?;
-        publish(destination, &bytes)
+        publish(destination, &bytes, force)
     }
 
     async fn fetch<P>(
@@ -161,8 +165,12 @@ fn validate(bytes: &[u8], id: &ArxivId, kind: ArtifactKind) -> Result<(), Error>
     }
 }
 
-/// Write beside the destination, sync, then rename into place without clobbering.
-fn publish(destination: &Path, bytes: &[u8]) -> Result<(), Error> {
+/// Write beside the destination, sync, then rename into place.
+///
+/// Without `force` the rename refuses to clobber; with `force` it atomically
+/// replaces an existing destination, so the occupant is exchanged for the
+/// complete download in one step rather than deleted and rewritten.
+fn publish(destination: &Path, bytes: &[u8], force: bool) -> Result<(), Error> {
     let parent = match destination.parent() {
         Some(parent) if parent.as_os_str().is_empty() => Path::new("."),
         Some(parent) => parent,
@@ -186,16 +194,24 @@ fn publish(destination: &Path, bytes: &[u8]) -> Result<(), Error> {
         .sync_all()
         .map_err(|source| Error::io(destination, source))?;
     // `persist_noclobber` removes the temporary on failure, so a lost race
-    // leaves the winner's file intact and no debris beside it.
-    temporary.persist_noclobber(destination).map_err(|error| {
-        if error.error.kind() == std::io::ErrorKind::AlreadyExists {
-            Error::DestinationExists {
-                path: destination.to_path_buf(),
+    // leaves the winner's file intact and no debris beside it. `persist`
+    // replaces the occupant atomically, which is exactly what `force` asked
+    // for; either way a failure removes the temporary.
+    if force {
+        temporary
+            .persist(destination)
+            .map_err(|error| Error::io(destination, error.error))?;
+    } else {
+        temporary.persist_noclobber(destination).map_err(|error| {
+            if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+                Error::DestinationExists {
+                    path: destination.to_path_buf(),
+                }
+            } else {
+                Error::io(destination, error.error)
             }
-        } else {
-            Error::io(destination, error.error)
-        }
-    })?;
+        })?;
+    }
     Ok(())
 }
 

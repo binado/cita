@@ -34,6 +34,7 @@ pub async fn run_fetch(
             source: args.source,
             url: args.url,
             output: args.output,
+            force: args.force,
             working_directory,
         },
         &mut progress,
