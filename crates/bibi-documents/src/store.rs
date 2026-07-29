@@ -47,18 +47,48 @@ impl ArtifactClient {
         kind: ArtifactKind,
         destination: &Path,
     ) -> Result<(), Error> {
+        self.download_with_progress(id, kind, destination, |_, _| {})
+            .await
+    }
+
+    /// Download one artifact to `destination`, reporting per-chunk progress.
+    ///
+    /// `on_chunk` is invoked with `(bytes_received, content_length_if_known)`
+    /// after every body chunk arrives, so a caller can drive a progress bar
+    /// without taking ownership of the response stream. The closure runs on the
+    /// same task as the download, so synchronous progress reporting is enough.
+    /// A no-op closure preserves the silent behaviour of [`Self::download`].
+    pub async fn download_with_progress<P>(
+        &self,
+        id: &ArxivId,
+        kind: ArtifactKind,
+        destination: &Path,
+        mut on_chunk: P,
+    ) -> Result<(), Error>
+    where
+        P: FnMut(usize, Option<u64>) + Send,
+    {
         if destination.exists() {
             return Err(Error::DestinationExists {
                 path: destination.to_path_buf(),
             });
         }
         let url = artifact_url(&self.base_url, id, kind)?;
-        let bytes = self.fetch(&url, id, kind).await?;
+        let bytes = self.fetch(&url, id, kind, &mut on_chunk).await?;
         validate(&bytes, id, kind)?;
         publish(destination, &bytes)
     }
 
-    async fn fetch(&self, url: &Url, id: &ArxivId, kind: ArtifactKind) -> Result<Vec<u8>, Error> {
+    async fn fetch<P>(
+        &self,
+        url: &Url,
+        id: &ArxivId,
+        kind: ArtifactKind,
+        on_chunk: &mut P,
+    ) -> Result<Vec<u8>, Error>
+    where
+        P: FnMut(usize, Option<u64>) + Send,
+    {
         let mut response =
             self.http
                 .get(url.clone())
@@ -86,12 +116,11 @@ impl ArtifactClient {
             kind: kind.label(),
             limit: self.max_bytes,
         };
-        if response
-            .content_length()
-            .is_some_and(|length| length > self.max_bytes as u64)
-        {
+        let total = response.content_length();
+        if total.is_some_and(|length| length > self.max_bytes as u64) {
             return Err(too_large());
         }
+        on_chunk(0, total);
 
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(|source| Error::Download {
@@ -106,6 +135,7 @@ impl ArtifactClient {
                 return Err(too_large());
             }
             bytes.extend_from_slice(&chunk);
+            on_chunk(bytes.len(), total);
         }
         Ok(bytes)
     }

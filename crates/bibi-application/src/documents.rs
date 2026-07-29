@@ -1,6 +1,6 @@
 //! Acquiring a record's document.
 
-use crate::{error::Error, services::Services};
+use crate::{Progress, error::Error, services::Services};
 use bibi_core::Selector;
 use bibi_documents::{ArtifactKind, default_filename};
 use bibi_manifest::ManifestStore;
@@ -56,11 +56,16 @@ impl FetchTarget {
 /// downloaded. An explicit `--output` is never treated this way: the caller
 /// named that path, so silently accepting whatever is already there would be a
 /// guess about what they meant.
+///
+/// `progress` records the bytes delivered by the underlying transport. The
+/// caller decides visibility; the no-op [`Progress::silent`] keeps this
+/// command's branching untouched by the presentation question.
 pub async fn fetch(
     services: &Services,
     store: &ManifestStore,
     request: &FetchRequest,
     keep_existing: bool,
+    progress: &mut Progress,
 ) -> Result<FetchTarget, Error> {
     let manifest = store.load()?.manifest;
     let record = manifest.resolve(&Selector::parse(&request.selector)?)?;
@@ -98,7 +103,9 @@ pub async fn fetch(
     }
     services
         .documents()?
-        .download(&arxiv, kind, &destination)
+        .download_with_progress(&arxiv, kind, &destination, |bytes, total| {
+            progress.on_chunk(bytes, total);
+        })
         .await?;
     Ok(FetchTarget::Downloaded(destination))
 }

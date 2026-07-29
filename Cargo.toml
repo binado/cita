@@ -33,6 +33,7 @@ bibi-provider = { path = "crates/bibi-provider", version = "0.1.0" }
 clap = { version = "4.5.23", features = ["derive"] }
 clap_complete = "4"
 httpdate = "1"
+indicatif = { version = "0.17", default-features = false, features = ["unicode-width"] }
 opener = "0.8.5"
 percent-encoding = "2.3.2"
 reqwest = { version = "0.12.9", default-features = false, features = ["json", "rustls-tls"] }

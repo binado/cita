@@ -2,7 +2,7 @@
 
 use crate::{cli::FetchArgs, output};
 use anyhow::{Context, Result};
-use bibi_application::{FetchRequest, FetchTarget, Services, fetch};
+use bibi_application::{FetchRequest, FetchTarget, Progress, Services, fetch};
 use std::path::Path;
 
 pub async fn run_fetch(
@@ -13,10 +13,23 @@ pub async fn run_fetch(
     let store = crate::bootstrap::store(target)?;
     let working_directory =
         std::env::current_dir().context("reading the current working directory")?;
+
+    // Suppressed under the same policy as the table and warnings: a non-tty
+    // stderr (or `NO_COLOR`) gets a no-op progress reporter and the pipeline
+    // stays quiet. `--no-progress` is an explicit override that forces the
+    // silent form even when the runtime policy would otherwise render a bar.
+    // `args.selector` doubles as the bar's prefix, since the user already
+    // typed it and it is what they are waiting on.
+    let mut progress = if args.no_progress || !output::color_enabled(&std::io::stderr()) {
+        Progress::silent()
+    } else {
+        Progress::visible(args.selector.clone())
+    };
+
     // An already-present default destination is a reportable outcome only when
     // the user asked to open the result. Otherwise it is a collision: they
     // asked for a download and did not get one.
-    let target = fetch(
+    let result = fetch(
         services,
         &store,
         &FetchRequest {
@@ -27,8 +40,13 @@ pub async fn run_fetch(
             working_directory,
         },
         args.open,
+        &mut progress,
     )
-    .await?;
+    .await;
+    // Clear the bar whether the download succeeded, errored, or was a URL.
+    // Idempotent if `progress` was a `silent()` no-op.
+    progress.finish();
+    let target = result?;
 
     // The result is one line: a path or a URL, so `open $(bibi fetch k)` works.
     let value = target.as_str().into_owned();

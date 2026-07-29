@@ -10,6 +10,13 @@ use std::{
     thread,
 };
 
+/// The pair a chunked download reports: bytes received so far and the
+/// `Content-Length` advertised by the server, if any.
+type ProgressEvent = (usize, Option<u64>);
+
+/// The shared cell a `download_with_progress` test writes into.
+type ProgressSink = Arc<Mutex<Vec<ProgressEvent>>>;
+
 /// A server answering a scripted sequence of bodies.
 struct Server {
     base_url: String,
@@ -265,4 +272,72 @@ async fn a_response_that_grows_past_the_bound_is_abandoned() {
     assert!(matches!(error, Error::ArtifactTooLarge { limit: 64, .. }));
     assert!(!path.exists());
     assert_eq!(siblings(&path), 0);
+}
+
+#[tokio::test]
+async fn the_progress_callback_receives_a_length_and_every_chunk() {
+    // A chunked reply, so the receiver sees the body in several pieces and the
+    // `Content-Length` is intentionally absent.
+    let body = pdf(&"x".repeat(60));
+    let chunks: Vec<Vec<u8>> = body.chunks(20).map(<[u8]>::to_vec).collect();
+    let chunk_count = chunks.len();
+    let server = Server::chunked(chunks);
+
+    let (_directory, path) = destination("2401.00001.pdf");
+    let record: ProgressSink = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&record);
+
+    client(&server)
+        .download_with_progress(
+            &arxiv("2401.00001"),
+            ArtifactKind::Pdf,
+            &path,
+            move |bytes, total| recorder.lock().unwrap().push((bytes, total)),
+        )
+        .await
+        .unwrap();
+
+    let events = record.lock().unwrap().clone();
+    // At least one event was emitted per chunk, beginning before any bytes.
+    assert!(events.len() > chunk_count, "{events:?}");
+    // First event: position 0, total unknown (chunked).
+    assert_eq!(events[0], (0, None));
+    // Last event: full body length, total still unknown.
+    let last = *events.last().unwrap();
+    assert_eq!(last, (body.len(), None));
+    // The position never goes backwards between events.
+    for pair in events.windows(2) {
+        assert!(pair[1].0 >= pair[0].0, "{events:?}");
+    }
+}
+
+#[tokio::test]
+async fn the_progress_callback_reports_a_known_total_when_the_server_announces_one() {
+    let body = pdf("abcdefghijklmnopqrstuvwxyz");
+    let server = Server::new(vec![(200, body.clone())]);
+
+    let (_directory, path) = destination("2401.00001.pdf");
+    let record: ProgressSink = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&record);
+
+    client(&server)
+        .download_with_progress(
+            &arxiv("2401.00001"),
+            ArtifactKind::Pdf,
+            &path,
+            move |bytes, total| recorder.lock().unwrap().push((bytes, total)),
+        )
+        .await
+        .unwrap();
+
+    let events = record.lock().unwrap().clone();
+    assert!(!events.is_empty(), "{events:?}");
+    let total = body.len();
+    // Every event carries the same advertised total once a Content-Length header has set it.
+    for (bytes, announced) in &events {
+        assert_eq!(*announced, Some(total as u64), "{events:?}");
+        assert!(*bytes <= total, "{events:?}");
+    }
+    // And the final position reaches the advertised total.
+    assert_eq!(events.last().unwrap().0, total);
 }

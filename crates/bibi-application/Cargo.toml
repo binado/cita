@@ -13,6 +13,7 @@ bibi-core = { workspace = true }
 bibi-documents = { workspace = true }
 bibi-manifest = { workspace = true }
 bibi-provider = { workspace = true }
+indicatif = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
