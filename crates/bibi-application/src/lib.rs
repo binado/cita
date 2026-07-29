@@ -22,6 +22,7 @@ mod records;
 mod render;
 mod reports;
 mod services;
+mod sync;
 mod target;
 
 /// The domain types a command-line adapter has to name.
@@ -46,6 +47,7 @@ pub use records::{RemoveReport, RemovedRecord, init, remove, rename, show};
 pub use render::{RenderOptions, render_manifest, render_records};
 pub use reports::{BatchReport, ItemFailure, SkipReason, SkippedItem};
 pub use services::Services;
+pub use sync::{IdentifierAddition, RefreshedRecord, SyncReport, SyncRequest, sync};
 pub use target::{
     GLOBAL_MANIFEST_ENV, MANIFEST_NAME, PlatformPaths, TargetResolver, TargetSelection, output,
 };

@@ -46,6 +46,8 @@ pub enum Command {
     List(ListArgs),
     /// Emit one stored record as BibTeX
     Show(ShowArgs),
+    /// Refresh managed records from their providers
+    Sync(SyncArgs),
     /// Create an empty manifest
     Init,
 }
@@ -134,6 +136,19 @@ pub enum ListFormat {
     Bibtex,
     /// The schema-1 metadata projection
     Json,
+}
+
+#[derive(Args, Debug)]
+pub struct SyncArgs {
+    /// Refresh only records owned by this provider
+    #[arg(long, value_name = "NAME")]
+    pub provider: Option<String>,
+    /// Refetch every refreshable record, whatever its revision says
+    #[arg(long)]
+    pub force: bool,
+    /// Do the work and report it, but write nothing
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
 }
 
 #[derive(Args, Debug)]

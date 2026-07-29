@@ -264,6 +264,11 @@ pub fn provider_record(
     }
 }
 
+/// Build a payload entry for tests.
+pub fn payload(texkey: &str, title: &str) -> BibtexEntry {
+    BibtexEntry::parse_one(format!("@article{{{texkey},title={{{title}}}}}")).expect("test payload")
+}
+
 /// Build `ProviderMetadata` for tests.
 pub fn provider_metadata(
     provider_id: &str,

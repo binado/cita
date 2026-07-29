@@ -46,6 +46,7 @@ async fn run(cli: Cli) -> anyhow::Result<bool> {
         Command::Rename(args) => commands::records::run_rename(&services, &target, args),
         Command::List(args) => commands::list::run(&services, &target, args),
         Command::Show(args) => commands::records::run_show(&services, &target, args),
+        Command::Sync(args) => commands::sync::run(&services, &target, args).await,
         Command::Init => commands::init::run(&services, &target),
     }
 }

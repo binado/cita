@@ -435,3 +435,54 @@ async fn the_inspire_provider_satisfies_the_shared_contract_suite() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn three_hundred_records_cost_three_metadata_and_three_payload_requests() {
+    // The bound is a property of INSPIRE's query endpoint, so a project of any
+    // size costs ceil(n / 100) requests per pass rather than n.
+    let ids = (1..=300u64).collect::<Vec<_>>();
+    let batches = [&ids[..100], &ids[100..200], &ids[200..]];
+    let mut replies = Vec::new();
+    for batch in batches {
+        replies.push(Reply::ok(hits(
+            batch
+                .iter()
+                .map(|id| record(*id, &format!("Key:{id}"), None, None))
+                .collect(),
+        )));
+    }
+    for batch in batches {
+        replies.push(Reply::ok(
+            batch
+                .iter()
+                .map(|id| entry(&format!("Key:{id}")))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ));
+    }
+    let server = TestServer::new(replies);
+    let provider = provider(&server, Arc::new(TestClock::new()));
+
+    let requests = ids
+        .iter()
+        .map(|id| RefreshRequest {
+            bibi_id: BibiId::new(),
+            provider_id: ProviderId::new(id.to_string()).unwrap(),
+            stored_revision: None,
+        })
+        .collect::<Vec<_>>();
+    let items = provider.refresh_metadata(&requests).await;
+    assert_eq!(items.len(), 300, "one outcome per record");
+    assert_eq!(server.requests().len(), 3, "metadata in three batches");
+
+    let provider_ids = ids
+        .iter()
+        .map(|id| ProviderId::new(id.to_string()).unwrap())
+        .collect::<Vec<_>>();
+    let payloads = provider.fetch_payloads(&provider_ids).await.unwrap();
+    assert_eq!(payloads.len(), 300);
+    assert!(payloads.iter().all(|item| item.payload.is_some()));
+    // Six requests in total: the metadata pass already declared the texkeys,
+    // so the join costs nothing extra.
+    assert_eq!(server.requests().len(), 6);
+}
