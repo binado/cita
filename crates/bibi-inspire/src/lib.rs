@@ -27,7 +27,6 @@ pub mod mapping;
 pub mod provider;
 pub mod rate_limit;
 pub mod retry;
-#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod transport;
 

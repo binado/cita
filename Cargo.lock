@@ -151,7 +151,6 @@ version = "0.1.0"
 dependencies = [
  "bibi-bibtex",
  "bibi-core",
- "bibi-inspire",
  "bibi-provider",
  "httpdate",
  "reqwest",

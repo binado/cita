@@ -35,6 +35,12 @@ async fn main() -> ExitCode {
 
 /// Run one command, returning whether any item failed.
 async fn run(cli: Cli) -> anyhow::Result<bool> {
+    // Completions describe the CLI itself, so they are answered before any
+    // platform directory is discovered or any provider is constructed.
+    if let Command::Completions(args) = &cli.command {
+        output::emit(&cli::completions(args.shell));
+        return Ok(false);
+    }
     let services = bootstrap::services()?;
     let target = bibi_application::TargetSelection {
         path: cli.target.path,
@@ -52,5 +58,6 @@ async fn run(cli: Cli) -> anyhow::Result<bool> {
         Command::Fetch(args) => commands::documents::run_fetch(&services, &target, args).await,
         Command::Cache(command) => commands::documents::run_cache(&services, command),
         Command::Init => commands::init::run(&services, &target),
+        Command::Completions(_) => unreachable!("answered before services are built"),
     }
 }

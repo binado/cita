@@ -1,4 +1,9 @@
 //! A clock that never sleeps, for asserting on schedules rather than on time.
+//!
+//! Public rather than feature-gated, for the same reason `bibi_provider`'s
+//! fakes are: pacing is this crate's own policy, so anything driving it in a
+//! test should drive the real limiter through a substitute clock rather than
+//! reimplement the schedule it expects.
 
 use crate::rate_limit::Clock;
 use std::{

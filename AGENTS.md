@@ -25,8 +25,27 @@ cargo run -p bibi -- list --format json
 cargo run -p bibi -- sync
 cargo run -p bibi -- export
 cargo run -p bibi -- check references.bib
+cargo run -p bibi -- fetch <selector> --url
 cargo test -p bibi-inspire --test e2e -- --ignored  # live INSPIRE, network required
 ```
+
+## Testing
+
+Everything except the ignored e2e test is hermetic. HTTP suites bind a local
+`TcpListener`; INSPIRE's pacing and retry run on an injected clock, so the suite
+asserts *schedules* rather than sleeping.
+
+Three seams exist for tests and are documented as such:
+
+- `bibi_provider::testing` ships fakes and `verify_contract`, the conformance
+  suite a provider crate proves itself against. It is public on purpose: the
+  promises are the registry's, so a new provider should not rewrite an
+  approximation of them.
+- `bibi_inspire::testing::TestClock` records the waits it was asked for.
+- Three environment variables redirect what the binary would otherwise touch:
+  `BIBI_GLOBAL_MANIFEST`, `BIBI_CACHE_ROOT`, and `BIBI_INSPIRE_BASE_URL`. The
+  CLI suite sets all three, so a test can never reach the real network, the
+  user's real cache, or their real global manifest.
 
 CI runs format, clippy-as-errors, test, build, and doc on 1.88 and stable.
 Tests are hermetic; INSPIRE and arXiv suites use local `TcpListener`s. The
@@ -136,7 +155,9 @@ rules live in exactly one place.
 
 Plain `export` and `check` are offline. `export --provider` syncs that provider
 first, reloads the *committed* manifest, and writes nothing if sync reported a
-failure.
+failure. On `export`, `--provider` names what to *sync* and never limits what is
+rendered, so the filters `export` and `check` share deliberately exclude it
+while `list` keeps a provider filter of its own.
 
 stdout carries the command's result in its most pipeable form; stderr carries
 everything meant for a human. Skips exit zero, failures exit one, Clap usage
@@ -152,6 +173,15 @@ writes no file into a project directory other than the manifest.
 
 Bulk operations are partial; writes are not. A batch resolves everything it was
 asked to, reports each failure, and commits the successes in one write.
+
+### Known limitation
+
+`fetch_payloads` returns `Result<Vec<PayloadItem>, ProviderError>`, so a
+provider can report per-record absence but not per-batch failure. An ambiguous
+texkey join therefore fails every changed record under *that provider* rather
+than only the batch it occurred in. Other providers still commit, and nothing
+wrong is ever written; the cost is that a repair retries more records than it
+strictly needs to. Narrowing it means widening the contract.
 
 ### Scope
 

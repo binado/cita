@@ -4,7 +4,8 @@
 //! global flags, so there is no parallel command tree to keep in step and new
 //! commands are scope-aware by construction.
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
 use std::path::PathBuf;
 
 /// A bibliography CLI that keeps provider-owned references in a manifest.
@@ -59,6 +60,8 @@ pub enum Command {
     Cache(CacheCommand),
     /// Create an empty manifest
     Init,
+    /// Print a shell completion script
+    Completions(CompletionsArgs),
 }
 
 #[derive(Args, Debug)]
@@ -248,8 +251,24 @@ pub struct CheckArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct CompletionsArgs {
+    /// The shell to generate for
+    #[arg(value_name = "SHELL")]
+    pub shell: Shell,
+}
+
+#[derive(Args, Debug)]
 pub struct ShowArgs {
     /// The record to emit
     #[arg(value_name = "SELECTOR")]
     pub selector: String,
+}
+
+/// Write a completion script for `shell` to stdout.
+pub fn completions(shell: Shell) -> String {
+    let mut command = Cli::command();
+    let name = command.get_name().to_owned();
+    let mut rendered = Vec::new();
+    clap_complete::generate(shell, &mut command, name, &mut rendered);
+    String::from_utf8(rendered).expect("completion scripts are UTF-8")
 }
