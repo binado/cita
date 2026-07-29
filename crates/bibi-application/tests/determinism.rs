@@ -22,7 +22,7 @@ async fn project() -> (tempfile::TempDir, Services, ManifestStore) {
     let directory = tempfile::tempdir().unwrap();
     let services = Services::new(
         Arc::new(ProviderRegistry::new(vec![Arc::new(LocalProvider::new())])),
-        PlatformPaths::new(directory.path().join("global.toml"), directory.path()),
+        PlatformPaths::new(directory.path()),
     );
     let store = ManifestStore::new(directory.path().join("bibi.toml"));
     let source = directory.path().join("source.bib");

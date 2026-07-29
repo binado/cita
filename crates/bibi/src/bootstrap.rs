@@ -2,10 +2,10 @@
 
 use anyhow::{Context, Result};
 use bibi_application::domain::ManifestStore;
-use bibi_application::{PlatformPaths, Services, TargetResolver, TargetSelection};
+use bibi_application::{PlatformPaths, Services, TargetResolver};
 use bibi_inspire::{InspireProvider, Transport};
 use bibi_provider::{LocalProvider, Provider, ProviderRegistry};
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 /// Build the provider roster.
 ///
@@ -57,19 +57,13 @@ pub fn services() -> Result<Services> {
 }
 
 /// Resolve the manifest a command acts on.
-pub fn store(services: &Services, selection: &TargetSelection) -> Result<ManifestStore> {
-    let working_directory =
-        std::env::current_dir().context("reading the current working directory")?;
-    let resolver = TargetResolver::new(services.paths.clone(), working_directory);
-    Ok(resolver.resolve(selection)?)
+pub fn store(path: Option<&Path>) -> Result<ManifestStore> {
+    Ok(resolver()?.resolve(path))
 }
 
 /// Build a resolver, for commands that also resolve input paths.
-pub fn resolver(services: &Services) -> Result<TargetResolver> {
+pub fn resolver() -> Result<TargetResolver> {
     let working_directory =
         std::env::current_dir().context("reading the current working directory")?;
-    Ok(TargetResolver::new(
-        services.paths.clone(),
-        working_directory,
-    ))
+    Ok(TargetResolver::new(working_directory))
 }

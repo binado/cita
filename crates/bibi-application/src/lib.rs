@@ -56,7 +56,4 @@ pub use sync::{
     IdentifierAddition, RefreshedRecord, SyncAbsence, SyncAbsenceReason, SyncReport, SyncRequest,
     sync,
 };
-pub use target::{
-    CACHE_ROOT_ENV, GLOBAL_MANIFEST_ENV, MANIFEST_NAME, PlatformPaths, TargetResolver,
-    TargetSelection, output,
-};
+pub use target::{CACHE_ROOT_ENV, MANIFEST_NAME, PlatformPaths, TargetResolver, output};

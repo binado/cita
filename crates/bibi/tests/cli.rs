@@ -12,12 +12,13 @@ use std::{
     process::{Command, Output},
 };
 
-/// Run `bibi` in a temporary project, with the global manifest redirected so a
-/// test can never touch the machine's real one.
+/// Run `bibi` in a temporary project.
+///
+/// The working directory is the whole target: with no global manifest there is
+/// nothing outside this directory a command could reach for.
 fn bibi(directory: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bibi"))
         .current_dir(directory)
-        .env("BIBI_GLOBAL_MANIFEST", directory.join("global.toml"))
         .env("BIBI_CACHE_ROOT", directory.join("cache/bibi"))
         .args(args)
         .output()
@@ -213,19 +214,19 @@ fn an_explicit_path_targets_another_project_without_searching_upwards() {
 }
 
 #[test]
-fn the_global_manifest_is_an_ordinary_project_at_a_fixed_path() {
+fn there_is_no_user_level_manifest_to_select() {
     let (_directory, path) = project();
+    // `-g` was the one way to act on a manifest outside the working directory.
+    // With it gone the flag is unknown, which clap reports as a usage error.
     let output = bibi(&path, &["init", "-g"]);
-    assert_eq!(code(&output), 0);
-    assert!(path.join("global.toml").exists());
-    assert!(!path.join("bibi.toml").exists(), "-g selects a target only");
+    assert_eq!(code(&output), 2);
+    assert!(!path.join("bibi.toml").exists());
 }
 
 /// Run `bibi` with INSPIRE pointed at a local listener.
 fn bibi_against(directory: &Path, server: &TestServer, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bibi"))
         .current_dir(directory)
-        .env("BIBI_GLOBAL_MANIFEST", directory.join("global.toml"))
         .env("BIBI_CACHE_ROOT", directory.join("cache/bibi"))
         .env("BIBI_INSPIRE_BASE_URL", &server.base_url)
         .args(args)
@@ -305,7 +306,6 @@ fn an_imported_entry_a_provider_holds_is_upgraded_but_keeps_its_key() {
 fn structural_flag_conflicts_are_clap_usage_errors() {
     let (_directory, path) = project();
     for args in [
-        vec!["list", "-p", "a.toml", "-g"],
         vec!["add", "-f", "x.bib", "--key", "K"],
         vec!["add", "--force-local", "1207.7214"],
         vec![
@@ -475,7 +475,6 @@ fn fetch_url_answers_even_when_the_cache_root_is_unusable() {
     // question about arXiv's public address, not about the cache.
     let output = Command::new(env!("CARGO_BIN_EXE_bibi"))
         .current_dir(&path)
-        .env("BIBI_GLOBAL_MANIFEST", path.join("global.toml"))
         .env("BIBI_CACHE_ROOT", "/")
         .args(["fetch", "Aad:2012tfa", "--url"])
         .output()
@@ -528,7 +527,6 @@ fn a_non_broken_stdout_error_exits_nonzero() {
     let sink = OpenOptions::new().write(true).open("/dev/full").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_bibi"))
         .current_dir(&path)
-        .env("BIBI_GLOBAL_MANIFEST", path.join("global.toml"))
         .env("BIBI_CACHE_ROOT", path.join("cache/bibi"))
         .args(["show", "notes:2026"])
         .stdout(Stdio::from(sink))
@@ -551,7 +549,6 @@ fn a_closed_stdout_pipe_still_exits_zero() {
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_bibi"))
         .current_dir(&path)
-        .env("BIBI_GLOBAL_MANIFEST", path.join("global.toml"))
         .env("BIBI_CACHE_ROOT", path.join("cache/bibi"))
         .args(["show", "Large"])
         .stdout(Stdio::piped())

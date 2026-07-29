@@ -1,8 +1,8 @@
 //! Argument definitions.
 //!
-//! Scope is an argument, not a command level: `-p/--path` and `-g/--global` are
-//! global flags, so there is no parallel command tree to keep in step and new
-//! commands are scope-aware by construction.
+//! Scope is an argument, not a command level: `-p/--path` is a global flag, so
+//! there is no parallel command tree to keep in step and new commands are
+//! scope-aware by construction.
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
@@ -22,17 +22,8 @@ pub struct Cli {
 #[derive(Args, Debug)]
 pub struct TargetArgs {
     /// Act on this manifest instead of `./bibi.toml`
-    #[arg(
-        short = 'p',
-        long = "path",
-        global = true,
-        value_name = "FILE",
-        conflicts_with = "global"
-    )]
+    #[arg(short = 'p', long = "path", global = true, value_name = "FILE")]
     pub path: Option<PathBuf>,
-    /// Act on the user-level manifest
-    #[arg(short = 'g', long = "global", global = true)]
-    pub global: bool,
 }
 
 #[derive(Debug, Subcommand)]

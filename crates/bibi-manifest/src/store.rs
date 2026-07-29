@@ -1,7 +1,7 @@
 //! Reading and publishing `bibi.toml`.
 
 use crate::{
-    atomic::{ParentPolicy, atomic_replace},
+    atomic::atomic_replace,
     candidate::{Manifest, ManifestCandidate},
     error::Error,
     schema,
@@ -63,27 +63,12 @@ impl LoadedManifest {
 #[derive(Clone, Debug)]
 pub struct ManifestStore {
     path: PathBuf,
-    parents: ParentPolicy,
 }
 
 impl ManifestStore {
-    /// A store whose parent directory must already exist.
+    /// A store over one manifest path, whose parent must already exist.
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self {
-            path: path.into(),
-            parents: ParentPolicy::Require,
-        }
-    }
-
-    /// A store permitted to create its parent directory.
-    ///
-    /// Reserved for bibi's own fixed platform location, where the directory is
-    /// an implementation detail rather than something the user chose.
-    pub fn creating_parents(path: impl Into<PathBuf>) -> Self {
-        Self {
-            path: path.into(),
-            parents: ParentPolicy::Create,
-        }
+        Self { path: path.into() }
     }
 
     /// The manifest path.
@@ -142,7 +127,7 @@ impl ManifestStore {
             });
         }
         let rendered = ManifestCandidate::empty().validate()?.to_toml()?;
-        atomic_replace(&self.path, rendered.as_bytes(), self.parents)
+        atomic_replace(&self.path, rendered.as_bytes())
     }
 
     /// Validate a candidate and publish it, if the file has not changed.
@@ -170,7 +155,7 @@ impl ManifestStore {
                 path: self.path.clone(),
             });
         }
-        atomic_replace(&self.path, rendered.as_bytes(), self.parents)?;
+        atomic_replace(&self.path, rendered.as_bytes())?;
         Ok(Generation(State::Loaded(rendered)))
     }
 

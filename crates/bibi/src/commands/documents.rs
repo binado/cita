@@ -6,17 +6,18 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use bibi_application::{
-    FetchRequest, FetchTarget, Services, TargetSelection, clean_cache,
+    FetchRequest, FetchTarget, Services, clean_cache,
     domain::{CleanMode, CleanReport},
     fetch,
 };
+use std::path::Path;
 
 pub async fn run_fetch(
     services: &Services,
-    target: &TargetSelection,
+    target: Option<&Path>,
     args: FetchArgs,
 ) -> Result<bool> {
-    let store = crate::bootstrap::store(services, target)?;
+    let store = crate::bootstrap::store(target)?;
     let target = fetch(
         services,
         &store,

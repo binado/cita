@@ -4,13 +4,12 @@ use crate::{cli::AddArgs, output};
 use anyhow::{Result, bail};
 use bibi_application::domain::{CitationKey, ProviderName};
 use bibi_application::{
-    AddFileRequest, AddKind, AddReport, AddRequest, InputSource, Services, TargetSelection,
-    add_file, add_locators,
+    AddFileRequest, AddKind, AddReport, AddRequest, InputSource, Services, add_file, add_locators,
 };
 use std::path::Path;
 
-pub async fn run(services: &Services, target: &TargetSelection, args: AddArgs) -> Result<bool> {
-    let store = crate::bootstrap::store(services, target)?;
+pub async fn run(services: &Services, target: Option<&Path>, args: AddArgs) -> Result<bool> {
+    let store = crate::bootstrap::store(target)?;
     let provider = args
         .provider
         .as_deref()
@@ -25,7 +24,7 @@ pub async fn run(services: &Services, target: &TargetSelection, args: AddArgs) -
             let source = if path == Path::new("-") {
                 InputSource::Stdin
             } else {
-                InputSource::Path(crate::bootstrap::resolver(services)?.input(path))
+                InputSource::Path(crate::bootstrap::resolver()?.input(path))
             };
             add_file(
                 services,

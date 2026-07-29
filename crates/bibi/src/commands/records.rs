@@ -6,16 +6,17 @@ use crate::{
 };
 use anyhow::Result;
 use bibi_application::domain::CitationKey;
-use bibi_application::{Services, TargetSelection, remove, rename, show};
+use bibi_application::{remove, rename, show};
+use std::path::Path;
 
-pub fn run_show(services: &Services, target: &TargetSelection, args: ShowArgs) -> Result<bool> {
-    let store = crate::bootstrap::store(services, target)?;
+pub fn run_show(target: Option<&Path>, args: ShowArgs) -> Result<bool> {
+    let store = crate::bootstrap::store(target)?;
     output::emit(&show(&store, &args.selector)?)?;
     Ok(false)
 }
 
-pub fn run_remove(services: &Services, target: &TargetSelection, args: RemoveArgs) -> Result<bool> {
-    let store = crate::bootstrap::store(services, target)?;
+pub fn run_remove(target: Option<&Path>, args: RemoveArgs) -> Result<bool> {
+    let store = crate::bootstrap::store(target)?;
     let report = remove(&store, &args.selectors, args.dry_run)?;
     // What was removed goes to stdout, which makes it recovery input: piping it
     // back through `add -f` restores the records.
@@ -40,8 +41,8 @@ pub fn run_remove(services: &Services, target: &TargetSelection, args: RemoveArg
     Ok(report.items.has_failures())
 }
 
-pub fn run_rename(services: &Services, target: &TargetSelection, args: RenameArgs) -> Result<bool> {
-    let store = crate::bootstrap::store(services, target)?;
+pub fn run_rename(target: Option<&Path>, args: RenameArgs) -> Result<bool> {
+    let store = crate::bootstrap::store(target)?;
     let renamed = rename(&store, &args.selector, &CitationKey::new(args.key)?)?;
     output::emit(&(renamed.rendered()? + "\n"))?;
     output::note(format!(

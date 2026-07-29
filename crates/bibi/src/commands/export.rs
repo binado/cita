@@ -6,16 +6,16 @@ use crate::{
 };
 use anyhow::Result;
 use bibi_application::{
-    CheckOutcome, ExportRequest, RenderOptions, Services, TargetSelection, check,
-    domain::ProviderName, export,
+    CheckOutcome, ExportRequest, RenderOptions, Services, check, domain::ProviderName, export,
 };
+use std::path::Path;
 
 pub async fn run_export(
     services: &Services,
-    target: &TargetSelection,
+    target: Option<&Path>,
     args: ExportArgs,
 ) -> Result<bool> {
-    let store = crate::bootstrap::store(services, target)?;
+    let store = crate::bootstrap::store(target)?;
     let report = export(
         services,
         &store,
@@ -50,9 +50,9 @@ pub async fn run_export(
     Ok(false)
 }
 
-pub fn run_check(services: &Services, target: &TargetSelection, args: CheckArgs) -> Result<bool> {
-    let store = crate::bootstrap::store(services, target)?;
-    let path = crate::bootstrap::resolver(services)?.input(&args.bibfile);
+pub fn run_check(services: &Services, target: Option<&Path>, args: CheckArgs) -> Result<bool> {
+    let store = crate::bootstrap::store(target)?;
+    let path = crate::bootstrap::resolver()?.input(&args.bibfile);
     let outcome = check(
         &store,
         &path,

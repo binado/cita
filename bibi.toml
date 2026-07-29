@@ -1,0 +1,28 @@
+schema = 1
+
+[[records]]
+id = "7641d991-6a03-4795-b302-82b2c0cb3adc"
+key = "Ghoderao:2026lvz"
+provider = "inspire"
+provider_id = "3183710"
+revision = "2026-07-29T08:20:02.402901+00:00"
+arxiv = "2607.24734"
+title = "Gravitational waves from super-Hubble bubbles"
+authors = [
+    "Ghoderao, Pulkit S.",
+    "Rajantie, Arttu",
+    "Steer, Danièle",
+]
+collaborations = []
+year = 2026
+bibtex = '''
+@article{Ghoderao:2026lvz,
+    author = "Ghoderao, Pulkit S. and Rajantie, Arttu and Steer, Dani{\`e}le",
+    title = "{Gravitational waves from super-Hubble bubbles}",
+    eprint = "2607.24734",
+    archivePrefix = "arXiv",
+    primaryClass = "astro-ph.CO",
+    reportNumber = "CERN--TH--2026--009, Imperial--TP--2026--PSG--1",
+    month = "7",
+    year = "2026"
+}'''

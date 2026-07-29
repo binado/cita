@@ -13,7 +13,7 @@ use crate::{
     target,
 };
 use bibi_core::ProviderName;
-use bibi_manifest::{ManifestStore, ParentPolicy, atomic_replace};
+use bibi_manifest::{ManifestStore, atomic_replace};
 use std::path::{Path, PathBuf};
 
 /// The conventional name of a rendered bibliography.
@@ -83,7 +83,7 @@ pub async fn export(
     let manifest = store.load()?.manifest;
     let rendered = render_manifest(&manifest, &request.options)?;
     let path = output_path(store, request.output.as_deref())?;
-    atomic_replace(&path, rendered.as_bytes(), ParentPolicy::Require)?;
+    atomic_replace(&path, rendered.as_bytes())?;
     Ok(ExportReport {
         path,
         records: manifest.filter(&request.options.filter).count(),

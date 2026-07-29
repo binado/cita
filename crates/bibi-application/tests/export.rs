@@ -22,7 +22,7 @@ impl Project {
         let directory = tempfile::tempdir().unwrap();
         let services = Services::new(
             Arc::new(ProviderRegistry::new(providers)),
-            PlatformPaths::new(directory.path().join("global.toml"), directory.path()),
+            PlatformPaths::new(directory.path()),
         );
         Self {
             directory,

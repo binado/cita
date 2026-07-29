@@ -2,12 +2,11 @@
 
 use crate::{cli::SyncArgs, output};
 use anyhow::Result;
-use bibi_application::{
-    Services, SyncReport, SyncRequest, TargetSelection, domain::ProviderName, sync,
-};
+use bibi_application::{Services, SyncReport, SyncRequest, domain::ProviderName, sync};
+use std::path::Path;
 
-pub async fn run(services: &Services, target: &TargetSelection, args: SyncArgs) -> Result<bool> {
-    let store = crate::bootstrap::store(services, target)?;
+pub async fn run(services: &Services, target: Option<&Path>, args: SyncArgs) -> Result<bool> {
+    let store = crate::bootstrap::store(target)?;
     let report = sync(
         services,
         &store,

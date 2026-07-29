@@ -6,9 +6,8 @@ use crate::{
 };
 use anyhow::Result;
 use bibi_application::domain::{ProviderName, RecordFilter};
-use bibi_application::{
-    ListRequest, Services, TargetSelection, list, render_records, to_json, to_keys,
-};
+use bibi_application::{ListRequest, Services, list, render_records, to_json, to_keys};
+use std::path::Path;
 
 /// Turn filter flags into a complete `RecordFilter`.
 ///
@@ -39,8 +38,8 @@ pub fn render_filter(services: &Services, args: &RenderFilterArgs) -> RecordFilt
     }
 }
 
-pub fn run(services: &Services, target: &TargetSelection, args: ListArgs) -> Result<bool> {
-    let store = crate::bootstrap::store(services, target)?;
+pub fn run(services: &Services, target: Option<&Path>, args: ListArgs) -> Result<bool> {
+    let store = crate::bootstrap::store(target)?;
     let records = list(
         &store,
         &ListRequest {

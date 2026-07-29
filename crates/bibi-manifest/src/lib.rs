@@ -23,7 +23,7 @@ mod store;
 #[cfg(test)]
 mod test_support;
 
-pub use atomic::{ParentPolicy, atomic_replace};
+pub use atomic::atomic_replace;
 pub use candidate::{Manifest, ManifestCandidate};
 pub use error::Error;
 pub use schema::SCHEMA;

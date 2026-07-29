@@ -42,22 +42,19 @@ async fn run(cli: Cli) -> anyhow::Result<bool> {
         return Ok(false);
     }
     let services = bootstrap::services()?;
-    let target = bibi_application::TargetSelection {
-        path: cli.target.path,
-        global: cli.target.global,
-    };
+    let target = cli.target.path.as_deref();
     match cli.command {
-        Command::Add(args) => commands::add::run(&services, &target, args).await,
-        Command::Remove(args) => commands::records::run_remove(&services, &target, args),
-        Command::Rename(args) => commands::records::run_rename(&services, &target, args),
-        Command::List(args) => commands::list::run(&services, &target, args),
-        Command::Show(args) => commands::records::run_show(&services, &target, args),
-        Command::Sync(args) => commands::sync::run(&services, &target, args).await,
-        Command::Export(args) => commands::export::run_export(&services, &target, args).await,
-        Command::Check(args) => commands::export::run_check(&services, &target, args),
-        Command::Fetch(args) => commands::documents::run_fetch(&services, &target, args).await,
+        Command::Add(args) => commands::add::run(&services, target, args).await,
+        Command::Remove(args) => commands::records::run_remove(target, args),
+        Command::Rename(args) => commands::records::run_rename(target, args),
+        Command::List(args) => commands::list::run(&services, target, args),
+        Command::Show(args) => commands::records::run_show(target, args),
+        Command::Sync(args) => commands::sync::run(&services, target, args).await,
+        Command::Export(args) => commands::export::run_export(&services, target, args).await,
+        Command::Check(args) => commands::export::run_check(&services, target, args),
+        Command::Fetch(args) => commands::documents::run_fetch(&services, target, args).await,
         Command::Cache(command) => commands::documents::run_cache(&services, command),
-        Command::Init => commands::init::run(&services, &target),
+        Command::Init => commands::init::run(target),
         Command::Completions(_) => unreachable!("answered before services are built"),
     }
 }
