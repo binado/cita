@@ -36,6 +36,15 @@ pub enum Error {
     /// The request itself is invalid, independently of any stored state.
     #[error("{0}")]
     Usage(String),
+    /// A preliminary sync failed, so no bibliography was written.
+    ///
+    /// The sync's own validated updates were committed; what is refused is
+    /// producing a bibliography that would silently omit whatever failed.
+    #[error("{failures} record(s) failed to refresh; no bibliography was written")]
+    SyncFailed {
+        /// How many records failed.
+        failures: usize,
+    },
     /// The platform's configuration or cache directory could not be located.
     #[error("could not locate the platform {what} directory")]
     NoPlatformDirectory {

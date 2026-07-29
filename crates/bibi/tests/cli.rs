@@ -300,3 +300,100 @@ fn structural_flag_conflicts_are_clap_usage_errors() {
         assert_eq!(code(&output), 2, "{args:?} should be a usage error");
     }
 }
+
+#[test]
+fn export_writes_a_bibliography_and_check_verifies_it() {
+    let (_directory, path) = project();
+    std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
+    bibi(&path, &["add", "-f", "library.bib"]);
+
+    // A bibliography is written only when asked for: adding wrote no .bib.
+    assert!(!path.join("references.bib").exists());
+
+    let exported = bibi(&path, &["export"]);
+    assert_eq!(code(&exported), 0);
+    assert_eq!(stdout(&exported), "", "the result is the file");
+    assert!(stderr(&exported).contains("wrote 2 record(s)"));
+    assert_eq!(
+        std::fs::read_to_string(path.join("references.bib")).unwrap(),
+        LIBRARY.trim_end().to_owned() + "\n"
+    );
+
+    let matched = bibi(&path, &["check"]);
+    assert_eq!(code(&matched), 0);
+    assert!(stderr(&matched).contains("matches the manifest"));
+
+    // Drift is a nonzero exit, and check repairs nothing.
+    std::fs::write(
+        path.join("references.bib"),
+        "@misc{edited,title={By hand}}\n",
+    )
+    .unwrap();
+    let drifted = bibi(&path, &["check", "--diff"]);
+    assert_eq!(code(&drifted), 1);
+    assert!(stderr(&drifted).contains("drifted"));
+    assert!(stderr(&drifted).contains("first difference at line 1"));
+    assert_eq!(
+        std::fs::read_to_string(path.join("references.bib")).unwrap(),
+        "@misc{edited,title={By hand}}\n"
+    );
+
+    // A bibliography that is not there is missing, not drift.
+    std::fs::remove_file(path.join("references.bib")).unwrap();
+    let missing = bibi(&path, &["check"]);
+    assert_eq!(code(&missing), 1);
+    assert!(stderr(&missing).contains("no bibliography at"));
+}
+
+#[test]
+fn export_refuses_to_write_over_the_manifest() {
+    let (_directory, path) = project();
+    std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
+    bibi(&path, &["add", "-f", "library.bib"]);
+    let before = std::fs::read_to_string(path.join("bibi.toml")).unwrap();
+
+    let output = bibi(&path, &["export", "-o", "bibi.toml"]);
+    assert_eq!(code(&output), 1);
+    assert!(stderr(&output).contains("choose another output path"));
+    assert_eq!(
+        std::fs::read_to_string(path.join("bibi.toml")).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn export_filters_select_what_is_rendered() {
+    let (_directory, path) = project();
+    std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
+    bibi(&path, &["add", "-f", "library.bib"]);
+
+    let output = bibi(&path, &["export", "-o", "subset.bib", "--year", "2026"]);
+    assert_eq!(code(&output), 0);
+    let written = std::fs::read_to_string(path.join("subset.bib")).unwrap();
+    assert!(written.contains("notes:2026"));
+    assert!(!written.contains("astropy:2022"));
+
+    // The same options make the check agree; without them it drifts.
+    assert_eq!(
+        code(&bibi(&path, &["check", "subset.bib", "--year", "2026"])),
+        0
+    );
+    assert_eq!(code(&bibi(&path, &["check", "subset.bib"])), 1);
+}
+
+#[test]
+fn a_sync_with_no_managed_records_reports_and_writes_nothing() {
+    let (_directory, path) = project();
+    std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
+    bibi(&path, &["add", "-f", "library.bib"]);
+    let before = std::fs::read_to_string(path.join("bibi.toml")).unwrap();
+
+    // Both records are local, so nothing is refreshable and no request is made.
+    let output = bibi(&path, &["sync"]);
+    assert_eq!(code(&output), 0);
+    assert!(stderr(&output).contains("2 unrefreshable"));
+    assert_eq!(
+        std::fs::read_to_string(path.join("bibi.toml")).unwrap(),
+        before
+    );
+}

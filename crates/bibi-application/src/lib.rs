@@ -17,6 +17,7 @@
 
 mod add;
 mod error;
+mod export;
 mod list;
 mod records;
 mod render;
@@ -42,6 +43,7 @@ pub use add::{
     add_locators,
 };
 pub use error::Error;
+pub use export::{CheckOutcome, DEFAULT_OUTPUT, ExportReport, ExportRequest, check, export};
 pub use list::{ListJsonRecord, ListRequest, list, to_json, to_keys};
 pub use records::{RemoveReport, RemovedRecord, init, remove, rename, show};
 pub use render::{RenderOptions, render_manifest, render_records};
