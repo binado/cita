@@ -1,0 +1,17 @@
+[package]
+name = "bibi-manifest"
+description = "Schema-1 bibi.toml: candidate validation, indexes, optimistic concurrency, and atomic writes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+bibi-bibtex = { workspace = true }
+bibi-core = { workspace = true }
+serde = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }

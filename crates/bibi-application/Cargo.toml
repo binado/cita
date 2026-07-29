@@ -1,0 +1,20 @@
+[package]
+name = "bibi-application"
+description = "Command use cases for bibi over injected manifest stores, providers, and document cache."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+bibi-bibtex = { workspace = true }
+bibi-core = { workspace = true }
+bibi-documents = { workspace = true }
+bibi-manifest = { workspace = true }
+bibi-provider = { workspace = true }
+directories = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

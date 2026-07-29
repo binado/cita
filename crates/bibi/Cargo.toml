@@ -1,0 +1,22 @@
+[package]
+name = "bibi"
+description = "A bibliography CLI that keeps provider-owned references in a manifest and renders BibTeX on demand."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+anstyle = { workspace = true }
+anyhow = { workspace = true }
+bibi-application = { workspace = true }
+bibi-documents = { workspace = true }
+bibi-inspire = { workspace = true }
+bibi-provider = { workspace = true }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+opener = { workspace = true }
+terminal_size = { workspace = true }
+tokio = { workspace = true }

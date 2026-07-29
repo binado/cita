@@ -3,5 +3,5 @@
 !references.bib
 .DS_Store
 
-# Cita document cache
-/.cita/files/
+# Local bibi state written by manual smoke tests
+/.bibi/
