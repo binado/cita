@@ -42,11 +42,8 @@ pub enum Command {
     Sync(SyncArgs),
     /// Verify a rendered bibliography against the manifest
     Check(CheckArgs),
-    /// Retrieve a record's PDF or source package
+    /// Download a record's PDF or source archive
     Fetch(FetchArgs),
-    /// Maintain the global document cache
-    #[command(subcommand)]
-    Cache(CacheCommand),
     /// Create an empty manifest
     Init,
     /// Print a shell completion script
@@ -148,8 +145,8 @@ pub struct FetchArgs {
     /// The record to fetch for
     #[arg(value_name = "SELECTOR")]
     pub selector: String,
-    /// Fetch the source package instead of the PDF
-    #[arg(long, conflicts_with = "url")]
+    /// Fetch the original source archive instead of the PDF
+    #[arg(long)]
     pub source: bool,
     /// Print the public URL instead of downloading
     #[arg(long)]
@@ -157,29 +154,9 @@ pub struct FetchArgs {
     /// Open the result after producing it
     #[arg(long)]
     pub open: bool,
-    /// Download again, replacing the cached artifact
-    #[arg(long, conflicts_with = "url")]
-    pub force: bool,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum CacheCommand {
-    /// Delete the global document cache
-    Clean(CacheCleanArgs),
-}
-
-#[derive(Args, Debug)]
-pub struct CacheCleanArgs {
-    /// Report what would be removed
-    #[arg(
-        long = "dry-run",
-        required_unless_present = "all",
-        conflicts_with = "all"
-    )]
-    pub dry_run: bool,
-    /// Remove it
-    #[arg(long)]
-    pub all: bool,
+    /// Download to this exact path instead of the default name
+    #[arg(short = 'o', long, value_name = "FILE", conflicts_with = "url")]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]

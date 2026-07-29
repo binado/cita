@@ -49,9 +49,9 @@ pub struct RemoveReport {
 /// Delete records, emitting what was deleted.
 ///
 /// Every selector resolves against the manifest as loaded, so removing one
-/// record cannot change what a later selector in the same command means. The
-/// document cache is untouched: it is derived, shared between projects, and
-/// evicted explicitly.
+/// record cannot change what a later selector in the same command means. A
+/// document a previous `fetch` downloaded is untouched: it is an ordinary file
+/// in the user's directory, not something bibi tracks.
 pub fn remove(
     store: &ManifestStore,
     selectors: &[String],

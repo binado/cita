@@ -11,8 +11,7 @@
 //! worked, and must not leave half a manifest behind either.
 //!
 //! **Offline paths stay offline.** Listing, showing, renaming, removing,
-//! rendering, and checking never construct a network client or consult the
-//! document cache.
+//! rendering, and checking never construct a network client at all.
 #![warn(missing_docs)]
 
 mod add;
@@ -36,7 +35,7 @@ mod target;
 pub mod domain {
     pub use bibi_bibtex::CitationKey;
     pub use bibi_core::{ProviderName, Record, RecordFilter, Selector};
-    pub use bibi_documents::{CleanMode, CleanReport, DocumentStore};
+    pub use bibi_documents::ArtifactClient;
     pub use bibi_manifest::ManifestStore;
 }
 
@@ -45,7 +44,7 @@ pub use add::{
     add_locators,
 };
 pub use check::{CheckOutcome, check};
-pub use documents::{FetchRequest, FetchTarget, clean_cache, fetch};
+pub use documents::{FetchRequest, FetchTarget, fetch};
 pub use error::Error;
 pub use list::{ListJsonRecord, ListRequest, list, to_json, to_keys};
 pub use records::{RemoveReport, RemovedRecord, init, remove, rename, show};
@@ -56,4 +55,4 @@ pub use sync::{
     IdentifierAddition, RefreshedRecord, SyncAbsence, SyncAbsenceReason, SyncReport, SyncRequest,
     sync,
 };
-pub use target::{CACHE_ROOT_ENV, MANIFEST_NAME, PlatformPaths, TargetResolver};
+pub use target::{MANIFEST_NAME, TargetResolver};

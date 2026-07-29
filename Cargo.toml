@@ -32,15 +32,12 @@ bibi-manifest = { path = "crates/bibi-manifest", version = "0.1.0" }
 bibi-provider = { path = "crates/bibi-provider", version = "0.1.0" }
 clap = { version = "4.5.23", features = ["derive"] }
 clap_complete = "4"
-directories = "6"
-flate2 = "1"
 httpdate = "1"
 opener = "0.8.5"
 percent-encoding = "2.3.2"
 reqwest = { version = "0.12.9", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0.216", features = ["derive"] }
 serde_json = "1.0.133"
-tar = "0.4"
 tempfile = "3.14.0"
 terminal_size = "0.4"
 thiserror = "2.0.7"

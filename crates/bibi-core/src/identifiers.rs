@@ -86,14 +86,6 @@ impl ArxivId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
-    /// The archive and number parts of a legacy identifier.
-    ///
-    /// The document cache joins these as directory components, which is safe
-    /// only because both have already been validated here.
-    pub fn legacy_parts(&self) -> Option<(&str, &str)> {
-        self.0.split_once('/')
-    }
 }
 
 impl fmt::Display for ArxivId {
@@ -149,8 +141,8 @@ fn is_modern(value: &str) -> bool {
 fn is_legacy(value: &str) -> bool {
     value.split_once('/').is_some_and(|(archive, number)| {
         // At least one letter: `.` and `..` are legal in the grammar above but
-        // are path components, not archives, and the document cache joins the
-        // archive as a directory.
+        // would make an identifier read as a relative path, and an identifier is
+        // joined into URLs and filenames.
         !archive.is_empty()
             && archive
                 .bytes()
@@ -278,15 +270,6 @@ mod tests {
         // stripping it would silently invent a different identifier.
         assert!(ArxivId::new("1207.7214v").is_err());
         assert!(ArxivId::new("1207.7214V2").is_err());
-    }
-
-    #[test]
-    fn legacy_parts_split_only_legacy_identifiers() {
-        assert_eq!(
-            ArxivId::new("hep-th/9901001").unwrap().legacy_parts(),
-            Some(("hep-th", "9901001"))
-        );
-        assert_eq!(ArxivId::new("2401.00001").unwrap().legacy_parts(), None);
     }
 
     #[test]

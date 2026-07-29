@@ -1,8 +1,7 @@
 //! Conditional refresh: what is fetched, what is written, and what is not.
 
 use bibi_application::{
-    AddRequest, ListRequest, PlatformPaths, Services, SyncRequest, add_locators,
-    domain::ManifestStore, list, sync,
+    AddRequest, ListRequest, Services, SyncRequest, add_locators, domain::ManifestStore, list, sync,
 };
 use bibi_provider::{
     LocalProvider, Provider, ProviderRegistry, RefreshState,
@@ -19,10 +18,7 @@ struct Project {
 impl Project {
     fn with(providers: Vec<Arc<dyn Provider>>) -> Self {
         let directory = tempfile::tempdir().unwrap();
-        let services = Services::new(
-            Arc::new(ProviderRegistry::new(providers)),
-            PlatformPaths::new(directory.path()),
-        );
+        let services = Services::new(Arc::new(ProviderRegistry::new(providers)));
         Self {
             directory,
             services,
@@ -34,10 +30,7 @@ impl Project {
     }
 
     fn rebuild(self, providers: Vec<Arc<dyn Provider>>) -> Self {
-        let services = Services::new(
-            Arc::new(ProviderRegistry::new(providers)),
-            self.services.paths.clone(),
-        );
+        let services = Services::new(Arc::new(ProviderRegistry::new(providers)));
         Self {
             directory: self.directory,
             services,

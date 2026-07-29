@@ -6,7 +6,7 @@
 //! the same input and options alone.
 
 use bibi_application::{
-    AddFileRequest, InputSource, ListRequest, PlatformPaths, RenderOptions, Services, add_file,
+    AddFileRequest, InputSource, ListRequest, RenderOptions, Services, add_file,
     domain::ManifestStore, list, render_manifest, to_json,
 };
 use bibi_provider::{LocalProvider, ProviderRegistry};
@@ -20,10 +20,9 @@ const SOURCE: &str = "@unpublished{zed:2026,\n  title = {Notes on nothing},\n  a
 
 async fn project() -> (tempfile::TempDir, Services, ManifestStore) {
     let directory = tempfile::tempdir().unwrap();
-    let services = Services::new(
-        Arc::new(ProviderRegistry::new(vec![Arc::new(LocalProvider::new())])),
-        PlatformPaths::new(directory.path()),
-    );
+    let services = Services::new(Arc::new(ProviderRegistry::new(vec![Arc::new(
+        LocalProvider::new(),
+    )])));
     let store = ManifestStore::new(directory.path().join("bibi.toml"));
     let source = directory.path().join("source.bib");
     std::fs::write(&source, SOURCE).unwrap();

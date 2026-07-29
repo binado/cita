@@ -38,8 +38,8 @@ pub struct RefreshedRecord {
 /// An identifier a record gained.
 ///
 /// Reported individually, unlike description changes: a preprint gaining a DOI
-/// may create a duplicate relationship with an existing record or change which
-/// cached document belongs to it, and neither should pass silently.
+/// may create a duplicate relationship with an existing record, and that should
+/// not pass silently.
 #[derive(Clone, Debug)]
 pub struct IdentifierAddition {
     /// The record that gained it.

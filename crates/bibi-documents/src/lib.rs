@@ -1,23 +1,22 @@
-//! The global, derived, disposable document cache.
+//! Retrieving an arXiv artifact.
 //!
-//! Artifacts are addressed by normalized arXiv identifier and kind, never by
-//! record identity, so two projects citing one paper share a copy and a cached
-//! file is meaningful on its own. Nothing in a manifest refers to a cache path,
-//! so rename, removal, and provider migration require no bookkeeping here.
+//! This crate acquires one file: it downloads a work's PDF or original source
+//! archive to a path the caller names, validates that the response really is
+//! that kind of file, and publishes it through a temporary sibling so a
+//! destination never holds a partial download.
 //!
-//! The cache is derived and disposable. Removing a record does not evict its
-//! documents — another project may want them, and there is no registry that
-//! could say otherwise — so eviction is an explicit global operation.
+//! It stores nothing. There is no cache, no root it owns, no layout it
+//! maintains, and no eviction to schedule — which is why nothing here has to
+//! answer what becomes of a downloaded file when a record is renamed or
+//! removed. Managing a document collection is a library concern rather than a
+//! project one, and a project tool that acquires files does not need to become
+//! one to be useful.
 #![warn(missing_docs)]
 
-mod clean;
 mod error;
-mod path;
-mod source;
+mod naming;
 mod store;
 
-pub use clean::{CleanMode, CleanReport};
 pub use error::Error;
-pub use path::{ArtifactKind, DOCUMENTS};
-pub use source::ArchiveLimits;
-pub use store::{DocumentStore, DocumentStoreBuilder, FetchOutcome, FetchPolicy, pdf_url};
+pub use naming::{ArtifactKind, default_filename};
+pub use store::{ArtifactClient, ArtifactClientBuilder, public_url};

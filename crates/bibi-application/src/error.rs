@@ -30,7 +30,7 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
-    /// The document cache could not be opened or used.
+    /// An artifact could not be retrieved.
     #[error(transparent)]
     Documents(#[from] bibi_documents::Error),
     /// JSON output could not be produced.
@@ -39,12 +39,6 @@ pub enum Error {
     /// The request itself is invalid, independently of any stored state.
     #[error("{0}")]
     Usage(String),
-    /// The platform's configuration or cache directory could not be located.
-    #[error("could not locate the platform {what} directory")]
-    NoPlatformDirectory {
-        /// Which directory was being located.
-        what: &'static str,
-    },
 }
 
 impl Error {

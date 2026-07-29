@@ -6,8 +6,8 @@
 //! the render options.
 
 use bibi_application::{
-    AddRequest, CheckOutcome, PlatformPaths, RenderOptions, Services, SyncRequest, add_locators,
-    check, domain::ManifestStore, render_manifest, sync,
+    AddRequest, CheckOutcome, RenderOptions, Services, SyncRequest, add_locators, check,
+    domain::ManifestStore, render_manifest, sync,
 };
 use bibi_core::{ProviderName, RecordFilter};
 use bibi_provider::{
@@ -25,10 +25,7 @@ struct Project {
 impl Project {
     fn with(providers: Vec<Arc<dyn Provider>>) -> Self {
         let directory = tempfile::tempdir().unwrap();
-        let services = Services::new(
-            Arc::new(ProviderRegistry::new(providers)),
-            PlatformPaths::new(directory.path()),
-        );
+        let services = Services::new(Arc::new(ProviderRegistry::new(providers)));
         Self {
             directory,
             services,
@@ -247,13 +244,10 @@ async fn a_manifest_change_makes_a_previously_matching_bibliography_drift() {
             )
             .with_payload("1", Some(payload("Alpha:2012", "Corrected"))),
     );
-    let services = Services::new(
-        Arc::new(ProviderRegistry::new(vec![
-            updated,
-            Arc::new(LocalProvider::new()),
-        ])),
-        project.services.paths.clone(),
-    );
+    let services = Services::new(Arc::new(ProviderRegistry::new(vec![
+        updated,
+        Arc::new(LocalProvider::new()),
+    ])));
     sync(&services, &project.store(), &SyncRequest::default())
         .await
         .unwrap();

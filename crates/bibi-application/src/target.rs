@@ -1,45 +1,7 @@
 //! Choosing which manifest a command acts on.
 
-use crate::error::Error;
 use bibi_manifest::ManifestStore;
 use std::path::{Path, PathBuf};
-
-/// The platform locations bibi uses.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PlatformPaths {
-    cache_root: PathBuf,
-}
-
-/// The environment variable that overrides the document cache's location.
-pub const CACHE_ROOT_ENV: &str = "BIBI_CACHE_ROOT";
-
-impl PlatformPaths {
-    /// Discover the platform's directories.
-    ///
-    /// The document cache is derived and disposable, so it lives in the cache
-    /// directory.
-    pub fn discover() -> Result<Self, Error> {
-        let directories = directories::ProjectDirs::from("", "", "bibi")
-            .ok_or(Error::NoPlatformDirectory { what: "cache" })?;
-        let cache_root = match std::env::var_os(CACHE_ROOT_ENV) {
-            Some(path) if !path.is_empty() => PathBuf::from(path),
-            _ => directories.cache_dir().to_path_buf(),
-        };
-        Ok(Self { cache_root })
-    }
-
-    /// Build fixed paths, for tests and for callers that already know them.
-    pub fn new(cache_root: impl Into<PathBuf>) -> Self {
-        Self {
-            cache_root: cache_root.into(),
-        }
-    }
-
-    /// Where downloaded documents are cached, for every project alike.
-    pub fn cache_root(&self) -> &Path {
-        &self.cache_root
-    }
-}
 
 /// The manifest name bibi looks for in the working directory.
 pub const MANIFEST_NAME: &str = "bibi.toml";

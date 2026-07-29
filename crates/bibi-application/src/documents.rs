@@ -1,30 +1,33 @@
-//! Retrieving a record's documents, and evicting the cache.
+//! Acquiring a record's document.
 
 use crate::{error::Error, services::Services};
 use bibi_core::Selector;
-use bibi_documents::{ArtifactKind, CleanMode, CleanReport, FetchOutcome, FetchPolicy};
+use bibi_documents::{ArtifactKind, default_filename};
 use bibi_manifest::ManifestStore;
+use std::path::{Path, PathBuf};
 
 /// Options for `fetch`.
 #[derive(Clone, Debug, Default)]
 pub struct FetchRequest {
     /// The record to fetch for.
     pub selector: String,
-    /// Fetch the source package instead of the PDF.
+    /// Fetch the source archive instead of the PDF.
     pub source: bool,
     /// Report the public URL instead of downloading anything.
     pub url: bool,
-    /// Download again, replacing the cached artifact.
-    pub force: bool,
+    /// Download here instead of to the default name. Never overwritten.
+    pub output: Option<PathBuf>,
+    /// The directory a default name resolves against.
+    pub working_directory: PathBuf,
 }
 
 /// What `fetch` produced.
 #[derive(Clone, Debug)]
 pub enum FetchTarget {
-    /// A cached artifact, already present.
-    Cached(std::path::PathBuf),
-    /// A cached artifact, downloaded now.
-    Downloaded(std::path::PathBuf),
+    /// An artifact downloaded now.
+    Downloaded(PathBuf),
+    /// An artifact already at the default destination, which was not replaced.
+    Present(PathBuf),
     /// A public URL, with nothing downloaded.
     Url(String),
 }
@@ -35,64 +38,75 @@ impl FetchTarget {
     /// One value, so that `open $(bibi fetch <selector>)` works.
     pub fn as_str(&self) -> std::borrow::Cow<'_, str> {
         match self {
-            Self::Cached(path) | Self::Downloaded(path) => path.to_string_lossy(),
+            Self::Downloaded(path) | Self::Present(path) => path.to_string_lossy(),
             Self::Url(url) => std::borrow::Cow::Borrowed(url),
         }
     }
 }
 
-/// Resolve a record and produce a path or URL for its document.
+/// Resolve a record and acquire its document, or report where to find it.
 ///
-/// The cache key is computed from the record's arXiv identifier every time.
-/// Nothing in the manifest refers to a cache path, so renaming, removing, or
-/// migrating a record needs no document bookkeeping at all.
+/// `fetch` retrieves arXiv artifacts and nothing else. A record carrying no
+/// arXiv identifier fails and says so: bibi does not follow a DOI to a
+/// publisher. Keeping the command pointed at one artifact service is what stops
+/// it from becoming a general document acquisition layer.
+///
+/// `keep_existing` reports rather than fails when the default destination is
+/// already occupied, which is what lets `--open` open a file a previous fetch
+/// downloaded. An explicit `--output` is never treated this way: the caller
+/// named that path, so silently accepting whatever is already there would be a
+/// guess about what they meant.
 pub async fn fetch(
     services: &Services,
     store: &ManifestStore,
     request: &FetchRequest,
+    keep_existing: bool,
 ) -> Result<FetchTarget, Error> {
-    if request.source && request.url {
-        return Err(Error::usage(
-            "`--url` names the published PDF, so it cannot be combined with `--source`",
-        ));
-    }
     let manifest = store.load()?.manifest;
     let record = manifest.resolve(&Selector::parse(&request.selector)?)?;
     let arxiv = record.identifiers.arxiv.clone().ok_or_else(|| {
         Error::usage(format!(
-            "`{}` has no arXiv identifier, and arXiv is the only document source in this version",
+            "`{}` has no arXiv identifier, and arXiv is the only document source",
             record.key
         ))
     })?;
-    // A URL is a function of the identifier and arXiv's public address alone,
-    // so reporting one must not require a usable cache root.
-    if request.url {
-        return Ok(FetchTarget::Url(
-            bibi_documents::pdf_url(&arxiv)?.to_string(),
-        ));
-    }
-    let documents = services.documents()?;
-
     let kind = if request.source {
         ArtifactKind::Source
     } else {
         ArtifactKind::Pdf
     };
-    let policy = if request.force {
-        FetchPolicy::Force
-    } else {
-        FetchPolicy::UseCache
+
+    // A URL is a function of the identifier and arXiv's public address alone,
+    // so reporting one must not require building a client.
+    if request.url {
+        return Ok(FetchTarget::Url(
+            bibi_documents::public_url(&arxiv, kind)?.to_string(),
+        ));
+    }
+
+    let (destination, named) = match &request.output {
+        Some(path) => (absolute(&request.working_directory, path), true),
+        None => (
+            request
+                .working_directory
+                .join(default_filename(&arxiv, kind)),
+            false,
+        ),
     };
-    Ok(match documents.fetch(&arxiv, kind, policy).await? {
-        FetchOutcome::Cached(path) => FetchTarget::Cached(path),
-        FetchOutcome::Downloaded(path) => FetchTarget::Downloaded(path),
-    })
+    if !named && keep_existing && destination.exists() {
+        return Ok(FetchTarget::Present(destination));
+    }
+    services
+        .documents()?
+        .download(&arxiv, kind, &destination)
+        .await?;
+    Ok(FetchTarget::Downloaded(destination))
 }
 
-/// Report or evict the global document cache.
-///
-/// This resolves no manifest: the cache belongs to the machine rather than to
-/// any project, and removing a record never evicted anything from it.
-pub fn clean_cache(services: &Services, mode: CleanMode) -> Result<CleanReport, Error> {
-    Ok(services.documents()?.clean(mode)?)
+fn absolute(working_directory: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        working_directory.join(path)
+    }
 }

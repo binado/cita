@@ -2,7 +2,8 @@
 
 use anyhow::{Context, Result};
 use bibi_application::domain::ManifestStore;
-use bibi_application::{PlatformPaths, Services, TargetResolver};
+use bibi_application::{Services, TargetResolver};
+use bibi_documents::ArtifactClient;
 use bibi_inspire::{InspireProvider, Transport};
 use bibi_provider::{LocalProvider, Provider, ProviderRegistry};
 use std::{path::Path, sync::Arc};
@@ -50,10 +51,30 @@ pub fn providers() -> Result<ProviderRegistry> {
     Ok(ProviderRegistry::new(providers))
 }
 
+/// A test-only override for arXiv's base URL.
+///
+/// The counterpart to [`INSPIRE_BASE_URL_ENV`], and read the same way: the CLI
+/// suite drives a real download against a local listener through it, so that
+/// `fetch` is covered end to end without touching arxiv.org. It is not a
+/// configuration surface.
+pub const ARXIV_BASE_URL_ENV: &str = "BIBI_ARXIV_BASE_URL";
+
 /// Assemble the injected services.
 pub fn services() -> Result<Services> {
-    let paths = PlatformPaths::discover().context("locating bibi's platform directories")?;
-    Ok(Services::new(Arc::new(providers()?), paths))
+    let services = Services::new(Arc::new(providers()?));
+    // Only the override is applied here. Without one, the client stays unbuilt
+    // until something actually downloads, which is what keeps every offline
+    // command offline by construction.
+    match std::env::var_os(ARXIV_BASE_URL_ENV).filter(|value| !value.is_empty()) {
+        None => Ok(services),
+        Some(base_url) => {
+            let client = ArtifactClient::builder()
+                .base_url(base_url.to_string_lossy().into_owned())
+                .build()
+                .context("building the arXiv client")?;
+            Ok(services.with_documents(client))
+        }
+    }
 }
 
 /// Resolve the manifest a command acts on.

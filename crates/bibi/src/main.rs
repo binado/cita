@@ -52,7 +52,6 @@ async fn run(cli: Cli) -> anyhow::Result<bool> {
         Command::Sync(args) => commands::sync::run(&services, target, args).await,
         Command::Check(args) => commands::check::run(&services, target, args),
         Command::Fetch(args) => commands::documents::run_fetch(&services, target, args).await,
-        Command::Cache(command) => commands::documents::run_cache(&services, command),
         Command::Init => commands::init::run(target),
         Command::Completions(_) => unreachable!("answered before services are built"),
     }

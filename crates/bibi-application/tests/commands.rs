@@ -1,9 +1,8 @@
 //! Command flows over fake providers and temporary manifests.
 
 use bibi_application::{
-    AddFileRequest, AddKind, AddRequest, InputSource, ListRequest, PlatformPaths, Services,
-    add_file, add_locators, domain::CitationKey, domain::ManifestStore, list, remove, rename, show,
-    to_json,
+    AddFileRequest, AddKind, AddRequest, InputSource, ListRequest, Services, add_file,
+    add_locators, domain::CitationKey, domain::ManifestStore, list, remove, rename, show, to_json,
 };
 use bibi_core::{ArxivId, Doi};
 use bibi_provider::{
@@ -22,10 +21,7 @@ struct Project {
 impl Project {
     fn with(providers: Vec<Arc<dyn Provider>>) -> Self {
         let directory = tempfile::tempdir().unwrap();
-        let services = Services::new(
-            Arc::new(ProviderRegistry::new(providers)),
-            PlatformPaths::new(directory.path()),
-        );
+        let services = Services::new(Arc::new(ProviderRegistry::new(providers)));
         Self {
             directory,
             services,
@@ -196,13 +192,10 @@ async fn overwrite_replaces_provider_data_and_preserves_id_and_key() {
     ));
     let project = Project {
         directory: project.directory,
-        services: Services::new(
-            Arc::new(ProviderRegistry::new(vec![
-                updated,
-                Arc::new(LocalProvider::new()),
-            ])),
-            project.services.paths.clone(),
-        ),
+        services: Services::new(Arc::new(ProviderRegistry::new(vec![
+            updated,
+            Arc::new(LocalProvider::new()),
+        ]))),
     };
     let report = add(
         &project,

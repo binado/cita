@@ -19,7 +19,6 @@ use std::{
 fn bibi(directory: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bibi"))
         .current_dir(directory)
-        .env("BIBI_CACHE_ROOT", directory.join("cache/bibi"))
         .args(args)
         .output()
         .expect("running bibi")
@@ -227,7 +226,6 @@ fn there_is_no_user_level_manifest_to_select() {
 fn bibi_against(directory: &Path, server: &TestServer, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bibi"))
         .current_dir(directory)
-        .env("BIBI_CACHE_ROOT", directory.join("cache/bibi"))
         .env("BIBI_INSPIRE_BASE_URL", &server.base_url)
         .args(args)
         .output()
@@ -481,42 +479,134 @@ fn a_sync_with_no_managed_records_reports_and_writes_nothing() {
     );
 }
 
-#[test]
-fn fetch_reports_a_url_without_downloading_anything() {
-    let (_directory, path) = project();
+/// Add one INSPIRE-owned record carrying an arXiv identifier.
+fn project_with_an_arxiv_record() -> (tempfile::TempDir, PathBuf) {
+    let (directory, path) = project();
     let server = TestServer::new(vec![
         hits(&[record(1124337, "Aad:2012tfa", "1207.7214", "Observation")]),
         "@article{Aad:2012tfa,\n  title = {Observation}\n}\n".to_owned(),
     ]);
     bibi_against(&path, &server, &["add", "1207.7214"]);
+    (directory, path)
+}
+
+/// Run `bibi` with arXiv pointed at a local listener serving one PDF.
+fn bibi_fetching(directory: &Path, body: &[u8], args: &[&str]) -> Output {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binding a test server");
+    let base_url = format!("http://{}/", listener.local_addr().unwrap());
+    let body = body.to_vec();
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        use std::io::{BufRead, Write};
+        while reader.read_line(&mut line).is_ok() {
+            if line.trim().is_empty() || line.is_empty() {
+                break;
+            }
+            line.clear();
+        }
+        let mut response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        response.extend_from_slice(&body);
+        let _ = stream.write_all(&response);
+        let _ = stream.flush();
+    });
+    Command::new(env!("CARGO_BIN_EXE_bibi"))
+        .current_dir(directory)
+        .env("BIBI_ARXIV_BASE_URL", &base_url)
+        .args(args)
+        .output()
+        .expect("running bibi")
+}
+
+#[test]
+fn fetch_reports_a_url_without_downloading_anything() {
+    let (_directory, path) = project_with_an_arxiv_record();
 
     let output = bibi(&path, &["fetch", "Aad:2012tfa", "--url"]);
     assert_eq!(code(&output), 0);
     // One line, so `open $(bibi fetch <selector> --url)` works.
     assert_eq!(stdout(&output), "https://arxiv.org/pdf/1207.7214\n");
-    // Nothing was cached: --url is a question, not a download.
-    assert!(!path.join("cache").exists());
+    // A question, not a download: nothing landed in the working directory.
+    assert!(!path.join("1207.7214.pdf").exists());
+
+    // `--source` asks the same question about the other artifact.
+    let source = bibi(&path, &["fetch", "Aad:2012tfa", "--url", "--source"]);
+    assert_eq!(code(&source), 0);
+    assert_eq!(stdout(&source), "https://arxiv.org/e-print/1207.7214\n");
 }
 
 #[test]
-fn fetch_url_answers_even_when_the_cache_root_is_unusable() {
-    let (_directory, path) = project();
-    let server = TestServer::new(vec![
-        hits(&[record(1124337, "Aad:2012tfa", "1207.7214", "Observation")]),
-        "@article{Aad:2012tfa,\n  title = {Observation}\n}\n".to_owned(),
-    ]);
-    bibi_against(&path, &server, &["add", "1207.7214"]);
+fn a_fetch_downloads_into_the_working_directory_under_the_arxiv_name() {
+    let (_directory, path) = project_with_an_arxiv_record();
 
-    // The filesystem root is not a cache root bibi may own, but --url is a
-    // question about arXiv's public address, not about the cache.
-    let output = Command::new(env!("CARGO_BIN_EXE_bibi"))
-        .current_dir(&path)
-        .env("BIBI_CACHE_ROOT", "/")
-        .args(["fetch", "Aad:2012tfa", "--url"])
-        .output()
-        .expect("running bibi");
-    assert_eq!(code(&output), 0);
-    assert_eq!(stdout(&output), "https://arxiv.org/pdf/1207.7214\n");
+    let output = bibi_fetching(&path, b"%PDF-1.7\nbody", &["fetch", "Aad:2012tfa"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let destination = path.join("1207.7214.pdf");
+    assert!(destination.exists());
+    assert_eq!(std::fs::read(&destination).unwrap(), b"%PDF-1.7\nbody");
+    // stdout is the path alone, so `open $(bibi fetch k)` works. It is compared
+    // by suffix because the working directory may canonicalize (on macOS
+    // `/var` is a symlink to `/private/var`).
+    let reported = stdout(&output);
+    assert_eq!(reported.lines().count(), 1, "the result is one path");
+    assert!(
+        reported.trim_end().ends_with("/1207.7214.pdf"),
+        "unexpected path {reported:?}"
+    );
+}
+
+#[test]
+fn a_fetch_onto_an_existing_file_is_a_collision_rather_than_a_replacement() {
+    let (_directory, path) = project_with_an_arxiv_record();
+    let destination = path.join("1207.7214.pdf");
+    std::fs::write(&destination, "mine").unwrap();
+
+    let output = bibi_fetching(&path, b"%PDF-1.7\nnew", &["fetch", "Aad:2012tfa"]);
+    // The user asked for a download and did not get one, so this fails.
+    assert_eq!(code(&output), 1);
+    assert!(stderr(&output).contains("already exists"));
+    assert_eq!(std::fs::read_to_string(&destination).unwrap(), "mine");
+}
+
+#[test]
+fn an_output_path_names_an_exact_file() {
+    let (_directory, path) = project_with_an_arxiv_record();
+
+    let output = bibi_fetching(
+        &path,
+        b"%PDF-1.7\nbody",
+        &["fetch", "Aad:2012tfa", "-o", "paper.pdf"],
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(path.join("paper.pdf").exists());
+    assert!(!path.join("1207.7214.pdf").exists());
+}
+
+#[test]
+fn a_response_that_is_not_the_artifact_leaves_nothing_behind() {
+    let (_directory, path) = project_with_an_arxiv_record();
+
+    // arXiv serves an HTML holding page for a withdrawn work.
+    let output = bibi_fetching(&path, b"<!DOCTYPE html>", &["fetch", "Aad:2012tfa"]);
+    assert_eq!(code(&output), 1);
+    assert!(stderr(&output).contains("not a PDF"));
+    assert!(!path.join("1207.7214.pdf").exists());
+    // No temporary sibling survived the refusal.
+    assert_eq!(
+        std::fs::read_dir(&path)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name() != "bibi.toml")
+            .count(),
+        0
+    );
 }
 
 #[test]
@@ -530,26 +620,12 @@ fn fetching_a_record_without_an_arxiv_id_explains_why_it_cannot() {
 }
 
 #[test]
-fn cache_clean_previews_before_it_removes_and_needs_to_be_told_which() {
+fn there_is_no_document_cache_to_maintain() {
     let (_directory, path) = project();
-    let cache = path.join("cache/bibi/documents/arxiv/1207.7214");
-    std::fs::create_dir_all(&cache).unwrap();
-    std::fs::write(cache.join("paper.pdf"), "%PDF-1.7\n").unwrap();
-
-    let preview = bibi(&path, &["cache", "clean", "--dry-run"]);
-    assert_eq!(code(&preview), 0);
-    assert!(stderr(&preview).contains("would remove 1 file"));
-    assert!(cache.join("paper.pdf").exists());
-
-    let removed = bibi(&path, &["cache", "clean", "--all"]);
-    assert_eq!(code(&removed), 0);
-    assert!(stderr(&removed).contains("removed 1 file"));
-    assert!(!path.join("cache/bibi/documents").exists());
-    // The cache root itself is shared with the platform, so it survives.
-    assert!(path.join("cache/bibi").exists());
-
-    // Neither flag is a usage error: eviction is never implicit.
-    assert_eq!(code(&bibi(&path, &["cache", "clean"])), 2);
+    // `cache clean` managed a global collection, which is a library concern.
+    assert_eq!(code(&bibi(&path, &["cache", "clean", "--all"])), 2);
+    // And `--force` replaced a cached copy, of which there is none.
+    assert_eq!(code(&bibi(&path, &["fetch", "Aad:2012tfa", "--force"])), 2);
 }
 
 #[cfg(target_os = "linux")]

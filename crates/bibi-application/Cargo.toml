@@ -7,18 +7,15 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-
 [dependencies]
 bibi-bibtex = { workspace = true }
 bibi-core = { workspace = true }
 bibi-documents = { workspace = true }
 bibi-manifest = { workspace = true }
 bibi-provider = { workspace = true }
-directories = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-
 [dev-dependencies]
 bibi-provider = { workspace = true }
 tempfile = { workspace = true }

@@ -1,17 +1,9 @@
 use std::path::PathBuf;
 use thiserror::Error as ThisError;
 
-/// Every failure the document cache can produce.
+/// Every failure artifact retrieval can produce.
 #[derive(Debug, ThisError)]
 pub enum Error {
-    /// The cache root is unusable or unsafe to own.
-    #[error("unusable document cache root {path}: {reason}")]
-    UnsafeRoot {
-        /// The rejected root.
-        path: PathBuf,
-        /// Why it was rejected.
-        reason: &'static str,
-    },
     /// A download did not complete.
     #[error("could not download {url}: {source}")]
     Download {
@@ -55,15 +47,18 @@ pub enum Error {
         /// What was wrong.
         reason: String,
     },
-    /// A source archive is malformed, oversized, or unsafe to extract.
-    #[error("{id}: unsafe or malformed source archive: {reason}")]
-    UnsafeArchive {
-        /// The identifier.
-        id: String,
-        /// What was wrong.
-        reason: String,
+    /// Something is already at the destination.
+    ///
+    /// Retrieval never replaces a file. The caller chose the path — either
+    /// explicitly or through the default naming — and overwriting it would
+    /// discard whatever was there on the strength of a guess about what the
+    /// user meant.
+    #[error("{path} already exists")]
+    DestinationExists {
+        /// The occupied path.
+        path: PathBuf,
     },
-    /// A cache entry could not be read or written.
+    /// An artifact could not be read or written.
     #[error("{path}: {source}")]
     Io {
         /// The path involved.
@@ -71,12 +66,6 @@ pub enum Error {
         /// The underlying failure.
         #[source]
         source: std::io::Error,
-    },
-    /// A cached artifact exists but is not usable.
-    #[error("cached artifact at {path} is unusable; re-fetch it with `--force`")]
-    InvalidCacheEntry {
-        /// The path involved.
-        path: PathBuf,
     },
     /// The client could not be built.
     #[error("could not build the arXiv client: {0}")]
@@ -91,13 +80,6 @@ impl Error {
         Self::Io {
             path: path.into(),
             source,
-        }
-    }
-
-    pub(crate) fn unsafe_archive(id: &str, reason: impl std::fmt::Display) -> Self {
-        Self::UnsafeArchive {
-            id: id.to_owned(),
-            reason: reason.to_string(),
         }
     }
 }
