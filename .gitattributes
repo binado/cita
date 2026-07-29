@@ -1,0 +1,2 @@
+# Byte fixtures assert exact line endings; never normalize them on checkout.
+crates/bibi-bibtex/tests/fixtures/crlf.bib -text

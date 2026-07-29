@@ -1,6 +1,8 @@
 /target
 *.bib
 !references.bib
+# Checked-in byte fixtures: the ignore above is for generated bibliographies.
+!crates/*/tests/**/*.bib
 .DS_Store
 
 # Local bibi state written by manual smoke tests
