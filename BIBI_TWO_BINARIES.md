@@ -206,7 +206,6 @@ removed the ambiguity, and the two collapsed into one.
 bibi fetch <selector>
 bibi fetch <selector> --source
 bibi fetch <selector> --url
-bibi fetch <selector> --open
 bibi fetch <selector> -o <path>
 ```
 
@@ -217,8 +216,6 @@ The behavior is:
 | none | Download the PDF to the current working directory |
 | `--source` | Download the original source archive to the current working directory |
 | `--url` | Print the selected artifact's public URL without downloading |
-| `--open` | Open the downloaded or already-present destination |
-| `--url --open` | Open the public URL without downloading |
 | `-o/--output <path>` | Download to that exact path |
 | `--source --url` | Print the source archive URL |
 
@@ -226,10 +223,10 @@ Relative output paths resolve against the current working directory. `--output`
 names an exact file, not a directory. `--output` is incompatible with `--url`.
 
 Downloads use a temporary sibling, validate the artifact sufficiently for its
-kind, and rename it into place only after success. An explicit output path is
-never overwritten. When the default destination already exists, `--open` may
-open it; otherwise `fetch` reports the collision and asks the user to remove it
-or select another path.
+kind, and rename it into place only after success. Neither a default
+destination nor an explicit `-o/--output` is ever overwritten: if the
+target file already exists, `fetch` reports the collision and asks the user to
+remove it or select another path.
 
 There is no `--force`, global document cache, cache root, or `cache clean`
 command.

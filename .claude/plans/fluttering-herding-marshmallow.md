@@ -112,7 +112,8 @@ file into the working directory; it manages nothing.
   gains an output path and a source-URL branch. The existing no-arXiv-id error
   (`:61`) already fails cleanly and stays; reword it to drop "in this version".
   Collision rule: an explicit `--output` is never overwritten; an existing
-  *default* destination is an error (exit 1) unless `--open`, which opens it.
+  *default* destination is an error (exit 1) and is reported as a collision
+  so the caller can remove it or select another path.
 - `crates/bibi-application/src/services.rs` — `PlatformPaths` is now empty, so
   delete the type, the `paths` field, `Error::NoPlatformDirectory`, and the
   `directories` dependency. `Services` keeps providers and a lazily built

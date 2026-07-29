@@ -937,7 +937,7 @@ that binds the wrong record corrupts data.
 | `sync` | Conditional or forced refresh (§5) | `--provider <name>`, `--force`, `--dry-run` |
 | `export` | Optionally sync one provider, then render | `--provider <name>`, `--force`, `--output <path>`, filters |
 | `check <bibfile>` | Verify a rendered bibliography byte-for-byte | export filters and rendering options |
-| `fetch <selector>` | Retrieve PDF or source (§7) | `--source`, `--url`, `--open`, `--force` |
+| `fetch <selector>` | Retrieve PDF or source (§7) | `--source`, `--url`, `-o`, `--force` |
 | `cache clean` | Delete the global derived document cache | `--dry-run`, `--all` |
 | `init` | Create a project | |
 

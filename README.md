@@ -171,8 +171,7 @@ $ bibi fetch ATLAS:2012yve            # downloads ./1207.7214.pdf
 $ bibi fetch ATLAS:2012yve --source   # downloads ./1207.7214.tar.gz
 $ bibi fetch 1207.7214 --url          # any selector works; just the URL
 $ bibi fetch ATLAS:2012yve -o higgs.pdf
-$ bibi fetch ATLAS:2012yve --open   # download it, then open it
-$ open $(bibi fetch ATLAS:2012yve)  # or compose it yourself
+$ open $(bibi fetch ATLAS:2012yve)    # or compose it yourself
 ```
 
 `fetch` gets you a file; it does not manage a collection. The download lands in

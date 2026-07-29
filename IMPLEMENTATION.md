@@ -140,7 +140,7 @@ Keep direct dependencies narrow so crate ownership remains visible:
 | `bibi-manifest` | `serde`, `toml`, `tempfile`, `thiserror` |
 | `bibi-documents` | `reqwest`, `flate2`, `tar`, `tempfile`, `url`, `thiserror` |
 | `bibi-application` | `directories`, `serde`, `serde_json`, `thiserror` |
-| `bibi` | `anyhow`, `clap`, `clap_complete`, `tokio`, `opener`, `anstyle`, `terminal_size` |
+| `bibi` | `anyhow`, `clap`, `clap_complete`, `tokio`, `anstyle`, `terminal_size` |
 
 Do not add a hashing dependency for stale-manifest detection. `Generation`
 retains the exact bytes read and compares them with the bytes on disk
@@ -1646,9 +1646,8 @@ Fetch:
 4. otherwise calls `DocumentStore` with PDF/source and cache/force policy;
 5. returns an absolute path or URL target to the binary.
 
-`--source` and `--url` are mutually exclusive. `--open` may be used with a URL
-or cached path; the binary performs the actual open after a successful
-application result and still writes the target to stdout.
+`--source` and `--url` are mutually exclusive. The binary writes the resolved
+target (path or URL) to stdout and nothing else; opening is the shell's job.
 
 Cache clean does not resolve a manifest. It maps `--dry-run` or `--all` to the
 document store and returns a typed report.
@@ -1717,7 +1716,6 @@ The binary is a thin adapter around `bibi-application`. It owns:
 - construction of concrete providers and document store;
 - retry/progress observers;
 - terminal-oriented tables and diagnostics;
-- launching a successful `fetch --open` target;
 - stdout/stderr routing;
 - exit codes;
 - shell completion generation.
