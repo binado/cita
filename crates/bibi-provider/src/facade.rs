@@ -4,8 +4,8 @@ use crate::local;
 use bibi_bibtex::BibtexEntry;
 pub use bibi_core::Provider;
 use bibi_core::{
-    BibiId, IdentifierChange, Identifiers, Provenance, ProviderId, ProviderOwned, QualifiedLocator,
-    Revision,
+    BibiId, IdentifierChange, Identifiers, Locator, Provenance, ProviderId, ProviderOwned,
+    QualifiedLocator, Revision,
     provider::{
         MappingError, PayloadItem, PayloadRequest, ProviderError, ProviderMetadata, RefreshItem,
         RefreshRequest, RefreshState, RemoteProvider, Resolution, RetrievalError,
@@ -23,7 +23,10 @@ use thiserror::Error as ThisError;
 #[derive(Debug, ThisError)]
 pub enum Error {
     /// The requested provider is not installed.
-    #[error("provider `{name}` is not available in this build")]
+    #[error(
+        "provider `{name}` is not available in this build; installed providers: {}",
+        Provider::installed_list()
+    )]
     UnknownProvider {
         /// The name supplied.
         name: String,
@@ -122,6 +125,39 @@ enum Backend {
     Scripted(Arc<crate::testing::FakeProvider>),
 }
 
+impl RemoteProvider for Backend {
+    fn name(&self) -> Provider {
+        match self {
+            Backend::Inspire(remote) => remote.name(),
+            Backend::Scripted(remote) => remote.name(),
+        }
+    }
+
+    async fn resolve(&self, locators: &[Locator]) -> Result<Vec<Resolution>, ProviderError> {
+        match self {
+            Backend::Inspire(remote) => remote.resolve(locators).await,
+            Backend::Scripted(remote) => remote.resolve(locators).await,
+        }
+    }
+
+    async fn refresh_metadata(&self, requests: &[RefreshRequest]) -> Vec<RefreshItem> {
+        match self {
+            Backend::Inspire(remote) => remote.refresh_metadata(requests).await,
+            Backend::Scripted(remote) => remote.refresh_metadata(requests).await,
+        }
+    }
+
+    async fn fetch_payloads(
+        &self,
+        requests: &[PayloadRequest],
+    ) -> Result<Vec<PayloadItem>, ProviderError> {
+        match self {
+            Backend::Inspire(remote) => remote.fetch_payloads(requests).await,
+            Backend::Scripted(remote) => remote.fetch_payloads(requests).await,
+        }
+    }
+}
+
 /// Closed provider facade.
 pub struct Providers {
     remote: Backend,
@@ -161,17 +197,14 @@ impl Providers {
         locators: &[QualifiedLocator],
     ) -> Result<Vec<ResolveItem>, Error> {
         let provider = preflight(selected, locators)?;
-        if provider == Provider::Local {
+        if !provider.is_remote() {
             return Err(Error::LocalResolution);
         }
         let requested = locators
             .iter()
             .map(|locator| locator.locator.clone())
             .collect::<Vec<_>>();
-        let result = match &self.remote {
-            Backend::Inspire(remote) => remote.resolve(&requested).await,
-            Backend::Scripted(remote) => remote.resolve(&requested).await,
-        };
+        let result = self.remote.resolve(&requested).await;
         Ok(validate_resolutions(provider, requested.len(), result))
     }
 
@@ -198,10 +231,7 @@ impl Providers {
                 stored_revision: target.stored_revision.clone(),
             })
             .collect::<Vec<_>>();
-        let metadata = match &self.remote {
-            Backend::Inspire(remote) => remote.refresh_metadata(&requests).await,
-            Backend::Scripted(remote) => remote.refresh_metadata(&requests).await,
-        };
+        let metadata = self.remote.refresh_metadata(&requests).await;
         Ok(self.finish_refresh(owner, targets, options, metadata).await)
     }
 
@@ -212,12 +242,11 @@ impl Providers {
         options: RefreshOptions,
         metadata_items: Vec<RefreshItem>,
     ) -> Vec<RefreshedItem> {
-        let provider_name = owner;
         if !metadata_correlates(targets, &metadata_items) {
             return fail_targets(
                 targets,
                 ProviderError::contract(
-                    provider_name,
+                    owner,
                     format!(
                         "returned {} refresh results for {} requests",
                         metadata_items.len(),
@@ -247,7 +276,7 @@ impl Providers {
                         results.insert(
                             target.bibi_id,
                             Err(ProviderError::contract(
-                                provider_name,
+                                owner,
                                 format!(
                                     "reported provider id `{}` for requested id `{}`",
                                     metadata.provider_id, target.provider_id
@@ -275,22 +304,14 @@ impl Providers {
                     join_tokens: metadata.join_tokens.clone(),
                 })
                 .collect::<Vec<_>>();
-            let fetched = match &self.remote {
-                Backend::Inspire(remote) => remote.fetch_payloads(&requests).await,
-                Backend::Scripted(remote) => remote.fetch_payloads(&requests).await,
-            };
+            let fetched = self.remote.fetch_payloads(&requests).await;
             match fetched {
                 Err(error) => {
-                    let rendered = error.to_string();
-                    let retrieval = matches!(error, ProviderError::Retrieval(_));
-                    let mut first = Some(error);
-                    for (target, _) in changed {
-                        results.insert(
-                            target.bibi_id,
-                            Err(first
-                                .take()
-                                .unwrap_or_else(|| restated(provider_name, &rendered, retrieval))),
-                        );
+                    let count = changed.len();
+                    for ((target, _), error) in
+                        changed.into_iter().zip(broadcast(owner, error, count))
+                    {
+                        results.insert(target.bibi_id, Err(error));
                     }
                 }
                 Ok(payloads) if !payloads_correlate(&requests, &payloads) => {
@@ -302,7 +323,7 @@ impl Providers {
                     for (target, _) in changed {
                         results.insert(
                             target.bibi_id,
-                            Err(ProviderError::contract(provider_name, message.clone())),
+                            Err(ProviderError::contract(owner, message.clone())),
                         );
                     }
                 }
@@ -404,26 +425,14 @@ fn validate_resolutions(
     expected: usize,
     result: Result<Vec<Resolution>, ProviderError>,
 ) -> Vec<ResolveItem> {
-    let provider_name = owner;
     match result {
-        Err(error) => {
-            let rendered = error.to_string();
-            let retrieval = matches!(error, ProviderError::Retrieval(_));
-            let mut first = Some(error);
-            (0..expected)
-                .map(|_| {
-                    ResolveItem::Failed(
-                        first
-                            .take()
-                            .unwrap_or_else(|| restated(provider_name, &rendered, retrieval)),
-                    )
-                })
-                .collect()
-        }
+        Err(error) => broadcast(owner, error, expected)
+            .map(ResolveItem::Failed)
+            .collect(),
         Ok(items) if items.len() != expected => (0..expected)
             .map(|_| {
                 ResolveItem::Failed(ProviderError::contract(
-                    provider_name,
+                    owner,
                     format!(
                         "returned {} resolutions for {} locators",
                         items.len(),
@@ -447,10 +456,9 @@ fn validate_resolutions(
 }
 
 fn validate_record(owner: Provider, record: &ProviderOwned) -> Result<(), ProviderError> {
-    let expected = owner;
-    if record.provenance.provider != expected {
+    if record.provenance.provider != owner {
         return Err(ProviderError::contract(
-            expected,
+            owner,
             format!(
                 "returned a record owned by `{}`",
                 record.provenance.provider
@@ -459,13 +467,13 @@ fn validate_record(owner: Provider, record: &ProviderOwned) -> Result<(), Provid
     }
     if record.provenance.provider_id.is_none() {
         return Err(ProviderError::contract(
-            expected,
+            owner,
             "returned a remote record without a provider id",
         ));
     }
     if record.description.title.trim().is_empty() {
         return Err(ProviderError::contract(
-            expected,
+            owner,
             "returned a record without a title",
         ));
     }
@@ -493,11 +501,11 @@ fn payloads_correlate(requests: &[PayloadRequest], items: &[PayloadItem]) -> boo
     }
     let expected = requests
         .iter()
-        .map(|request| request.provider_id.clone())
+        .map(|request| &request.provider_id)
         .collect::<BTreeSet<_>>();
     let returned = items
         .iter()
-        .map(|item| item.provider_id.clone())
+        .map(|item| &item.provider_id)
         .collect::<BTreeSet<_>>();
     expected.len() == requests.len() && expected == returned
 }
@@ -561,19 +569,32 @@ fn replacement<T: fmt::Display>(
 }
 
 fn fail_targets(targets: &[RefreshTarget], error: ProviderError) -> Vec<RefreshedItem> {
-    let name = error.provider();
+    let provider = error.provider();
+    broadcast(provider, error, targets.len())
+        .zip(targets)
+        .map(|(error, target)| RefreshedItem {
+            bibi_id: target.bibi_id,
+            result: Err(error),
+        })
+        .collect()
+}
+
+/// Produce `count` copies of `error`. `ProviderError` is not `Clone`, so the
+/// original is returned first and the rest are reconstructed from its
+/// rendered message.
+fn broadcast(
+    provider: Provider,
+    error: ProviderError,
+    count: usize,
+) -> impl Iterator<Item = ProviderError> {
     let rendered = error.to_string();
     let retrieval = matches!(error, ProviderError::Retrieval(_));
     let mut first = Some(error);
-    targets
-        .iter()
-        .map(|target| RefreshedItem {
-            bibi_id: target.bibi_id,
-            result: Err(first
-                .take()
-                .unwrap_or_else(|| restated(name, &rendered, retrieval))),
-        })
-        .collect()
+    (0..count).map(move |_| {
+        first
+            .take()
+            .unwrap_or_else(|| restated(provider, &rendered, retrieval))
+    })
 }
 
 fn restated(provider: Provider, message: &str, retrieval: bool) -> ProviderError {

@@ -2,10 +2,10 @@
 
 use crate::{cli::CheckArgs, output};
 use anyhow::Result;
-use bibi_application::{CheckOutcome, RenderOptions, Services, check};
+use bibi_application::{CheckOutcome, RenderOptions, check};
 use std::path::Path;
 
-pub fn run(services: &Services, target: Option<&Path>, args: CheckArgs) -> Result<bool> {
+pub fn run(target: Option<&Path>, args: CheckArgs) -> Result<bool> {
     let store = crate::bootstrap::store(target)?;
     let manifest = store.load()?.manifest;
     let path = crate::bootstrap::resolver()?.input(&args.bibfile);
@@ -13,7 +13,7 @@ pub fn run(services: &Services, target: Option<&Path>, args: CheckArgs) -> Resul
         &manifest,
         &path,
         &RenderOptions {
-            filter: crate::commands::list::filter(services, &args.filter)?,
+            filter: crate::commands::list::filter(&args.filter)?,
         },
     )?;
     match &outcome {

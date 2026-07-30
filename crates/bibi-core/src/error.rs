@@ -1,14 +1,6 @@
 use crate::provenance::Provider;
 use thiserror::Error as ThisError;
 
-fn installed_providers() -> String {
-    Provider::ALL
-        .iter()
-        .map(|provider| provider.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 /// Every failure this crate can produce.
 #[derive(Clone, Debug, Eq, PartialEq, ThisError)]
 pub enum Error {
@@ -21,7 +13,7 @@ pub enum Error {
     /// A provider name is not one this build carries.
     #[error(
         "unknown provider `{value}`; installed providers: {}",
-        installed_providers()
+        Provider::installed_list()
     )]
     UnknownProvider {
         /// The rejected value.

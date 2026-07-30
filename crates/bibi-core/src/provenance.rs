@@ -35,6 +35,15 @@ impl Provider {
     pub const fn is_remote(self) -> bool {
         matches!(self, Self::Inspire)
     }
+
+    /// Every installed provider's name, comma-joined, for a "what would work" hint.
+    pub fn installed_list() -> String {
+        Self::ALL
+            .into_iter()
+            .map(Provider::as_str)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 impl fmt::Display for Provider {

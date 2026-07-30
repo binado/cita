@@ -14,7 +14,7 @@ pub async fn run(services: &Services, target: Option<&Path>, args: SyncArgs) -> 
             provider: args
                 .provider
                 .as_deref()
-                .map(|value| crate::commands::provider::installed(value, &services.providers))
+                .map(crate::commands::provider::installed)
                 .transpose()?,
             force: args.force,
             dry_run: args.dry_run,

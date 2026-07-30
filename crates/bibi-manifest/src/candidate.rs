@@ -229,8 +229,8 @@ mod tests {
     #[test]
     fn validation_sorts_records_by_local_key() {
         let manifest = Manifest::validate(vec![
-            record("Zed", "inspire", "2"),
-            record("Alpha", "inspire", "1"),
+            record("Zed", Provider::Inspire, "2"),
+            record("Alpha", Provider::Inspire, "1"),
         ])
         .unwrap();
         assert_eq!(
@@ -245,8 +245,8 @@ mod tests {
 
     #[test]
     fn validation_rejects_every_duplicate_index() {
-        let first = record("A", "inspire", "1");
-        let mut same_key = record("A", "inspire", "2");
+        let first = record("A", Provider::Inspire, "1");
+        let mut same_key = record("A", Provider::Inspire, "2");
         same_key.description.title = "Other".into();
         assert!(matches!(
             Manifest::validate(vec![first.clone(), same_key]),
@@ -256,13 +256,13 @@ mod tests {
             })
         ));
         assert!(matches!(
-            Manifest::validate(vec![first.clone(), record("B", "inspire", "1")]),
+            Manifest::validate(vec![first.clone(), record("B", Provider::Inspire, "1")]),
             Err(Error::Duplicate {
                 kind: "provider identity",
                 ..
             })
         ));
-        let mut same_id = record("B", "inspire", "2");
+        let mut same_id = record("B", Provider::Inspire, "2");
         same_id.id = first.id;
         assert!(matches!(
             Manifest::validate(vec![first.clone(), same_id]),
@@ -272,9 +272,9 @@ mod tests {
             })
         ));
         let doi = Some(Doi::new("10.1/a").unwrap());
-        let mut left = record("C", "inspire", "3");
+        let mut left = record("C", Provider::Inspire, "3");
         left.identifiers.doi = doi.clone();
-        let mut right = record("D", "inspire", "4");
+        let mut right = record("D", Provider::Inspire, "4");
         right.identifiers.doi = doi;
         assert!(matches!(
             Manifest::validate(vec![left, right]),
@@ -284,9 +284,9 @@ mod tests {
 
     #[test]
     fn selector_resolution_prefers_an_exact_key() {
-        let mut keyed = record("2401.00001", "inspire", "1");
+        let mut keyed = record("2401.00001", Provider::Inspire, "1");
         keyed.identifiers.arxiv = None;
-        let mut by_arxiv = record("Other", "inspire", "2");
+        let mut by_arxiv = record("Other", Provider::Inspire, "2");
         by_arxiv.identifiers.arxiv = Some(ArxivId::new("2401.00001").unwrap());
         let manifest = Manifest::validate(vec![keyed, by_arxiv]).unwrap();
         let resolved = manifest
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn selector_resolution_falls_through_to_identifiers() {
-        let mut record = record("Key", "inspire", "1124337");
+        let mut record = record("Key", Provider::Inspire, "1124337");
         record.identifiers.doi = Some(Doi::new("10.1/abc").unwrap());
         record.identifiers.arxiv = Some(ArxivId::new("1207.7214").unwrap());
         let manifest = Manifest::validate(vec![record]).unwrap();
@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn duplicate_detection_uses_identifiers_and_provider_identity() {
-        let mut stored = record("Key", "inspire", "1124337");
+        let mut stored = record("Key", Provider::Inspire, "1124337");
         stored.identifiers.arxiv = Some(ArxivId::new("1207.7214").unwrap());
         let mut candidate = ManifestCandidate::empty();
         candidate.insert(stored).unwrap();
@@ -330,7 +330,7 @@ mod tests {
         };
         let unrelated = Provenance::unmanaged(Provider::Local);
         assert!(candidate.duplicate_of(&by_arxiv, &unrelated).is_some());
-        let by_identity = record("Other", "inspire", "1124337");
+        let by_identity = record("Other", Provider::Inspire, "1124337");
         assert!(
             candidate
                 .duplicate_of(&Identifiers::default(), &by_identity.provenance)
@@ -345,10 +345,10 @@ mod tests {
 
     #[test]
     fn duplicate_detection_can_return_every_possible_target() {
-        let mut by_doi = record("ByDoi", "local", "unused");
+        let mut by_doi = record("ByDoi", Provider::Local, "unused");
         by_doi.provenance = Provenance::unmanaged(Provider::Local);
         by_doi.identifiers.doi = Some(Doi::new("10.1/shared").unwrap());
-        let mut by_arxiv = record("ByArxiv", "local", "unused");
+        let mut by_arxiv = record("ByArxiv", Provider::Local, "unused");
         by_arxiv.provenance = Provenance::unmanaged(Provider::Local);
         by_arxiv.identifiers.arxiv = Some(ArxivId::new("1207.7214").unwrap());
         let mut candidate = ManifestCandidate::empty();

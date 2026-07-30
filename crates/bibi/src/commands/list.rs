@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::Result;
 use bibi_application::domain::RecordFilter;
-use bibi_application::{ListRequest, Services, list, render_records, to_json};
+use bibi_application::{ListRequest, list, render_records, to_json};
 use std::path::Path;
 
 /// Turn filter flags into a complete `RecordFilter`.
@@ -16,12 +16,12 @@ use std::path::Path;
 /// nothing knows is reported rather than silently matching no records.
 /// `--local` is structural: records without a provider handle are local
 /// regardless of their stored provenance.
-pub fn filter(services: &Services, args: &FilterArgs) -> Result<RecordFilter> {
+pub fn filter(args: &FilterArgs) -> Result<RecordFilter> {
     Ok(RecordFilter {
         provider: args
             .provider
             .as_deref()
-            .map(|value| provider::installed(value, &services.providers))
+            .map(provider::installed)
             .transpose()?,
         local: args.local,
         author: args.author.clone(),
@@ -30,13 +30,13 @@ pub fn filter(services: &Services, args: &FilterArgs) -> Result<RecordFilter> {
     })
 }
 
-pub fn run(services: &Services, target: Option<&Path>, args: ListArgs) -> Result<bool> {
+pub fn run(target: Option<&Path>, args: ListArgs) -> Result<bool> {
     let store = crate::bootstrap::store(target)?;
     let manifest = store.load()?.manifest;
     let records = list(
         &manifest,
         &ListRequest {
-            filter: filter(services, &args.filter)?,
+            filter: filter(&args.filter)?,
         },
     );
     let rendered = if args.fields.is_empty() {

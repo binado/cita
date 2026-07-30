@@ -115,8 +115,12 @@ mod tests {
 
     fn candidate() -> ManifestCandidate {
         let mut candidate = ManifestCandidate::empty();
-        candidate.insert(record("Alpha", "inspire", "1")).unwrap();
-        candidate.insert(record("Zed", "inspire", "2")).unwrap();
+        candidate
+            .insert(record("Alpha", Provider::Inspire, "1"))
+            .unwrap();
+        candidate
+            .insert(record("Zed", Provider::Inspire, "2"))
+            .unwrap();
         candidate
     }
 
@@ -124,7 +128,7 @@ mod tests {
     fn insert_rejects_a_key_that_belongs_to_another_record() {
         let mut candidate = candidate();
         assert!(matches!(
-            candidate.insert(record("Alpha", "inspire", "99")),
+            candidate.insert(record("Alpha", Provider::Inspire, "99")),
             Err(Error::KeyInUse { .. })
         ));
         assert_eq!(candidate.records().len(), 2);
@@ -133,7 +137,7 @@ mod tests {
     #[test]
     fn insert_rejects_a_repeated_record_id_and_names_both_records() {
         let mut candidate = candidate();
-        let mut repeated = record("NewKey", "inspire", "99");
+        let mut repeated = record("NewKey", Provider::Inspire, "99");
         repeated.id = candidate.records()[0].id;
         assert!(matches!(
             candidate.insert(repeated),
@@ -149,7 +153,7 @@ mod tests {
     #[test]
     fn insert_rejects_a_work_already_present_under_another_key() {
         let mut candidate = candidate();
-        let mut duplicate = record("Different", "inspire", "1");
+        let mut duplicate = record("Different", Provider::Inspire, "1");
         duplicate.identifiers.arxiv = Some(ArxivId::new("1207.7214").unwrap());
         assert!(matches!(
             candidate.insert(duplicate),
@@ -164,7 +168,7 @@ mod tests {
     fn replace_preserves_id_and_key_and_refuses_a_new_collision() {
         let mut candidate = candidate();
         let target = candidate.records()[0].id;
-        let mut migrated = record("Ignored", "local", "9").provider_owned();
+        let mut migrated = record("Ignored", Provider::Local, "9").provider_owned();
         migrated.provenance = Provenance::unmanaged(Provider::Local);
         migrated.payload = entry("@misc{Whatever,title={Migrated}}");
         migrated.description = Description {

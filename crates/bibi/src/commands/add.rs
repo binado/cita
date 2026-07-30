@@ -13,7 +13,7 @@ pub async fn run(services: &Services, target: Option<&Path>, args: AddArgs) -> R
     let provider = args
         .provider
         .as_deref()
-        .map(|value| crate::commands::provider::installed(value, &services.providers))
+        .map(crate::commands::provider::installed)
         .transpose()?;
 
     let report = match &args.file {

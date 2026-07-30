@@ -180,6 +180,7 @@ impl ManifestStore {
 mod tests {
     use super::*;
     use crate::test_support::record;
+    use bibi_core::Provider;
 
     fn store() -> (tempfile::TempDir, ManifestStore) {
         let directory = tempfile::tempdir().unwrap();
@@ -200,12 +201,16 @@ mod tests {
     fn a_first_commit_creates_the_file_and_later_ones_replace_it() {
         let (_directory, store) = store();
         let (mut candidate, generation) = store.load_or_empty().unwrap().into_candidate();
-        candidate.insert(record("Alpha", "inspire", "1")).unwrap();
+        candidate
+            .insert(record("Alpha", Provider::Inspire, "1"))
+            .unwrap();
         let generation = store.commit(&generation, candidate).unwrap();
         assert!(store.exists());
         let (mut candidate, reloaded) = store.load().unwrap().into_candidate();
         assert_eq!(&generation, &reloaded);
-        candidate.insert(record("Zed", "inspire", "2")).unwrap();
+        candidate
+            .insert(record("Zed", Provider::Inspire, "2"))
+            .unwrap();
         store.commit(&reloaded, candidate).unwrap();
         assert_eq!(store.load().unwrap().manifest.len(), 2);
     }
@@ -231,10 +236,12 @@ mod tests {
         let (_directory, store) = store();
         store.create_empty().unwrap();
         let (mut candidate, generation) = store.load().unwrap().into_candidate();
-        candidate.insert(record("Alpha", "inspire", "1")).unwrap();
+        candidate
+            .insert(record("Alpha", Provider::Inspire, "1"))
+            .unwrap();
         // Somebody else writes while this command was working.
         let (mut other, other_generation) = store.load().unwrap().into_candidate();
-        other.insert(record("Zed", "inspire", "2")).unwrap();
+        other.insert(record("Zed", Provider::Inspire, "2")).unwrap();
         store.commit(&other_generation, other).unwrap();
 
         assert!(matches!(
@@ -262,14 +269,18 @@ mod tests {
     fn a_candidate_that_fails_validation_leaves_the_file_untouched() {
         let (_directory, store) = store();
         let (mut candidate, generation) = store.load_or_empty().unwrap().into_candidate();
-        candidate.insert(record("Alpha", "inspire", "1")).unwrap();
+        candidate
+            .insert(record("Alpha", Provider::Inspire, "1"))
+            .unwrap();
         let generation = store.commit(&generation, candidate).unwrap();
         let before = fs::read_to_string(store.path()).unwrap();
 
         // Two records claiming one provider identity: caught by validation,
         // before any byte is written.
         let (mut candidate, _) = store.load().unwrap().into_candidate();
-        candidate.records_mut().push(record("Zed", "inspire", "1"));
+        candidate
+            .records_mut()
+            .push(record("Zed", Provider::Inspire, "1"));
         assert!(matches!(
             store.commit(&generation, candidate),
             Err(Error::Duplicate { .. })
