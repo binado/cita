@@ -83,6 +83,7 @@ dependencies = [
  "bibi-provider",
  "clap",
  "clap_complete",
+ "libc",
  "serde_json",
  "tempfile",
  "terminal_size",

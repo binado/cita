@@ -45,7 +45,7 @@ pub use add::{
     add_locators,
 };
 pub use check::{CheckOutcome, check};
-pub use documents::{FetchRequest, FetchTarget, fetch};
+pub use documents::{FetchOutcome, FetchReport, FetchRequest, FetchTarget, fetch};
 pub use error::Error;
 pub use list::{ListJsonRecord, ListRequest, list, to_json};
 pub use progress::{Progress, ProgressEvent, ProgressSink};

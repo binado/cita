@@ -11,7 +11,10 @@ use std::path::Path;
 
 pub fn run_show(target: Option<&Path>, args: ShowArgs) -> Result<bool> {
     let store = crate::bootstrap::store(target)?;
-    output::emit(&show(&store, &args.selector)?)?;
+    let selector = args
+        .selector
+        .expect("optional show input was resolved before command dispatch");
+    output::emit(&show(&store, &selector)?)?;
     Ok(false)
 }
 

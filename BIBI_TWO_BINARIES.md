@@ -108,15 +108,15 @@ Small bibi has this command set:
 | Command | Purpose |
 | --- | --- |
 | `init` | Create an empty `bibi.toml` without overwriting anything |
-| `add <locator>...` | Resolve and add provider records |
+| `add [locator]...` | Resolve and add provider records |
 | `add -f <bibfile>` | Import BibTeX entries |
-| `remove <selector>...` | Remove records |
+| `remove [selector]...` | Remove records |
 | `rename <selector> <key>` | Change a local citation key |
 | `list` | Select records and project them to stdout |
-| `show <selector>` | Emit exactly one record as BibTeX |
+| `show [selector]` | Emit exactly one record as BibTeX |
 | `sync` | Refresh provider-owned records |
 | `check <bibfile>` | Compare a materialized BibTeX file with current rendering |
-| `fetch <selector>` | Retrieve or locate a PDF or source artifact |
+| `fetch [selector]...` | Retrieve or locate PDF or source artifacts |
 
 There is no `export` command. The shell chooses whether and where rendered
 BibTeX becomes a file:
@@ -177,11 +177,19 @@ The supported formats are:
 A format says how to encode a listing; `--fields` says what to put in it, as
 tab-separated columns drawn from `key`, `title`, `year`, `provider`, `doi`,
 `arxiv`, and `arxiv-url`. `--fields key` is one citation key per line, and
-`--fields arxiv-url` is how a shell downloads a selection in bulk — which is
-what keeps `fetch` a command that acquires one file rather than a downloader.
+`--fields arxiv-url` lets a shell hand a selection to another downloader.
+Native batch `fetch` is for the complementary case where bibi should preflight
+the selection and own each sequential transfer.
 
 `show` remains distinct because it resolves exactly one selector and emits
 exactly one locally re-keyed BibTeX entry.
+
+When `add`, `fetch`, `remove`, or `show` receives no positional, it reads
+newline-delimited locators or selectors from redirected stdin, trimming lines
+and ignoring blanks. Explicit positionals are never combined with stdin.
+Redirected empty input is a successful no-op for the batch commands; `show`
+requires exactly one nonblank line. Missing interactive input and invalid
+`show` cardinality are usage errors.
 
 `check <bibfile>` compares a file byte-for-byte with the same deterministic
 rendering. It accepts the same filters as `list` so it can verify a materialized
@@ -200,33 +208,44 @@ removed the ambiguity, and the two collapsed into one.
 
 ### Simplified `fetch`
 
-`fetch` acquires a file; it does not manage a document collection.
+`fetch` acquires files; it does not manage a document collection.
 
 ```text
-bibi fetch <selector>
-bibi fetch <selector> --source
-bibi fetch <selector> --url
+bibi fetch <selector>...
+bibi fetch <selector>... --source
+bibi fetch <selector>... --url
 bibi fetch <selector> -o <path>
+bibi fetch <selector>... -o <directory>
 ```
 
 The behavior is:
 
 | Options | Result |
 | --- | --- |
-| none | Download the PDF to the current working directory |
-| `--source` | Download the original source archive to the current working directory |
-| `--url` | Print the selected artifact's public URL without downloading |
-| `-o/--output <path>` | Download to that exact path |
+| none | Download PDFs to default names in the current working directory |
+| `--source` | Download original source archives to default names |
+| `--url` | Print the selected artifacts' public URLs without downloading |
+| one selector plus `-o/--output <path>` | Download to that exact path |
+| `-o/--output <directory>` | Put one or many default-named artifacts in an existing directory |
 | `--source --url` | Print the source archive URL |
 
 Relative output paths resolve against the current working directory. `--output`
-names an exact file, not a directory. `--output` is incompatible with `--url`.
+is incompatible with `--url`. With multiple selectors it must name an existing
+directory; a missing or non-directory path is rejected before network access.
+
+The application loads the manifest once and preflights all selectors,
+identifiers, artifact kinds, duplicate targets, destinations, conflicts, and
+existing files before network access. Invalid selectors and records without an
+arXiv id are per-item failures; valid items continue. Duplicate artifact
+targets are downloaded and printed once, with later selectors reported as
+skips. Downloads run sequentially and are atomic per file, not transactional as
+a batch. Successful paths or URLs are printed in input order, and any item
+failure makes the command exit nonzero.
 
 Downloads use a temporary sibling, validate the artifact sufficiently for its
-kind, and rename it into place only after success. Neither a default
-destination nor an explicit `-o/--output` is ever overwritten: if the
-target file already exists, `fetch` reports the collision and asks the user to
-remove it or select another path.
+kind, and rename it into place only after success. Neither a default destination
+nor an explicit `-o/--output` is overwritten unless `--force` is set; the
+document client retains its final no-clobber check for races.
 
 There is no `--force`, global document cache, cache root, or `cache clean`
 command.

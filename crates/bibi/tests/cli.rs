@@ -8,8 +8,9 @@ mod support;
 use support::{TestServer, hits, record};
 
 use std::{
+    io::Write,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
 };
 
 /// Run `bibi` in a temporary project.
@@ -22,6 +23,24 @@ fn bibi(directory: &Path, args: &[&str]) -> Output {
         .args(args)
         .output()
         .expect("running bibi")
+}
+
+fn bibi_with_stdin(directory: &Path, args: &[&str], input: &str) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_bibi"))
+        .current_dir(directory)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawning bibi");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(input.as_bytes())
+        .expect("writing bibi stdin");
+    child.wait_with_output().expect("waiting for bibi")
 }
 
 fn stdout(output: &Output) -> String {
@@ -81,6 +100,100 @@ fn adding_a_file_writes_bibtex_to_stdout_and_a_summary_to_stderr() {
     assert_eq!(stdout(&output), LIBRARY.trim_end().to_owned() + "\n");
     assert!(stderr(&output).contains("added 2"));
     assert!(path.join("bibi.toml").exists());
+}
+
+#[test]
+fn empty_redirected_batches_are_successful_without_a_manifest() {
+    for command in ["add", "fetch", "remove"] {
+        let (_directory, path) = project();
+        let output = bibi_with_stdin(&path, &[command], "\n \n");
+        assert_eq!(code(&output), 0, "{command}: {}", stderr(&output));
+        assert!(stdout(&output).is_empty());
+        assert!(stderr(&output).is_empty());
+        assert!(!path.join("bibi.toml").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn omitted_interactive_inputs_are_clap_style_usage_errors() {
+    use std::{fs::File, os::fd::FromRawFd};
+
+    for command in ["add", "fetch", "remove", "show"] {
+        let (_directory, path) = project();
+        let (mut master, mut slave) = (-1, -1);
+        // SAFETY: `openpty` initializes both descriptors on success. Each is
+        // then given exactly one owner below.
+        let opened = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(opened, 0, "opening pseudo-terminal");
+        // SAFETY: `slave` is a fresh owned descriptor from `openpty`.
+        let terminal_stdin = unsafe { File::from_raw_fd(slave) };
+        // SAFETY: `master` is the other fresh descriptor and is not used again.
+        unsafe {
+            libc::close(master);
+        }
+
+        let output = Command::new(env!("CARGO_BIN_EXE_bibi"))
+            .current_dir(&path)
+            .arg(command)
+            .stdin(Stdio::from(terminal_stdin))
+            .output()
+            .expect("running bibi with terminal stdin");
+        assert_eq!(code(&output), 2, "{command}: {}", stderr(&output));
+        assert!(stderr(&output).contains("Usage:"), "{command}");
+        assert!(!path.join("bibi.toml").exists());
+    }
+}
+
+#[test]
+fn piped_remove_and_show_use_trimmed_nonblank_selectors() {
+    let (_directory, path) = project();
+    std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
+    bibi(&path, &["add", "-f", "library.bib"]);
+
+    let shown = bibi_with_stdin(&path, &["show"], "\n  notes:2026 \n");
+    assert_eq!(code(&shown), 0, "{}", stderr(&shown));
+    assert!(stdout(&shown).starts_with("@unpublished{notes:2026,"));
+
+    let too_many = bibi_with_stdin(&path, &["show"], "notes:2026\nastropy:2022\n");
+    assert_eq!(code(&too_many), 2);
+    assert!(stderr(&too_many).contains("exactly one selector"));
+
+    let removed = bibi_with_stdin(&path, &["remove"], " notes:2026\n\nastropy:2022 ");
+    assert_eq!(code(&removed), 0, "{}", stderr(&removed));
+    assert_eq!(stdout(&removed).matches('@').count(), 2);
+}
+
+#[test]
+fn explicit_positionals_win_over_standard_input() {
+    let (_directory, path) = project();
+    std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
+    bibi(&path, &["add", "-f", "library.bib"]);
+
+    let shown = bibi_with_stdin(&path, &["show", "notes:2026"], "astropy:2022\nextra\n");
+    assert_eq!(code(&shown), 0, "{}", stderr(&shown));
+    assert!(stdout(&shown).starts_with("@unpublished{notes:2026,"));
+}
+
+#[test]
+fn a_literal_dash_is_an_ordinary_selector() {
+    let (_directory, path) = project();
+    std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
+    bibi(&path, &["add", "-f", "library.bib"]);
+
+    for command in ["show", "remove", "fetch"] {
+        let output = bibi_with_stdin(&path, &[command, "-"], "notes:2026\n");
+        assert_eq!(code(&output), 1, "{command}: {}", stderr(&output));
+        assert!(stderr(&output).contains("no record matches"));
+    }
 }
 
 #[test]
@@ -368,6 +481,30 @@ fn bibi_against(directory: &Path, server: &TestServer, args: &[&str]) -> Output 
         .expect("running bibi")
 }
 
+fn bibi_against_with_stdin(
+    directory: &Path,
+    server: &TestServer,
+    args: &[&str],
+    input: &str,
+) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_bibi"))
+        .current_dir(directory)
+        .env("BIBI_INSPIRE_BASE_URL", &server.base_url)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawning bibi");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(input.as_bytes())
+        .expect("writing bibi stdin");
+    child.wait_with_output().expect("waiting for bibi")
+}
+
 #[test]
 fn adding_a_locator_adopts_the_providers_texkey_and_stores_its_bibtex() {
     let (_directory, path) = project();
@@ -396,6 +533,20 @@ fn adding_a_locator_adopts_the_providers_texkey_and_stores_its_bibtex() {
     assert_eq!(parsed[0]["collaborations"][0], "ATLAS");
     // Two requests: one structured search, one BibTeX search.
     assert_eq!(server.requests().len(), 2);
+}
+
+#[test]
+fn piped_add_reads_newline_delimited_locators() {
+    let (_directory, path) = project();
+    let server = TestServer::new(vec![
+        hits(&[record(1124337, "Aad:2012tfa", "1207.7214", "Observation")]),
+        "@article{Aad:2012tfa,\n  title = {Observation}\n}\n".to_owned(),
+    ]);
+
+    let output = bibi_against_with_stdin(&path, &server, &["add"], "\n 1207.7214 \n\n");
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(stdout(&output).starts_with("@article{Aad:2012tfa,"));
+    assert!(path.join("bibi.toml").exists());
 }
 
 #[test]
@@ -626,6 +777,19 @@ fn project_with_an_arxiv_record() -> (tempfile::TempDir, PathBuf) {
     (directory, path)
 }
 
+fn project_with_two_arxiv_records() -> (tempfile::TempDir, PathBuf) {
+    let (directory, path) = project();
+    std::fs::write(
+        path.join("arxiv.bib"),
+        "@article{First,title={First},eprint={1207.7214}}\n\n\
+         @article{Second,title={Second},eprint={2401.00001}}\n",
+    )
+    .unwrap();
+    let added = bibi(&path, &["add", "-f", "arxiv.bib", "--force-local"]);
+    assert_eq!(code(&added), 0, "{}", stderr(&added));
+    (directory, path)
+}
+
 /// Run `bibi` with arXiv pointed at a local listener serving one PDF.
 fn bibi_fetching(directory: &Path, body: &[u8], args: &[&str]) -> Output {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binding a test server");
@@ -676,6 +840,41 @@ fn fetch_reports_a_url_without_downloading_anything() {
     let source = bibi(&path, &["fetch", "Aad:2012tfa", "--url", "--source"]);
     assert_eq!(code(&source), 0);
     assert_eq!(stdout(&source), "https://arxiv.org/e-print/1207.7214\n");
+}
+
+#[test]
+fn piped_fetch_accepts_a_selector_batch() {
+    let (_directory, path) = project_with_an_arxiv_record();
+
+    let output = bibi_with_stdin(&path, &["fetch", "--url"], "\n Aad:2012tfa\n1207.7214 \n");
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output), "https://arxiv.org/pdf/1207.7214\n");
+    assert!(stderr(&output).contains("same artifact as earlier selector"));
+}
+
+#[test]
+fn a_fetch_url_batch_preserves_success_order_across_partial_failures() {
+    let (_directory, path) = project_with_two_arxiv_records();
+
+    let output = bibi(&path, &["fetch", "Second", "missing", "First", "--url"]);
+    assert_eq!(code(&output), 1);
+    assert_eq!(
+        stdout(&output),
+        "https://arxiv.org/pdf/2401.00001\nhttps://arxiv.org/pdf/1207.7214\n"
+    );
+    assert!(stderr(&output).contains("`missing`"));
+}
+
+#[test]
+fn several_fetches_reject_a_non_directory_output_before_downloading() {
+    let (_directory, path) = project_with_two_arxiv_records();
+
+    let output = bibi(&path, &["fetch", "First", "Second", "-o", "combined.pdf"]);
+    assert_eq!(code(&output), 1);
+    assert!(stderr(&output).contains("must be an existing directory"));
+    assert!(!path.join("combined.pdf").exists());
+    assert!(!path.join("1207.7214.pdf").exists());
+    assert!(!path.join("2401.00001.pdf").exists());
 }
 
 #[test]

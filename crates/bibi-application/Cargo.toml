@@ -1,6 +1,6 @@
 [package]
 name = "bibi-application"
-description = "Command use cases for bibi over injected manifest stores, providers, and document cache."
+description = "Command use cases for bibi over injected manifest stores, providers, and document retrieval."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

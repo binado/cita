@@ -26,5 +26,6 @@ unicode-width = { workspace = true }
 # needs domain types `bibi_application::domain` deliberately does not re-export.
 # The shipped dependency graph is unchanged.
 bibi-core = { workspace = true }
+libc = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

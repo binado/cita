@@ -58,20 +58,26 @@ Rust 1.88 or newer.
 
 | Command | What it does |
 | --- | --- |
-| `bibi add <locator>…` | Resolve arXiv ids, DOIs, or `<provider>:<id>` and store them |
+| `bibi add [locator]…` | Resolve arXiv ids, DOIs, or `<provider>:<id>` and store them |
 | `bibi add -f <file>` | Resolve each entry in a `.bib`; keep the rest as local records |
-| `bibi remove <selector>…` | Delete records, emitting what was deleted |
+| `bibi remove [selector]…` | Delete records, emitting what was deleted |
 | `bibi rename <selector> <key>` | Change a local citation key |
 | `bibi list` | List records as a table, `bibtex`, or `json`, or as `--fields` columns |
-| `bibi show <selector>` | Emit one record as BibTeX |
+| `bibi show [selector]` | Emit exactly one record as BibTeX |
 | `bibi sync` | Refresh what changed upstream |
 | `bibi check [bibfile]` | Verify a rendered bibliography, byte for byte |
-| `bibi fetch <selector>` | Download a record's PDF or source archive |
+| `bibi fetch [selector]…` | Download records' PDFs or source archives |
 | `bibi init` | Create an empty manifest |
 | `bibi completions <shell>` | Print a completion script |
 
 Records are selected by citation key, DOI, arXiv id, or `<provider>:<id>`, in
 that order.
+
+When `add`, `fetch`, `remove`, or `show` has no positional input, it reads one
+locator or selector per nonblank stdin line. Explicit positionals win and stdin
+is left untouched. An empty redirected stream is a successful no-op for the
+three batch commands; `show` requires exactly one selector. Omitting input at an
+interactive terminal is a usage error.
 
 ### Adding
 
@@ -118,8 +124,9 @@ $ bibi list --fields key,year,title --year 2024
 $ bibi list --fields arxiv-url | xargs -n1 curl -O   # the whole selection
 ```
 
-That last one is why `fetch` never grew a bulk mode: the shell already knows how
-to run something over a list.
+That last form remains useful when another downloader should own the transfer.
+`fetch` itself also accepts several selectors when bibi should validate and
+download the batch.
 
 ### Syncing
 
@@ -171,13 +178,24 @@ $ bibi fetch ATLAS:2012yve            # downloads ./1207.7214.pdf
 $ bibi fetch ATLAS:2012yve --source   # downloads ./1207.7214.tar.gz
 $ bibi fetch 1207.7214 --url          # any selector works; just the URL
 $ bibi fetch ATLAS:2012yve -o higgs.pdf
+$ bibi fetch First:2024 Second:2025 -o papers/
+$ bibi list --fields key | bibi fetch --url
 $ open $(bibi fetch ATLAS:2012yve)    # or compose it yourself
 ```
 
-`fetch` gets you a file; it does not manage a collection. The download lands in
-your working directory under arXiv's own name for it, or at the exact path
-`-o/--output` names. Neither is ever overwritten — if the file is already there,
-`fetch` says so and leaves it alone.
+`fetch` gets files; it does not manage a collection. With no `--output`, each
+download lands in the working directory under arXiv's own name. An existing
+directory passed to `-o/--output` receives one or many default-named files. For
+one selector, a non-directory path names an exact file; for several selectors
+it is rejected before downloading.
+
+The complete batch is planned before network access and downloaded
+sequentially. Invalid selectors, records without arXiv ids, and occupied
+destinations fail only those items; valid items continue, successful paths or
+URLs are printed in input order, and any item failure makes the command exit
+nonzero. Selectors that resolve to the same artifact are downloaded and printed
+once, with later occurrences reported as successful skips. Destinations are
+never overwritten unless `--force` is given.
 
 There is no cache to grow, evict, or reason about, and nothing in the manifest
 refers to a downloaded file. arXiv is the only source; a record without an arXiv

@@ -17,7 +17,8 @@ reader, migration command, or deprecated command aliases are built.
 > `-g/--global`, an `export` command, or a managed document cache with
 > `cache clean`, it describes what bibi *was*: those are gone, `list --format
 > bibtex` plus shell redirection is how a bibliography is written, and `fetch`
-> downloads one file into the working directory. Everything else here still
+> downloads one or more files into the working directory or an existing output
+> directory. Everything else here still
 > holds. Full reconciliation waits until the second binary exists.
 
 ---
@@ -1347,6 +1348,20 @@ to overwrite any existing file, including an invalid or newer-schema manifest.
 For the fixed global target, `init` follows the returned parent-creation policy.
 `init` does not construct providers or the document store.
 
+### Optional positional input
+
+The binary resolves omitted inputs for `add`, `fetch`, `remove`, and `show`
+before constructing services or a manifest store. A testable resolver receives
+the terminal status and a buffered reader, trims each UTF-8 line, and ignores
+blank lines. Explicit positionals always win without reading stdin; `add -f`
+remains its own mode, including the established `add -f -` BibTeX input.
+
+An omitted positional on terminal stdin is a Clap-style usage error. Redirected
+empty input is a successful no-op for the three batch commands and therefore
+does not load or create a manifest. `show` reads the complete redirected stream
+and requires exactly one selector. Stdin I/O failures are operational errors.
+After resolution, `add --key` likewise requires exactly one locator.
+
 ### Add one or more locators
 
 For `add <locator>...`:
@@ -1636,21 +1651,31 @@ The bibliography argument follows the target-relative path rule above.
 `--diff` controls only whether a unified diagnostic is built; it is not part of
 `RenderOptions` and cannot affect match versus drift.
 
-### Fetch and cache clean
+### Fetch
 
-Fetch:
+Fetch is a batch application use case over a singular artifact client:
 
-1. resolves a record selector;
-2. requires a canonical arXiv id;
-3. returns URL immediately for `--url`;
-4. otherwise calls `DocumentStore` with PDF/source and cache/force policy;
-5. returns an absolute path or URL target to the binary.
+1. return an empty ordered report without loading a manifest for no selectors;
+2. resolve adaptive `--output` semantics before loading the manifest;
+3. load the manifest once and resolve every selector against that snapshot;
+4. determine the PDF/source kind, canonical arXiv id, and destination;
+5. turn invalid selectors and missing arXiv ids into per-item failures;
+6. deduplicate equal artifact targets and reject destination conflicts;
+7. preflight occupied destinations unless `--force` is set;
+8. after the complete preflight, process ready downloads sequentially, creating
+   and finishing one progress reporter per selector;
+9. return one ordered success, skip, or failure outcome per selector.
 
-`--source` and `--url` are mutually exclusive. The binary writes the resolved
-target (path or URL) to stdout and nothing else; opening is the shell's job.
+With no output option, default filenames resolve in the working directory. An
+existing output directory receives default filenames for one or many selectors.
+For one selector a non-directory path is an exact destination; for multiple
+selectors a missing or non-directory output is rejected before network access.
+`--url` produces the same ordered batch without constructing a document client.
 
-Cache clean does not resolve a manifest. It maps `--dry-run` or `--all` to the
-document store and returns a typed report.
+Successful unique paths or URLs go to stdout in input order. Skips and failures
+go to stderr; skips do not affect exit status and any failure does. Downloads
+remain atomic per file and partial across the batch. The singular
+`bibi-documents` client retains its final race-safe no-clobber check.
 
 ### Reports and errors
 
@@ -1782,7 +1807,6 @@ credentials.
 Clap enforces structural conflicts where possible:
 
 - `--path` conflicts with `--global`;
-- `fetch --source` conflicts with `--url`;
 - `fetch --force` conflicts with `--url`;
 - `export --force` requires `--provider`;
 - `add -f --force-local` conflicts with `--provider`;
@@ -1807,7 +1831,7 @@ Stdout contains only command results:
 
 - BibTeX for add/remove/rename/show and `list --format bibtex`;
 - a table, JSON, or `--fields` columns for list;
-- absolute path or URL for fetch;
+- one path or URL per unique successful fetch artifact;
 - no progress prose.
 
 Stderr contains warnings, retries, progress, summaries, diffs, and failure

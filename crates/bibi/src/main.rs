@@ -6,11 +6,12 @@
 mod bootstrap;
 mod cli;
 mod commands;
+mod input;
 mod output;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser, error::ErrorKind};
 use cli::{Cli, Command};
-use std::process::ExitCode;
+use std::{io::IsTerminal, process::ExitCode};
 
 /// Exit codes, per the command-line contract.
 ///
@@ -22,7 +23,24 @@ const FAILURE: u8 = 1;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    let stdin = std::io::stdin();
+    if let Err(error) = input::resolve(&mut cli.command, stdin.is_terminal(), stdin.lock()) {
+        match error {
+            input::Error::Usage(message) => {
+                let error = usage_error(&cli.command, message);
+                let _ = error.print();
+                return ExitCode::from(2);
+            }
+            input::Error::Read(error) => {
+                output::note(format!("bibi: reading standard input: {error}"));
+                return ExitCode::from(FAILURE);
+            }
+        }
+    }
+    if empty_batch(&cli.command) {
+        return ExitCode::from(SUCCESS);
+    }
     match run(cli).await {
         Ok(false) => ExitCode::from(SUCCESS),
         Ok(true) => ExitCode::from(FAILURE),
@@ -30,6 +48,32 @@ async fn main() -> ExitCode {
             output::note(format!("bibi: {error:#}"));
             ExitCode::from(FAILURE)
         }
+    }
+}
+
+fn usage_error(command: &Command, message: String) -> clap::Error {
+    let name = match command {
+        Command::Add(_) => "add",
+        Command::Fetch(_) => "fetch",
+        Command::Remove(_) => "remove",
+        Command::Show(_) => "show",
+        _ => unreachable!("only commands with optional stdin produce usage errors here"),
+    };
+    let mut root = Cli::command();
+    let mut subcommand = root
+        .find_subcommand_mut(name)
+        .expect("the parsed subcommand exists")
+        .clone()
+        .bin_name(format!("bibi {name}"));
+    subcommand.error(ErrorKind::MissingRequiredArgument, message)
+}
+
+fn empty_batch(command: &Command) -> bool {
+    match command {
+        Command::Add(args) => args.file.is_none() && args.locators.is_empty(),
+        Command::Fetch(args) => args.selectors.is_empty(),
+        Command::Remove(args) => args.selectors.is_empty(),
+        _ => false,
     }
 }
 

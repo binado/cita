@@ -14,7 +14,8 @@ Everything here is decided. §12 lists what has been deliberately deferred, and
 > `-g/--global`, an `export` command, or a managed document cache with
 > `cache clean`, it describes what bibi *was*: those are gone, `list --format
 > bibtex` plus shell redirection is how a bibliography is written, and `fetch`
-> downloads one file into the working directory. Everything else here still
+> downloads one or more files into the working directory or an explicitly
+> selected directory. Everything else here still
 > holds. Full reconciliation waits until the second binary exists.
 
 ---
@@ -911,10 +912,10 @@ removed entry available as recovery input. Re-adding it may resolve the provider
 again and is not promised to reproduce the previous record byte-for-byte. An
 `export --provider` owns its composed operation's output contract: preliminary
 sync changes are described on stderr rather than emitted as separate BibTeX on
-stdout. For `fetch` the result is a path, so
-`open $(bibi fetch <selector>)` works. Warnings, counts, progress, and retry
-notices are stderr. A skipped or duplicate entry still emits its BibTeX, with the
-explanation on stderr.
+stdout. For `fetch` the result is one path or URL per unique successful
+artifact, in input order, so `open $(bibi fetch <selector>)` still works.
+Warnings, counts, progress, and retry notices are stderr. A skipped or duplicate
+entry still emits its BibTeX, with the explanation on stderr.
 
 ### Selection
 
@@ -928,18 +929,23 @@ that binds the wrong record corrupts data.
 
 | Command | Purpose | Principal flags |
 | --- | --- | --- |
-| `add <locator>…` | Resolve and store | `--key`, `--provider`, `--overwrite`, `--dry-run` |
+| `add [locator]…` | Resolve and store | `--key`, `--provider`, `--overwrite`, `--dry-run` |
 | `add -f <file>` | Resolve each entry; definitively absent entries become local (§6) | `--provider`, `--force-local`, `--overwrite` |
-| `remove <selector>…` | Delete records, emitting them | `--dry-run` |
+| `remove [selector]…` | Delete records, emitting them | `--dry-run` |
 | `rename <selector> <key>` | Change a local citation key (I4) | |
 | `list` | Filtered listing | `--format {table,bibtex,json}`, `--fields <field>…`, `--provider`, `--author`, `--title`, `--year`, `--local` |
-| `show <selector>` | Emit the stored record as locally keyed BibTeX | |
+| `show [selector]` | Emit the stored record as locally keyed BibTeX | |
 | `sync` | Conditional or forced refresh (§5) | `--provider <name>`, `--force`, `--dry-run` |
 | `export` | Optionally sync one provider, then render | `--provider <name>`, `--force`, `--output <path>`, filters |
 | `check <bibfile>` | Verify a rendered bibliography byte-for-byte | export filters and rendering options |
-| `fetch <selector>` | Retrieve PDF or source (§7) | `--source`, `--url`, `-o`, `--force` |
+| `fetch [selector]…` | Retrieve PDFs or sources (§7) | `--source`, `--url`, `-o`, `--force` |
 | `cache clean` | Delete the global derived document cache | `--dry-run`, `--all` |
 | `init` | Create a project | |
+
+Omitted positionals for `add`, `fetch`, `remove`, and `show` come from
+newline-delimited redirected stdin. Explicit arguments win. Empty redirected
+input is a successful no-op for batch commands, while `show` requires exactly
+one selector; omitted interactive input is a usage error.
 
 Every project command accepts `-p/--path` or `-g/--global` to select its target
 manifest (§8). `cache clean` is global derived-state maintenance and selects no

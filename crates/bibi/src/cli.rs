@@ -42,7 +42,7 @@ pub enum Command {
     Sync(SyncArgs),
     /// Verify a rendered bibliography against the manifest
     Check(CheckArgs),
-    /// Download a record's PDF or source archive
+    /// Download records' PDFs or source archives
     Fetch(FetchArgs),
     /// Create an empty manifest
     Init,
@@ -52,7 +52,7 @@ pub enum Command {
 
 #[derive(Args, Debug)]
 pub struct AddArgs {
-    /// arXiv ids, DOIs, or `<provider>:<id>` locators
+    /// arXiv ids, DOIs, or `<provider>:<id>` locators; omit to read stdin
     #[arg(value_name = "LOCATOR")]
     pub locators: Vec<String>,
     /// Read entries from a BibTeX file, or `-` for standard input
@@ -77,8 +77,8 @@ pub struct AddArgs {
 
 #[derive(Args, Debug)]
 pub struct RemoveArgs {
-    /// Citation keys, DOIs, arXiv ids, or `<provider>:<id>`
-    #[arg(value_name = "SELECTOR", required = true)]
+    /// Citation keys, DOIs, arXiv ids, or `<provider>:<id>`; omit to read stdin
+    #[arg(value_name = "SELECTOR")]
     pub selectors: Vec<String>,
     /// Report what would happen without writing
     #[arg(long = "dry-run")]
@@ -172,17 +172,17 @@ pub enum Field {
 
 #[derive(Args, Debug)]
 pub struct FetchArgs {
-    /// The record to fetch for
+    /// Records to fetch for; omit to read selectors from stdin
     #[arg(value_name = "SELECTOR")]
-    pub selector: String,
+    pub selectors: Vec<String>,
     /// Fetch the original source archive instead of the PDF
     #[arg(long)]
     pub source: bool,
     /// Print the public URL instead of downloading
     #[arg(long)]
     pub url: bool,
-    /// Download to this exact path instead of the default name
-    #[arg(short = 'o', long, value_name = "FILE", conflicts_with = "url")]
+    /// Download to this file, or put one or more downloads in this directory
+    #[arg(short = 'o', long, value_name = "PATH", conflicts_with = "url")]
     pub output: Option<PathBuf>,
     /// Overwrite the destination if it already exists
     #[arg(short = 'f', long, conflicts_with = "url")]
@@ -227,9 +227,9 @@ pub struct CompletionsArgs {
 
 #[derive(Args, Debug)]
 pub struct ShowArgs {
-    /// The record to emit
+    /// The record to emit; omit to read exactly one selector from stdin
     #[arg(value_name = "SELECTOR")]
-    pub selector: String,
+    pub selector: Option<String>,
 }
 
 /// Write a completion script for `shell` to stdout.
