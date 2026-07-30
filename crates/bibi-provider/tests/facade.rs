@@ -1,6 +1,6 @@
 use bibi_core::{
     ArxivId, BibiId, Doi, Identifiers, ProviderId, QualifiedLocator, Revision,
-    provider::{ProviderMetadata, RefreshState},
+    remote::{ProviderMetadata, RefreshState},
 };
 use bibi_provider::{
     Error, Provider, RefreshOptions, RefreshOutcome, RefreshTarget, ResolveItem,

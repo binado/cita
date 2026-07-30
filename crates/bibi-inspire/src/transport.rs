@@ -10,7 +10,7 @@ use crate::{
     rate_limit::{Clock, RateLimiter, SystemClock},
     retry::{MAX_RETRIES, RetryEvent, RetryObserver, delay_after},
 };
-use bibi_core::provider::RetrievalError;
+use bibi_core::remote::RetrievalError;
 use reqwest::{StatusCode, header::RETRY_AFTER};
 use std::{sync::Arc, time::Duration};
 use url::Url;

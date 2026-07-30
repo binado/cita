@@ -3,7 +3,7 @@
 use crate::Providers;
 use std::sync::Arc;
 
-pub use bibi_core::provider::{
+pub use bibi_core::remote::{
     PayloadItem, PayloadRequest, ProviderMetadata, RefreshItem, RefreshRequest, RefreshState,
     Resolution,
     testing::{
@@ -17,7 +17,7 @@ pub use bibi_core::provider::{
 /// slot, and its fake must use the installed `inspire` provenance name.
 pub fn providers(remote: Arc<FakeProvider>) -> Providers {
     assert_eq!(
-        bibi_core::provider::RemoteProvider::name(remote.as_ref()).as_str(),
+        bibi_core::remote::RemoteProvider::name(remote.as_ref()).as_str(),
         "inspire",
         "the scripted facade replaces only the INSPIRE implementation"
     );

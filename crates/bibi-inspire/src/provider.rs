@@ -9,7 +9,7 @@ use crate::{
 };
 use bibi_core::{
     ArxivId, Doi, Locator, Provenance, Provider, ProviderId, ProviderOwned,
-    provider::{
+    remote::{
         BibtexEntry, MappingError, PayloadItem, PayloadRequest, ProviderError, ProviderMetadata,
         RefreshItem, RefreshRequest, RefreshState, RemoteProvider, Resolution, RetrievalError,
     },

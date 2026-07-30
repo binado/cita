@@ -4,53 +4,9 @@ use crate::{
     error::Error,
     id::BibiId,
     identifiers::{ArxivId, Doi},
-    provenance::{Provider, ProviderId, Revision},
+    provenance::Provenance,
 };
 use bibi_bibtex::{BibtexEntry, CitationKey};
-
-/// Which provider owns a record's refresh lifecycle.
-///
-/// Only the provider is always present. A local record has neither a provider
-/// id nor a revision, and a provider that cannot supply a useful revision
-/// leaves it absent — which is a different statement from "nothing changed".
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Provenance {
-    /// The owning provider.
-    pub provider: Provider,
-    /// The provider's stable handle for this record.
-    pub provider_id: Option<ProviderId>,
-    /// The provider's opaque change token.
-    pub revision: Option<Revision>,
-}
-
-impl Provenance {
-    /// A record owned by a provider that refreshes it.
-    pub fn managed(
-        provider: Provider,
-        provider_id: ProviderId,
-        revision: Option<Revision>,
-    ) -> Self {
-        Self {
-            provider,
-            provider_id: Some(provider_id),
-            revision,
-        }
-    }
-
-    /// A record whose provider holds no handle for it.
-    pub fn unmanaged(provider: Provider) -> Self {
-        Self {
-            provider,
-            provider_id: None,
-            revision: None,
-        }
-    }
-
-    /// The `(provider, id)` pair records are deduplicated by, when there is one.
-    pub fn identity(&self) -> Option<(Provider, &ProviderId)> {
-        self.provider_id.as_ref().map(|id| (self.provider, id))
-    }
-}
 
 /// Canonical normalized identifiers. Operational, not descriptive.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -214,6 +170,7 @@ impl Record {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provenance::{Provider, ProviderId, Revision};
 
     fn entry(source: &str) -> BibtexEntry {
         BibtexEntry::parse_one(source.to_owned()).unwrap()

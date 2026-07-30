@@ -6,7 +6,7 @@ pub use bibi_core::Provider;
 use bibi_core::{
     BibiId, IdentifierChange, Identifiers, Locator, Provenance, ProviderId, ProviderOwned,
     QualifiedLocator, Revision,
-    provider::{
+    remote::{
         MappingError, PayloadItem, PayloadRequest, ProviderError, ProviderMetadata, RefreshItem,
         RefreshRequest, RefreshState, RemoteProvider, Resolution, RetrievalError,
     },

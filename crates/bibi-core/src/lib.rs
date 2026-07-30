@@ -21,13 +21,13 @@ mod provenance;
 mod record;
 mod selector;
 
-pub mod provider;
+pub mod remote;
 
 pub use error::Error;
 pub use filter::RecordFilter;
 pub use id::BibiId;
 pub use identifiers::{ArxivId, Doi, IdentifierChange};
 pub use locator::{Locator, QualifiedLocator};
-pub use provenance::{Provider, ProviderId, Revision};
-pub use record::{Description, Identifiers, Provenance, ProviderOwned, Record};
+pub use provenance::{Provenance, Provider, ProviderId, Revision};
+pub use record::{Description, Identifiers, ProviderOwned, Record};
 pub use selector::{Selector, SelectorForm};

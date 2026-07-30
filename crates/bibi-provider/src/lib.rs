@@ -10,7 +10,7 @@ mod local;
 
 pub mod testing;
 
-pub use bibi_core::provider::{MappingError, ProviderError, RetrievalError};
+pub use bibi_core::remote::{MappingError, ProviderError, RetrievalError};
 pub use facade::{
     Error, Provider, Providers, ProvidersBuilder, RefreshOptions, RefreshOutcome, RefreshTarget,
     RefreshedItem, ResolveItem,

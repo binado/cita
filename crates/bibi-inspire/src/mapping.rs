@@ -14,7 +14,7 @@ use crate::{
     transport::{RawBibtex, RawJson},
     wire::{LiteratureRecord, SearchResponse},
 };
-use bibi_core::provider::{BibtexEntry, MappingError, parse_file};
+use bibi_core::remote::{BibtexEntry, MappingError, parse_file};
 use bibi_core::{ArxivId, Description, Doi, Identifiers, ProviderId, Revision};
 
 /// One INSPIRE record, mapped.

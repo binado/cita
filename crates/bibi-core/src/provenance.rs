@@ -1,4 +1,5 @@
-//! Provenance values: which provider owns a record, its handle, and its token.
+//! Provenance: which provider owns a record, its handle, its token, and the
+//! [`Provenance`] the three of them compose.
 
 use crate::error::Error;
 use std::{fmt, str::FromStr};
@@ -118,6 +119,50 @@ macro_rules! opaque_value {
 opaque_value!(ProviderId, "id");
 opaque_value!(Revision, "revision");
 
+/// Which provider owns a record's refresh lifecycle.
+///
+/// Only the provider is always present. A local record has neither a provider
+/// id nor a revision, and a provider that cannot supply a useful revision
+/// leaves it absent — which is a different statement from "nothing changed".
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Provenance {
+    /// The owning provider.
+    pub provider: Provider,
+    /// The provider's stable handle for this record.
+    pub provider_id: Option<ProviderId>,
+    /// The provider's opaque change token.
+    pub revision: Option<Revision>,
+}
+
+impl Provenance {
+    /// A record owned by a provider that refreshes it.
+    pub fn managed(
+        provider: Provider,
+        provider_id: ProviderId,
+        revision: Option<Revision>,
+    ) -> Self {
+        Self {
+            provider,
+            provider_id: Some(provider_id),
+            revision,
+        }
+    }
+
+    /// A record whose provider holds no handle for it.
+    pub fn unmanaged(provider: Provider) -> Self {
+        Self {
+            provider,
+            provider_id: None,
+            revision: None,
+        }
+    }
+
+    /// The `(provider, id)` pair records are deduplicated by, when there is one.
+    pub fn identity(&self) -> Option<(Provider, &ProviderId)> {
+        self.provider_id.as_ref().map(|id| (self.provider, id))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,5 +197,15 @@ mod tests {
         );
         assert!(ProviderId::new("").is_err());
         assert!(Revision::new("   ").is_err());
+    }
+
+    #[test]
+    fn only_a_provider_handle_yields_a_deduplication_identity() {
+        let id = ProviderId::new("1124337").unwrap();
+        let managed = Provenance::managed(Provider::Inspire, id.clone(), None);
+        assert_eq!(managed.identity(), Some((Provider::Inspire, &id)));
+        // Local provenance is structurally the absence of a handle, so it
+        // offers no identity to deduplicate two local records against.
+        assert_eq!(Provenance::unmanaged(Provider::Local).identity(), None);
     }
 }

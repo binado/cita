@@ -16,7 +16,7 @@
 use crate::error;
 use bibi_core::{
     ProviderId,
-    provider::{BibtexEntry, MappingError, PayloadItem},
+    remote::{BibtexEntry, MappingError, PayloadItem},
 };
 use std::collections::HashMap;
 

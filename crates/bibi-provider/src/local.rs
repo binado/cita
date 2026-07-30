@@ -3,7 +3,7 @@
 use bibi_bibtex::BibtexEntry;
 use bibi_core::{
     ArxivId, Description, Doi, Identifiers, Provenance, Provider, ProviderOwned,
-    provider::{MappingError, ProviderError},
+    remote::{MappingError, ProviderError},
 };
 
 pub(crate) fn ingest(entry: BibtexEntry) -> Result<ProviderOwned, ProviderError> {

@@ -2,7 +2,7 @@
 
 use bibi_core::{
     Provider,
-    provider::{MappingError, RetrievalError},
+    remote::{MappingError, RetrievalError},
 };
 
 pub(crate) fn provider() -> Provider {

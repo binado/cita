@@ -8,7 +8,7 @@
 
 use bibi_core::{
     ArxivId, BibiId, Locator, ProviderId,
-    provider::{PayloadRequest, RefreshRequest, RefreshState, RemoteProvider, Resolution},
+    remote::{PayloadRequest, RefreshRequest, RefreshState, RemoteProvider, Resolution},
 };
 use bibi_inspire::InspireProvider;
 

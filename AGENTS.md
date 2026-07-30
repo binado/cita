@@ -42,7 +42,7 @@ asserts *schedules* rather than sleeping.
 
 Three seams exist for tests and are documented as such:
 
-- `bibi_core::provider::testing` ships the provider-neutral fake and
+- `bibi_core::remote::testing` ships the provider-neutral fake and
   `verify_contract`, while `bibi_provider::testing` supplies the narrow
   scripted closed facade used by application tests. Provider crates prove the
   core contract once, and command tests replace only the compiled INSPIRE slot.

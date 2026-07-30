@@ -4,7 +4,7 @@ mod support;
 
 use bibi_core::{
     ArxivId, BibiId, Doi, Locator, ProviderId,
-    provider::{
+    remote::{
         PayloadRequest, ProviderError, RefreshRequest, RefreshState, RemoteProvider, Resolution,
         RetrievalError, testing::verify_contract,
     },

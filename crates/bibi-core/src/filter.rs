@@ -62,8 +62,8 @@ mod tests {
     use super::*;
     use crate::{
         id::BibiId,
-        provenance::{ProviderId, Revision},
-        record::{Description, Identifiers, Provenance, ProviderOwned},
+        provenance::{Provenance, ProviderId, Revision},
+        record::{Description, Identifiers, ProviderOwned},
     };
     use bibi_bibtex::{BibtexEntry, CitationKey};
 
