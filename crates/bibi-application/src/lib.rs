@@ -29,8 +29,8 @@ mod target;
 
 /// The domain types a command-line adapter has to name.
 ///
-/// The binary depends on this crate, the provider contract, and the concrete
-/// providers it registers — not on the domain and persistence crates beneath
+/// The binary depends on this crate and the closed provider facade, not on a
+/// concrete network provider or the domain and persistence crates beneath
 /// them. Re-exporting the handful of types an argument parser must construct
 /// keeps that boundary honest: whatever is not here is not the CLI's business.
 pub mod domain {

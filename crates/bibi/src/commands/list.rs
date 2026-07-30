@@ -14,9 +14,8 @@ use std::path::Path;
 ///
 /// `--provider` is checked against the providers this build carries plus those
 /// the manifest already names, so a name nothing knows is reported rather than
-/// silently matching no records. `--local` is answered by asking the registry
-/// which providers ingest without refreshing, never by comparing a stored
-/// provider name with a literal.
+/// silently matching no records. `--local` is structural: records without a
+/// provider handle are local regardless of their stored provenance name.
 pub fn filter(services: &Services, manifest: &Manifest, args: &FilterArgs) -> Result<RecordFilter> {
     Ok(RecordFilter {
         provider: args
@@ -24,7 +23,7 @@ pub fn filter(services: &Services, manifest: &Manifest, args: &FilterArgs) -> Re
             .as_deref()
             .map(|value| provider::selectable(value, &services.providers, manifest))
             .transpose()?,
-        unrefreshable_providers: args.local.then(|| services.providers.unrefreshable_names()),
+        local: args.local,
         author: args.author.clone(),
         title: args.title.clone(),
         year: args.year,

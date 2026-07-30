@@ -59,7 +59,7 @@ Rust 1.88 or newer.
 | Command | What it does |
 | --- | --- |
 | `bibi add [locator]…` | Resolve arXiv ids, DOIs, or `<provider>:<id>` and store them |
-| `bibi add -f <file>` | Resolve each entry in a `.bib`; keep the rest as local records |
+| `bibi add -f <file>` | Resolve each entry through one provider; use `--provider local` to keep entries as supplied |
 | `bibi remove [selector]…` | Delete records, emitting what was deleted |
 | `bibi rename <selector> <key>` | Change a local citation key |
 | `bibi list` | List records as a table, `bibtex`, or `json`, or as `--fields` columns |
@@ -85,14 +85,15 @@ interactive terminal is a usage error.
 $ bibi add 1207.7214 10.1016/j.physletb.2012.08.020 inspire:1124337
 $ bibi add 2401.00001 --key Smith:2024   # when you would rather name it yourself
 $ bibi add -f colleague.bib
+$ bibi add -f notes.bib --provider local
 ```
 
 `add -f` **resolves**: each entry's DOI and arXiv id are looked up, and what
 comes back replaces the entry's bytes while keeping the key the file used, so
-your collaborator's `\cite{}` commands keep working. An entry every provider
-reports as absent is kept exactly as written, under a local provider that never
-refreshes it. A provider *failure* is never treated as absence — a timeout says
-nothing about whether a work exists.
+your collaborator's `\cite{}` commands keep working. The whole invocation uses
+one provider, INSPIRE by default, with no fallback. Missing, unsupported, and
+failed identifiers fail that entry. `--provider local` instead keeps every
+entry exactly as supplied under local provenance and performs no network I/O.
 
 Duplicates are detected by DOI, arXiv id, and provider identity, and refused
 unless you pass `--overwrite`. A refused duplicate is a skip, not a failure:
@@ -238,9 +239,11 @@ configuration file and stores no credential anywhere; INSPIRE needs none.
 
 ## Providers
 
-INSPIRE is the first provider; the local provider exists so that a bibliography
-is always complete. Providers differ in capability, not in kind — the local one
-is simply a provider whose records never change.
+INSPIRE is the default and currently the only remote provider. Provider calls
+go through a closed facade: one invocation selects one provider, qualifiers
+must agree, and absence or failure never falls through to another
+implementation. Local is an explicit ingestion mode for `add -f`, not a remote
+resolver, and its records have no provider handle.
 
 Provider choice is more permanent than it looks: because stored BibTeX is
 verbatim and never repaired, whichever provider resolves a record determines

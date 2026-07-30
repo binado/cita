@@ -18,9 +18,9 @@ pub enum Error {
     /// BibTeX could not be parsed or rendered.
     #[error(transparent)]
     Bibtex(#[from] bibi_bibtex::Error),
-    /// A provider was named that this build does not carry, or flags disagree.
+    /// Provider selection, construction, or qualifier validation failed.
     #[error(transparent)]
-    Registry(#[from] bibi_provider::RegistryError),
+    Provider(#[from] bibi_provider::Error),
     /// A file could not be read or written.
     #[error("{path}: {source}")]
     Io {

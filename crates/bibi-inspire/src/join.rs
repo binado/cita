@@ -14,9 +14,10 @@
 //! provider-declared unique token, with both non-injective cases rejected.
 
 use crate::error;
-use bibi_bibtex::BibtexEntry;
-use bibi_core::ProviderId;
-use bibi_provider::{MappingError, PayloadItem};
+use bibi_core::{
+    ProviderId,
+    provider::{BibtexEntry, MappingError, PayloadItem},
+};
 use std::collections::HashMap;
 
 /// What a batch declared about one record's citation keys.

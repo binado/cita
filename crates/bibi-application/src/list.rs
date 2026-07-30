@@ -23,9 +23,7 @@ pub struct ListRequest {
 /// naming such a provider is *useful* is the adapter's question, and the binary
 /// answers it before building the filter by checking the name against the
 /// providers it carries plus those this manifest already names. `--local` is
-/// answered by the caller filling [`RecordFilter::unrefreshable_providers`]
-/// from the registry's capabilities, never by comparing a stored provider name
-/// with a literal.
+/// structural: it selects records with no provider id.
 pub fn list(manifest: &Manifest, request: &ListRequest) -> Vec<Record> {
     manifest.filter(&request.filter).cloned().collect()
 }

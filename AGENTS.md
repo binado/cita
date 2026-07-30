@@ -42,10 +42,10 @@ asserts *schedules* rather than sleeping.
 
 Three seams exist for tests and are documented as such:
 
-- `bibi_provider::testing` ships fakes and `verify_contract`, the conformance
-  suite a provider crate proves itself against. It is public on purpose: the
-  promises are the registry's, so a new provider should not rewrite an
-  approximation of them.
+- `bibi_core::provider::testing` ships the provider-neutral fake and
+  `verify_contract`, while `bibi_provider::testing` supplies the narrow
+  scripted closed facade used by application tests. Provider crates prove the
+  core contract once, and command tests replace only the compiled INSPIRE slot.
 - `bibi_inspire::testing::TestClock` records the waits it was asked for.
 - Two environment variables redirect what the binary would otherwise reach:
   `BIBI_INSPIRE_BASE_URL` and `BIBI_ARXIV_BASE_URL`. They are the only ambient
@@ -71,24 +71,27 @@ bibi-bibtex
  bibi-core ───────────────┬────────────────┐
      │                    │                │
      ▼                    ▼                ▼
-bibi-provider       bibi-manifest    bibi-documents
+bibi-inspire        bibi-manifest    bibi-documents
      │                    │                │
      ▼                    └───────┬────────┘
- bibi-inspire                     ▼
+bibi-provider ────────────────────┤
+                                 ▼
                           bibi-application
-                                  │
-                                  ▼
-                                 bibi
+                                 │
+                                 ▼
+                                bibi
 ```
 
 - `bibi-bibtex`: the whole boundary around BibTeX syntax — scanning entry and
   key spans, structural validation, re-keying, identifier candidates, local
   metadata projection, deterministic rendering.
-- `bibi-core`: provider-neutral domain values — `BibiId`, `ProviderName`,
-  `ProviderId`, `Revision`, `Doi`, `ArxivId`, `Record`, locators, selection,
-  filtering.
-- `bibi-provider`: the object-safe provider contract, provider-neutral result
-  types, the ordered registry, and the local provider.
+- `bibi-core`: provider-neutral domain values and the statically dispatched
+  `RemoteProvider` contract — `BibiId`, `ProviderName`, `ProviderId`,
+  `Revision`, `Doi`, `ArxivId`, `Record`, locators, selection, filtering,
+  remote outcomes, and provider errors.
+- `bibi-provider`: the closed `Provider::{Inspire, Local}` facade, exhaustive
+  dispatch, default selection, direct local ingestion, provider construction,
+  and complete conditional-refresh outcomes.
 - `bibi-inspire`: INSPIRE transport, pure mapping, batching, the verified texkey
   join, pacing, and retry.
 - `bibi-manifest`: schema-1 TOML, candidate validation, indexes, optimistic
@@ -112,9 +115,16 @@ loses. bibi never interprets provider BibTeX as metadata (I3); the only
 semantic parse in the tree is `local_metadata`, used by the local provider,
 where the user's BibTeX *is* the original.
 
-Providers differ in capability, not in kind. The local provider ingests
-user-supplied BibTeX and supports no refresh. **Nothing outside `bibi-provider`
-may test `provider.name() == "local"`** — commands branch on capability.
+Local provenance is structurally identified by a missing provider id. The local
+path ingests user-supplied BibTeX directly and supports no refresh.
+
+Operational provider selection is closed and invocation-wide. `ProviderName`
+stays open-ended in the manifest so later-build provenance remains readable,
+but calls use `Provider::{Inspire, Local}`. One qualifier or `--provider`
+selects exactly one implementation; repeated identical qualifiers are allowed,
+mixed qualifiers fail before I/O, and no selection defaults to INSPIRE. There
+is no fallback after absence or failure. Local ingestion is explicit through
+`add -f FILE --provider local` and local never implements `RemoteProvider`.
 
 ### Byte-preserved payloads
 

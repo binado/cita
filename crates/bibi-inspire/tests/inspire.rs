@@ -2,12 +2,14 @@
 
 mod support;
 
-use bibi_core::{ArxivId, BibiId, Doi, Locator, ProviderId};
-use bibi_inspire::{InspireProvider, RateLimiter, RetryEvent, Transport, testing::TestClock};
-use bibi_provider::{
-    PayloadRequest, Provider, ProviderError, RefreshRequest, RefreshState, Resolution,
-    RetrievalError, testing::verify_contract,
+use bibi_core::{
+    ArxivId, BibiId, Doi, Locator, ProviderId,
+    provider::{
+        PayloadRequest, ProviderError, RefreshRequest, RefreshState, RemoteProvider, Resolution,
+        RetrievalError, testing::verify_contract,
+    },
 };
+use bibi_inspire::{InspireProvider, RateLimiter, RetryEvent, Transport, testing::TestClock};
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -586,16 +588,23 @@ async fn a_burst_of_requests_is_paced_under_the_documented_budget() {
 #[tokio::test]
 async fn the_inspire_provider_satisfies_the_shared_contract_suite() {
     let server = TestServer::new(vec![
-        Reply::ok(hits(vec![record(1, "First:2012", Some("1207.7214"), None)])),
-        Reply::ok(entry("First:2012")),
-        Reply::ok(hits(vec![])),
+        Reply::ok(hits(vec![
+            record(1, "First:2012", Some("1207.7214"), None),
+            record(2, "Second:2024", None, Some("10.1/second")),
+        ])),
+        Reply::ok(format!("{}{}", entry("First:2012"), entry("Second:2024"))),
+        Reply::ok(hits(vec![
+            record(1, "First:2012", Some("1207.7214"), None),
+            record(2, "Second:2024", None, Some("10.1/second")),
+        ])),
+        Reply::ok(format!("{}{}", entry("First:2012"), entry("Second:2024"))),
     ]);
     let provider = provider(&server, Arc::new(TestClock::new()));
     verify_contract(
         &provider,
         &[
             Locator::Arxiv(ArxivId::new("1207.7214").unwrap()),
-            Locator::Doi(Doi::new("10.1/absent").unwrap()),
+            Locator::Doi(Doi::new("10.1/second").unwrap()),
         ],
     )
     .await;

@@ -62,14 +62,11 @@ pub struct AddArgs {
     #[arg(long, value_name = "KEY", conflicts_with = "file")]
     pub key: Option<String>,
     /// Resolve only through this provider
-    #[arg(long, value_name = "NAME", conflicts_with = "force_local")]
+    #[arg(long, value_name = "NAME")]
     pub provider: Option<String>,
     /// Replace a matching record instead of skipping it
     #[arg(long)]
     pub overwrite: bool,
-    /// Store every entry as supplied, consulting no provider
-    #[arg(long = "force-local", requires = "file")]
-    pub force_local: bool,
     /// Report what would happen without writing
     #[arg(long = "dry-run")]
     pub dry_run: bool,

@@ -8,14 +8,23 @@
 
 use anyhow::{Result, bail};
 use bibi_application::domain::{Manifest, ProviderName};
-use bibi_provider::ProviderRegistry;
+use bibi_provider::{Provider, Providers};
 
 /// Parse a provider this build must actually carry.
 ///
 /// `add` and `sync` *call* the provider they are pointed at, so a name this
 /// build does not carry can never work for them, whatever the manifest says.
-pub fn installed(value: &str, registry: &ProviderRegistry) -> Result<ProviderName> {
-    validate(value, &registry.names(), "Installed")
+pub fn installed(value: &str, _providers: &Providers) -> Result<Provider> {
+    Providers::installed(value).map_err(|_| {
+        anyhow::anyhow!(
+            "provider `{value}` not found. Installed providers: {}",
+            Providers::installed_names()
+                .iter()
+                .map(ProviderName::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
 }
 
 /// Parse a provider a filter can meaningfully name.
@@ -25,20 +34,16 @@ pub fn installed(value: &str, registry: &ProviderRegistry) -> Result<ProviderNam
 /// usable: its `ads` records stay filterable here even though this build cannot
 /// refresh them, while a name nothing knows fails instead of quietly listing
 /// nothing.
-pub fn selectable(
-    value: &str,
-    registry: &ProviderRegistry,
-    manifest: &Manifest,
-) -> Result<ProviderName> {
-    validate(value, &known(registry, manifest), "Known")
+pub fn selectable(value: &str, providers: &Providers, manifest: &Manifest) -> Result<ProviderName> {
+    validate(value, &known(providers, manifest), "Known")
 }
 
 /// Installed names in roster order, then any the manifest alone knows, sorted.
 ///
 /// Roster order first because that is the order resolution consults them in, so
 /// it is the order that means something to a user reading the list.
-fn known(registry: &ProviderRegistry, manifest: &Manifest) -> Vec<ProviderName> {
-    let mut names = registry.names();
+fn known(_providers: &Providers, manifest: &Manifest) -> Vec<ProviderName> {
+    let mut names = Providers::installed_names();
     let mut stored = manifest
         .records()
         .iter()

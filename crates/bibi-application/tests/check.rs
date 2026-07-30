@@ -11,8 +11,8 @@ use bibi_application::{
 };
 use bibi_core::{ProviderName, RecordFilter};
 use bibi_provider::{
-    LocalProvider, Provider, ProviderRegistry, RefreshState,
-    testing::{FakeProvider, payload, provider_metadata, provider_record},
+    Provider,
+    testing::{FakeProvider, RefreshState, payload, provider_metadata, provider_record, providers},
 };
 use std::{path::PathBuf, sync::Arc};
 use tempfile::TempDir;
@@ -23,9 +23,9 @@ struct Project {
 }
 
 impl Project {
-    fn with(providers: Vec<Arc<dyn Provider>>) -> Self {
+    fn with(remote: Arc<FakeProvider>) -> Self {
         let directory = tempfile::tempdir().unwrap();
-        let services = Services::new(Arc::new(ProviderRegistry::new(providers)));
+        let services = Services::new(Arc::new(providers(remote)));
         Self {
             directory,
             services,
@@ -68,7 +68,7 @@ fn stocked() -> Arc<FakeProvider> {
 }
 
 async fn project_with_two_records() -> Project {
-    let project = Project::with(vec![stocked(), Arc::new(LocalProvider::new())]);
+    let project = Project::with(stocked());
     add_locators(
         &project.services,
         &project.store(),
@@ -89,9 +89,8 @@ async fn add_local_record(project: &Project) {
         &project.store(),
         &bibi_application::AddFileRequest {
             source: bibi_application::InputSource::Path(path),
-            provider: None,
+            provider: Provider::Local,
             overwrite: false,
-            force_local: true,
             dry_run: false,
         },
     )
@@ -112,7 +111,7 @@ async fn rendering_puts_every_record_in_local_key_order() {
 #[tokio::test]
 async fn rendering_never_touches_a_provider() {
     let provider = stocked();
-    let project = Project::with(vec![provider.clone(), Arc::new(LocalProvider::new())]);
+    let project = Project::with(provider.clone());
     add_locators(
         &project.services,
         &project.store(),
@@ -156,7 +155,7 @@ async fn a_local_filter_renders_only_unrefreshable_owners() {
     add_local_record(&project).await;
     assert_eq!(
         project.render(RecordFilter {
-            unrefreshable_providers: Some(project.services.providers.unrefreshable_names()),
+            local: true,
             ..RecordFilter::default()
         }),
         "@misc{Mine,title={Mine}}\n"
@@ -249,10 +248,7 @@ async fn a_manifest_change_makes_a_previously_matching_bibliography_drift() {
             )
             .with_payload("1", Some(payload("Alpha:2012", "Corrected"))),
     );
-    let services = Services::new(Arc::new(ProviderRegistry::new(vec![
-        updated,
-        Arc::new(LocalProvider::new()),
-    ])));
+    let services = Services::new(Arc::new(providers(updated)));
     sync(&services, &project.store(), &SyncRequest::default())
         .await
         .unwrap();

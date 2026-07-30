@@ -93,7 +93,7 @@ fn a_read_command_without_a_manifest_fails_and_creates_nothing() {
 fn adding_a_file_writes_keys_to_stdout_and_a_summary_to_stderr() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    let output = bibi(&path, &["add", "-f", "library.bib"]);
+    let output = bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
     assert_eq!(code(&output), 0);
     // stdout is one local key per line, so the output can be piped into other commands.
@@ -157,7 +157,7 @@ fn omitted_interactive_inputs_are_clap_style_usage_errors() {
 fn piped_remove_and_show_use_trimmed_nonblank_selectors() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
     let shown = bibi_with_stdin(&path, &["show"], "\n  notes:2026 \n");
     assert_eq!(code(&shown), 0, "{}", stderr(&shown));
@@ -176,7 +176,7 @@ fn piped_remove_and_show_use_trimmed_nonblank_selectors() {
 fn explicit_positionals_win_over_standard_input() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
     let shown = bibi_with_stdin(&path, &["show", "notes:2026"], "astropy:2022\nextra\n");
     assert_eq!(code(&shown), 0, "{}", stderr(&shown));
@@ -187,7 +187,7 @@ fn explicit_positionals_win_over_standard_input() {
 fn a_literal_dash_is_an_ordinary_selector() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
     for command in ["show", "remove", "fetch"] {
         let output = bibi_with_stdin(&path, &[command, "-"], "notes:2026\n");
@@ -200,8 +200,8 @@ fn a_literal_dash_is_an_ordinary_selector() {
 fn adding_the_same_file_twice_skips_and_still_exits_zero() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
-    let output = bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
+    let output = bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
     // The requested end state already holds, so a build script may proceed.
     assert_eq!(code(&output), 0);
@@ -213,7 +213,7 @@ fn adding_the_same_file_twice_skips_and_still_exits_zero() {
 fn listing_outputs_are_exactly_what_a_pipeline_expects() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
     let keys = bibi(&path, &["list", "--fields", "key"]);
     assert_eq!(stdout(&keys), "astropy:2022\nnotes:2026\n");
@@ -235,7 +235,7 @@ fn listing_outputs_are_exactly_what_a_pipeline_expects() {
 fn the_default_listing_is_a_headed_table_and_never_styles_a_pipe() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
     let listed = bibi(&path, &["list"]);
     assert_eq!(code(&listed), 0);
@@ -263,7 +263,7 @@ fn fields_are_tab_separated_and_an_absent_value_keeps_its_column() {
     bibi_against(&path, &server, &["add", "1207.7214"]);
     // A local entry carries no arXiv id, so its derived columns are empty.
     std::fs::write(path.join("mine.bib"), "@misc{Mine,title={Mine}}\n").unwrap();
-    bibi(&path, &["add", "-f", "mine.bib", "--force-local"]);
+    bibi(&path, &["add", "-f", "mine.bib", "--provider", "local"]);
 
     let listed = bibi(&path, &["list", "--fields", "key,provider,arxiv,arxiv-url"]);
     assert_eq!(code(&listed), 0);
@@ -297,7 +297,7 @@ const FOREIGN: &str = "schema = 1\n\n\
 fn an_unknown_provider_names_the_ones_that_would_have_worked() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
     // Wrong case is the common mistake, and the grammar that rejects it is not
     // the user's problem — the names that would work are.
@@ -351,7 +351,7 @@ fn a_provider_only_the_manifest_knows_is_still_filterable() {
 fn fields_and_format_are_mutually_exclusive() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
     // Clap owns this one: a format says how to encode, a field says what to
     // include, and asking for both at once has no answer.
@@ -371,7 +371,7 @@ fn fields_and_format_are_mutually_exclusive() {
 fn show_emits_one_entry_under_its_local_key() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
     let output = bibi(&path, &["show", "notes:2026"]);
     assert_eq!(code(&output), 0);
@@ -389,7 +389,7 @@ fn show_emits_one_entry_under_its_local_key() {
 fn rename_rewrites_only_the_key_and_remove_emits_its_key() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
     let renamed = bibi(&path, &["rename", "notes:2026", "Roe:2026"]);
     assert_eq!(code(&renamed), 0);
@@ -409,7 +409,7 @@ fn rename_rewrites_only_the_key_and_remove_emits_its_key() {
 fn removing_the_same_record_twice_is_a_successful_skip() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
     let removed = bibi(&path, &["remove", "notes:2026", "notes:2026"]);
     assert_eq!(code(&removed), 0);
@@ -425,7 +425,7 @@ fn removing_the_same_record_twice_is_a_successful_skip() {
 fn a_dry_run_changes_nothing_on_disk() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
     let before = std::fs::read_to_string(path.join("bibi.toml")).unwrap();
 
     let output = bibi(&path, &["remove", "astropy:2022", "--dry-run"]);
@@ -445,7 +445,7 @@ fn an_explicit_path_targets_another_project_without_searching_upwards() {
     std::fs::create_dir(&nested).unwrap();
     bibi(&path, &["init"]);
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
     // Standing in a subdirectory targets the subdirectory, not the parent.
     let output = bibi(&nested, &["list"]);
@@ -552,7 +552,11 @@ fn a_locator_no_provider_holds_is_an_item_failure() {
     let server = TestServer::new(vec![hits(&[])]);
     let output = bibi_against(&path, &server, &["add", "2401.99999"]);
     assert_eq!(code(&output), 1);
-    assert!(stderr(&output).contains("no provider holds a record"));
+    assert!(
+        stderr(&output).contains("selected provider holds no record"),
+        "{}",
+        stderr(&output)
+    );
     assert!(!path.join("bibi.toml").exists());
 }
 
@@ -619,7 +623,7 @@ fn render_to(path: &Path, name: &str, filters: &[&str]) -> Output {
 fn a_rendered_bibliography_is_what_check_verifies() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
     // A bibliography exists only once a shell writes one: adding wrote no .bib,
     // and neither does anything else bibi offers.
@@ -662,7 +666,7 @@ fn a_rendered_bibliography_is_what_check_verifies() {
 fn there_is_no_command_that_writes_a_bibliography() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
     let before = std::fs::read_to_string(path.join("bibi.toml")).unwrap();
 
     // `export` chose a destination, which is the shell's job now.
@@ -680,7 +684,7 @@ fn there_is_no_command_that_writes_a_bibliography() {
 fn filters_select_what_is_rendered_and_what_is_checked() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
     let output = render_to(&path, "subset.bib", &["--year", "2026"]);
     assert_eq!(code(&output), 0);
@@ -705,7 +709,7 @@ fn rendering_and_check_honor_local() {
     ]);
     bibi_against(&path, &server, &["add", "1207.7214"]);
     std::fs::write(path.join("mine.bib"), "@misc{Mine,title={Mine}}\n").unwrap();
-    bibi(&path, &["add", "-f", "mine.bib", "--force-local"]);
+    bibi(&path, &["add", "-f", "mine.bib", "--provider", "local"]);
 
     let listed = bibi(&path, &["list", "--fields", "key", "--local"]);
     assert_eq!(code(&listed), 0);
@@ -730,7 +734,7 @@ fn check_takes_a_provider_filter_like_list_does() {
     ]);
     bibi_against(&path, &server, &["add", "1207.7214"]);
     std::fs::write(path.join("mine.bib"), "@misc{Mine,title={Mine}}\n").unwrap();
-    bibi(&path, &["add", "-f", "mine.bib", "--force-local"]);
+    bibi(&path, &["add", "-f", "mine.bib", "--provider", "local"]);
 
     render_to(&path, "inspire.bib", &["--provider", "inspire"]);
     // `--provider` was excluded from the rendering filters only because on
@@ -749,7 +753,7 @@ fn check_takes_a_provider_filter_like_list_does() {
 fn a_sync_with_no_managed_records_reports_and_writes_nothing() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
     let before = std::fs::read_to_string(path.join("bibi.toml")).unwrap();
 
     // Both records are local, so nothing is refreshable and no request is made.
@@ -781,7 +785,7 @@ fn project_with_two_arxiv_records() -> (tempfile::TempDir, PathBuf) {
          @article{Second,title={Second},eprint={2401.00001}}\n",
     )
     .unwrap();
-    let added = bibi(&path, &["add", "-f", "arxiv.bib", "--force-local"]);
+    let added = bibi(&path, &["add", "-f", "arxiv.bib", "--provider", "local"]);
     assert_eq!(code(&added), 0, "{}", stderr(&added));
     (directory, path)
 }
@@ -944,7 +948,7 @@ fn a_response_that_is_not_the_artifact_leaves_nothing_behind() {
 fn fetching_a_record_without_an_arxiv_id_explains_why_it_cannot() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
     let output = bibi(&path, &["fetch", "notes:2026", "--url"]);
     assert_eq!(code(&output), 1);
     assert!(stderr(&output).contains("no arXiv identifier"));
@@ -979,7 +983,7 @@ fn a_non_broken_stdout_error_exits_nonzero() {
 
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
-    bibi(&path, &["add", "-f", "library.bib"]);
+    bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
     let sink = OpenOptions::new().write(true).open("/dev/full").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_bibi"))
         .current_dir(&path)
@@ -1001,7 +1005,7 @@ fn a_closed_stdout_pipe_still_exits_zero() {
     let (_directory, path) = project();
     let large = format!("@misc{{Large,title={{{}}}}}\n", "x".repeat(1_000_000));
     std::fs::write(path.join("large.bib"), large).unwrap();
-    bibi(&path, &["add", "-f", "large.bib", "--force-local"]);
+    bibi(&path, &["add", "-f", "large.bib", "--provider", "local"]);
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_bibi"))
         .current_dir(&path)

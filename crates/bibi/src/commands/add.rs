@@ -31,9 +31,8 @@ pub async fn run(services: &Services, target: Option<&Path>, args: AddArgs) -> R
                 &store,
                 &AddFileRequest {
                     source,
-                    provider,
+                    provider: provider.unwrap_or_default(),
                     overwrite: args.overwrite,
-                    force_local: args.force_local,
                     dry_run: args.dry_run,
                 },
             )

@@ -9,9 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-bibi-bibtex = { workspace = true }
 bibi-core = { workspace = true }
-bibi-provider = { workspace = true }
 httpdate = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

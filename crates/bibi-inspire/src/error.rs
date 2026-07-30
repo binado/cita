@@ -1,7 +1,9 @@
 //! Failures, stamped with the provider that produced them.
 
-use bibi_core::ProviderName;
-use bibi_provider::{MappingError, RetrievalError};
+use bibi_core::{
+    ProviderName,
+    provider::{MappingError, RetrievalError},
+};
 
 /// The name INSPIRE records are stored under.
 pub const INSPIRE_PROVIDER: &str = "inspire";

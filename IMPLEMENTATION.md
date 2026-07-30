@@ -20,6 +20,18 @@ reader, migration command, or deprecated command aliases are built.
 > downloads one or more files into the working directory or an existing output
 > directory. Everything else here still
 > holds. Full reconciliation waits until the second binary exists.
+>
+> **Provider architecture amendment.** `bibi-core::provider` owns the
+> provider-neutral `RemoteProvider` contract, errors, outcomes, fake, and
+> conformance suite. The contract uses `Send` RPITIT futures and is not
+> object-safe. `bibi-inspire` depends only on core and BibTeX. `bibi-provider`
+> depends on INSPIRE and exposes the closed `Provider::{Inspire, Local}` /
+> `Providers` facade, exhaustive dispatch, direct local ingestion, construction
+> overrides, and complete conditional-refresh decisions. Resolution selects
+> one provider for the whole invocation, defaults to INSPIRE, and never falls
+> back. `add -f FILE --provider local` replaces `--force-local`. This amendment
+> supersedes the older crate graph, registry, capabilities, fallback, separate
+> `bibi-sync` extraction, and import steps below.
 
 ---
 
@@ -98,12 +110,13 @@ More precisely:
 - `bibi-core` depends on `bibi-bibtex`.
 - `bibi-provider` and `bibi-manifest` depend on `bibi-core` and
   `bibi-bibtex`; `bibi-documents` depends only on `bibi-core`.
-- `bibi-inspire` depends on `bibi-provider`, `bibi-core`, and
-  `bibi-bibtex`.
+- `bibi-inspire` depends on `bibi-core` among workspace crates.
+- `bibi-provider` depends on `bibi-core`, `bibi-bibtex`, and the compiled
+  `bibi-inspire` implementation.
 - `bibi-application` depends on the provider contract, manifest, documents,
   core, and BibTeX crates, but not on a concrete network provider.
-- `bibi` depends directly on `bibi-application`, `bibi-provider`,
-  `bibi-inspire`, and `bibi-documents`; it constructs concrete services, parses
+- `bibi` depends directly on `bibi-application`, `bibi-provider`, and
+  `bibi-documents`; the facade constructs concrete providers, while the binary parses
   CLI arguments, and writes stdout/stderr.
 
 This graph prevents two unwanted couplings present in cita:
@@ -122,7 +135,8 @@ dependencies for:
 Avoid adding:
 
 - DuckDB or a SQL engine in v1;
-- an async-trait macro when an object-safe boxed-future contract is sufficient;
+- an async-trait macro when stable RPITIT supplies statically dispatched
+  `Send` futures;
 - a database, dataframe, or persistent JSON cache;
 - a generic plugin framework before a second external provider requires it;
 - a file-locking or cross-process coordination crate; §8 commits are unlocked;

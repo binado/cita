@@ -5,8 +5,11 @@ use bibi_application::{
     domain::ManifestStore, list, sync,
 };
 use bibi_provider::{
-    LocalProvider, Provider, ProviderRegistry, RefreshState,
-    testing::{FakeProvider, ProviderCall, payload, provider_metadata, provider_record},
+    Provider,
+    testing::{
+        FakeProvider, ProviderCall, RefreshState, payload, provider_metadata, provider_record,
+        providers,
+    },
 };
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -17,9 +20,9 @@ struct Project {
 }
 
 impl Project {
-    fn with(providers: Vec<Arc<dyn Provider>>) -> Self {
+    fn with(remote: Arc<FakeProvider>) -> Self {
         let directory = tempfile::tempdir().unwrap();
-        let services = Services::new(Arc::new(ProviderRegistry::new(providers)));
+        let services = Services::new(Arc::new(providers(remote)));
         Self {
             directory,
             services,
@@ -35,8 +38,8 @@ impl Project {
         self.store().load().unwrap().manifest
     }
 
-    fn rebuild(self, providers: Vec<Arc<dyn Provider>>) -> Self {
-        let services = Services::new(Arc::new(ProviderRegistry::new(providers)));
+    fn rebuild(self, remote: Arc<FakeProvider>) -> Self {
+        let services = Services::new(Arc::new(providers(remote)));
         Self {
             directory: self.directory,
             services,
@@ -101,7 +104,7 @@ fn fetches_payloads(call: &ProviderCall) -> bool {
 #[tokio::test]
 async fn an_unchanged_sync_fetches_no_bibtex_at_all() {
     let provider = Arc::new(stocked(3));
-    let project = Project::with(vec![provider.clone(), Arc::new(LocalProvider::new())]);
+    let project = Project::with(provider.clone());
     seed(&project, 3).await;
     let before = provider.call_count(fetches_payloads);
 
@@ -123,7 +126,7 @@ async fn an_unchanged_sync_fetches_no_bibtex_at_all() {
 #[tokio::test]
 async fn a_forced_sync_refetches_everything_in_batched_calls() {
     let provider = Arc::new(stocked(3));
-    let project = Project::with(vec![provider.clone(), Arc::new(LocalProvider::new())]);
+    let project = Project::with(provider.clone());
     seed(&project, 3).await;
     let resolves_before = provider.call_count(resolves);
 
@@ -157,7 +160,7 @@ async fn a_forced_sync_refetches_everything_in_batched_calls() {
 
 #[tokio::test]
 async fn a_changed_revision_refreshes_the_record_and_keeps_its_identity() {
-    let project = Project::with(vec![Arc::new(stocked(1)), Arc::new(LocalProvider::new())]);
+    let project = Project::with(Arc::new(stocked(1)));
     seed(&project, 1).await;
     let before = list(&project.loaded(), &ListRequest::default());
 
@@ -169,7 +172,7 @@ async fn a_changed_revision_refreshes_the_record_and_keeps_its_identity() {
             )
             .with_payload("1", Some(payload("Key:1", "Corrected"))),
     );
-    let project = project.rebuild(vec![updated, Arc::new(LocalProvider::new())]);
+    let project = project.rebuild(updated);
     let report = sync(&project.services, &project.store(), &SyncRequest::default())
         .await
         .unwrap();
@@ -189,7 +192,7 @@ async fn a_changed_revision_refreshes_the_record_and_keeps_its_identity() {
 
 #[tokio::test]
 async fn a_record_whose_payload_never_arrives_keeps_its_old_revision() {
-    let project = Project::with(vec![Arc::new(stocked(1)), Arc::new(LocalProvider::new())]);
+    let project = Project::with(Arc::new(stocked(1)));
     seed(&project, 1).await;
 
     // Metadata says the record changed; the BibTeX search returns nothing for it.
@@ -201,7 +204,7 @@ async fn a_record_whose_payload_never_arrives_keeps_its_old_revision() {
             )
             .with_payload("1", None),
     );
-    let project = project.rebuild(vec![half, Arc::new(LocalProvider::new())]);
+    let project = project.rebuild(half);
     let report = sync(&project.services, &project.store(), &SyncRequest::default())
         .await
         .unwrap();
@@ -224,7 +227,7 @@ async fn a_record_whose_payload_never_arrives_keeps_its_old_revision() {
 }
 
 #[tokio::test]
-async fn an_ambiguous_join_fails_its_provider_while_others_commit() {
+async fn an_ambiguous_join_fails_its_provider_batch() {
     let broken = Arc::new(
         FakeProvider::new("inspire")
             .with_record(
@@ -237,24 +240,11 @@ async fn an_ambiguous_join_fails_its_provider_while_others_commit() {
             )
             .failing_payloads("texkey `Shared` is claimed by records 1 and 2"),
     );
-    let working = Arc::new(
-        FakeProvider::new("other")
-            .with_record("doi:10.1/b", provider_record("other", "9", "Key:9", "Nine"))
-            .with_refresh(
-                "9",
-                RefreshState::Metadata(Box::new(provider_metadata("9", Some("r2"), "Nine again"))),
-            )
-            .with_payload("9", Some(payload("Key:9", "Nine again"))),
-    );
-    let project = Project::with(vec![
-        broken.clone(),
-        working.clone(),
-        Arc::new(LocalProvider::new()),
-    ]);
+    let project = Project::with(broken.clone());
     add_locators(
         &project.services,
         &project.store(),
-        &["2401.00001".to_owned(), "10.1/b".to_owned()],
+        &["2401.00001".to_owned()],
         &AddRequest::default(),
     )
     .await
@@ -266,15 +256,9 @@ async fn an_ambiguous_join_fails_its_provider_while_others_commit() {
 
     assert_eq!(report.failures.len(), 1);
     assert!(report.failures[0].message.contains("claimed by records"));
-    // The other provider's record still refreshed, and the write happened.
-    assert_eq!(report.refreshed.len(), 1);
-    assert!(report.committed);
+    assert!(report.refreshed.is_empty());
+    assert!(!report.committed);
     let after = list(&project.loaded(), &ListRequest::default());
-    let nine = after
-        .iter()
-        .find(|record| record.key.as_str() == "Key:9")
-        .unwrap();
-    assert_eq!(nine.description.title, "Nine again");
     let one = after
         .iter()
         .find(|record| record.key.as_str() == "Key:1")
@@ -284,11 +268,11 @@ async fn an_ambiguous_join_fails_its_provider_while_others_commit() {
 
 #[tokio::test]
 async fn a_missing_record_is_a_warning_and_never_a_rebind() {
-    let project = Project::with(vec![Arc::new(stocked(1)), Arc::new(LocalProvider::new())]);
+    let project = Project::with(Arc::new(stocked(1)));
     seed(&project, 1).await;
     // The provider no longer holds it: the fake answers Missing by default.
     let forgetful = Arc::new(FakeProvider::new("inspire"));
-    let project = project.rebuild(vec![forgetful, Arc::new(LocalProvider::new())]);
+    let project = project.rebuild(forgetful);
 
     let report = sync(&project.services, &project.store(), &SyncRequest::default())
         .await
@@ -316,7 +300,7 @@ async fn a_replaced_identifier_fails_its_record_while_an_added_one_is_reported()
             )
             .with_record("arxiv:2401.00002", stored),
     );
-    let project = Project::with(vec![seeder, Arc::new(LocalProvider::new())]);
+    let project = Project::with(seeder);
     add_locators(
         &project.services,
         &project.store(),
@@ -338,7 +322,7 @@ async fn a_replaced_identifier_fails_its_record_while_an_added_one_is_reported()
             .with_refresh("2", RefreshState::Metadata(Box::new(replaces_an_arxiv_id)))
             .with_payload("2", Some(payload("Key:2", "Title 2"))),
     );
-    let project = project.rebuild(vec![provider, Arc::new(LocalProvider::new())]);
+    let project = project.rebuild(provider);
     let report = sync(&project.services, &project.store(), &SyncRequest::default())
         .await
         .unwrap();
@@ -372,7 +356,7 @@ async fn a_replaced_identifier_fails_its_record_while_an_added_one_is_reported()
 
 #[tokio::test]
 async fn a_local_record_is_counted_rather_than_asked_about() {
-    let project = Project::with(vec![Arc::new(stocked(1)), Arc::new(LocalProvider::new())]);
+    let project = Project::with(Arc::new(stocked(1)));
     seed(&project, 1).await;
     bibi_application::add_file(
         &project.services,
@@ -383,9 +367,8 @@ async fn a_local_record_is_counted_rather_than_asked_about() {
                 std::fs::write(&path, "@misc{Mine,title={Mine}}\n").unwrap();
                 path
             }),
-            provider: None,
+            provider: Provider::Local,
             overwrite: false,
-            force_local: true,
             dry_run: false,
         },
     )
@@ -401,36 +384,37 @@ async fn a_local_record_is_counted_rather_than_asked_about() {
 }
 
 #[tokio::test]
-async fn an_uninstalled_provider_is_skipped_by_a_plain_sync_and_named_by_an_explicit_one() {
-    let project = Project::with(vec![Arc::new(stocked(1)), Arc::new(LocalProvider::new())]);
-    seed(&project, 1).await;
-    // This build no longer carries `inspire`, but the manifest still names it.
-    let project = project.rebuild(vec![Arc::new(LocalProvider::new())]);
+async fn an_unavailable_owner_does_not_block_an_installed_group() {
+    let project = Project::with(Arc::new(stocked(2)));
+    seed(&project, 2).await;
+    let manifest = std::fs::read_to_string(project.store().path()).unwrap();
+    std::fs::write(
+        project.store().path(),
+        manifest.replacen("provider = \"inspire\"", "provider = \"ads\"", 1),
+    )
+    .unwrap();
+    let updated = Arc::new(
+        FakeProvider::new("inspire")
+            .with_refresh(
+                "2",
+                RefreshState::Metadata(Box::new(provider_metadata("2", Some("r2"), "Updated"))),
+            )
+            .with_payload("2", Some(payload("Key:2", "Updated"))),
+    );
+    let project = project.rebuild(updated);
 
     let report = sync(&project.services, &project.store(), &SyncRequest::default())
         .await
         .unwrap();
     assert_eq!(report.unavailable.len(), 1);
     assert!(report.failures.is_empty());
-    assert!(!report.committed);
-
-    // Naming it explicitly is a usage error, raised before any I/O.
-    let error = sync(
-        &project.services,
-        &project.store(),
-        &SyncRequest {
-            provider: Some(bibi_core::ProviderName::new("inspire").unwrap()),
-            ..SyncRequest::default()
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(error.to_string().contains("not available"));
+    assert_eq!(report.refreshed.len(), 1);
+    assert!(report.committed);
 }
 
 #[tokio::test]
 async fn a_dry_run_does_the_work_and_writes_nothing() {
-    let project = Project::with(vec![Arc::new(stocked(1)), Arc::new(LocalProvider::new())]);
+    let project = Project::with(Arc::new(stocked(1)));
     seed(&project, 1).await;
     let before = std::fs::read_to_string(project.store().path()).unwrap();
 
@@ -442,7 +426,7 @@ async fn a_dry_run_does_the_work_and_writes_nothing() {
             )
             .with_payload("1", Some(payload("Key:1", "Corrected"))),
     );
-    let project = project.rebuild(vec![updated.clone(), Arc::new(LocalProvider::new())]);
+    let project = project.rebuild(updated.clone());
     let report = sync(
         &project.services,
         &project.store(),

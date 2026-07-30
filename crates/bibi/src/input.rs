@@ -111,7 +111,6 @@ mod tests {
             key: None,
             provider: None,
             overwrite: false,
-            force_local: false,
             dry_run: false,
         })
     }

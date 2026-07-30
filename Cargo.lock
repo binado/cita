@@ -79,7 +79,6 @@ dependencies = [
  "bibi-application",
  "bibi-core",
  "bibi-documents",
- "bibi-inspire",
  "bibi-provider",
  "clap",
  "clap_complete",
@@ -143,9 +142,7 @@ dependencies = [
 name = "bibi-inspire"
 version = "0.1.0"
 dependencies = [
- "bibi-bibtex",
  "bibi-core",
- "bibi-provider",
  "httpdate",
  "reqwest",
  "serde",
@@ -173,6 +170,7 @@ version = "0.1.0"
 dependencies = [
  "bibi-bibtex",
  "bibi-core",
+ "bibi-inspire",
  "thiserror",
  "tokio",
 ]

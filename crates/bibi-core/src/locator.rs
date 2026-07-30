@@ -2,8 +2,8 @@
 //!
 //! Parsing generic syntax belongs here. Deciding whether a provider *supports* a
 //! locator belongs to the provider layer, which is why an unqualified value that
-//! is neither an arXiv id nor a DOI becomes a bare provider id for the registry
-//! to place, rather than an error or a guess.
+//! is neither an arXiv id nor a DOI becomes a bare id for the one selected
+//! provider, rather than an error or a guess.
 
 use crate::{
     error::Error,
@@ -50,7 +50,7 @@ pub struct QualifiedLocator {
 
 impl QualifiedLocator {
     /// True when this locator names no provider and no identifier kind, so the
-    /// registry must find the single provider that recognizes its syntax.
+    /// selected provider must interpret the value in its own syntax.
     pub fn needs_provider_recognition(&self) -> bool {
         self.provider.is_none() && matches!(self.locator, Locator::ProviderId(_))
     }
@@ -93,7 +93,7 @@ impl FromStr for QualifiedLocator {
         }
         // A `<name>:<rest>` prefix in the provider-name grammar qualifies the
         // rest as that provider's own id. Installed-provider validation is the
-        // registry's, so an unknown name parses and fails later, by name.
+        // facade's, so an unknown name parses and fails later, by name.
         // `//` after the colon is a URL authority, not a provider id: without
         // this guard `https://inspirehep.net/...` parses as a provider named
         // `https`, and a URL whose host bibi does not know must instead reach
@@ -217,7 +217,7 @@ mod tests {
         );
         assert_eq!(qualified.locator, Locator::ProviderId("1124337".into()));
         assert!(!qualified.needs_provider_recognition());
-        // An uninstalled provider still parses; naming it is the registry's job.
+        // An uninstalled provider still parses; naming it is the facade's job.
         assert_eq!(
             parse("ads:2024ApJ...900..1X").provider,
             Some(ProviderName::new("ads").unwrap())
@@ -225,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unrecognized_bare_value_defers_to_the_registry() {
+    fn a_bare_value_defers_to_the_selected_provider() {
         let bare = parse("1124337");
         assert!(bare.provider.is_none());
         assert_eq!(bare.locator, Locator::ProviderId("1124337".into()));

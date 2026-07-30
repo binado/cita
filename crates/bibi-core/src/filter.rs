@@ -17,13 +17,8 @@ pub struct RecordFilter {
     /// A pure manifest query: the named provider need not be installed, and an
     /// uninstalled one yields an empty listing rather than an error.
     pub provider: Option<ProviderName>,
-    /// Keep records whose provider is one the application identified as
-    /// ingest-capable but unrefreshable.
-    ///
-    /// The set is supplied by the caller from provider *capabilities*, so that
-    /// nothing outside the provider layer has to know that a provider named
-    /// `local` exists.
-    pub unrefreshable_providers: Option<Vec<ProviderName>>,
+    /// Keep structurally local records: those with no provider handle.
+    pub local: bool,
     /// Keep records with this substring in any author, case-insensitively.
     pub author: Option<String>,
     /// Keep records with this substring in the title, case-insensitively.
@@ -38,10 +33,7 @@ impl RecordFilter {
         self.provider
             .as_ref()
             .is_none_or(|provider| *provider == record.provenance.provider)
-            && self
-                .unrefreshable_providers
-                .as_ref()
-                .is_none_or(|providers| providers.contains(&record.provenance.provider))
+            && (!self.local || record.provenance.provider_id.is_none())
             && self.author.as_ref().is_none_or(|needle| {
                 record
                     .description
@@ -147,13 +139,12 @@ mod tests {
     }
 
     #[test]
-    fn the_unrefreshable_filter_uses_the_supplied_provider_set() {
-        let local = record("local", "T", &[], None);
+    fn the_local_filter_uses_missing_provider_identity() {
+        let mut local = record("local", "T", &[], None);
+        local.provenance = Provenance::unmanaged(ProviderName::new("local").unwrap());
         let managed = record("inspire", "T", &[], None);
-        // The application computes this set from capabilities; the filter never
-        // compares a provider name with the string "local" itself.
         let filter = RecordFilter {
-            unrefreshable_providers: Some(vec![ProviderName::new("local").unwrap()]),
+            local: true,
             ..RecordFilter::default()
         };
         assert!(filter.matches(&local));

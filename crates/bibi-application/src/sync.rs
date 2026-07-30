@@ -8,18 +8,17 @@
 use crate::{error::Error, reports::ItemFailure, services::Services};
 use bibi_bibtex::CitationKey;
 use bibi_core::{
-    BibiId, Description, IdentifierChange, Identifiers, Provenance, ProviderId, ProviderName,
-    ProviderOwned, Record, Revision,
+    BibiId, Description, IdentifierChange, Identifiers, ProviderId, ProviderName, Record, Revision,
 };
 use bibi_manifest::{ManifestCandidate, ManifestStore};
-use bibi_provider::{PayloadRequest, Provider, ProviderMetadata, RefreshRequest, RefreshState};
-use std::{collections::BTreeMap, sync::Arc};
+use bibi_provider::{Provider, RefreshOptions, RefreshOutcome, RefreshTarget};
+use std::collections::BTreeMap;
 
 /// Options for `sync`.
 #[derive(Clone, Debug, Default)]
 pub struct SyncRequest {
     /// Refresh only records owned by this provider.
-    pub provider: Option<ProviderName>,
+    pub provider: Option<Provider>,
     /// Refetch every refreshable record, whatever its revision says.
     pub force: bool,
     /// Do the work and report it, but write nothing.
@@ -62,7 +61,7 @@ pub struct SyncAbsence {
 /// Why a sync left a record unchanged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SyncAbsenceReason {
-    /// The provider answered [`RefreshState::Missing`].
+    /// The provider answered [`RefreshOutcome::Missing`].
     ProviderGone,
     /// Metadata indicated a change, but no BibTeX payload arrived.
     PayloadAbsent,
@@ -121,11 +120,6 @@ pub async fn sync(
     store: &ManifestStore,
     request: &SyncRequest,
 ) -> Result<SyncReport, Error> {
-    // Naming a provider this build does not carry is a usage error, raised
-    // before any I/O — unlike a plain sync, where such records are skipped.
-    if let Some(name) = &request.provider {
-        services.providers.require(name)?;
-    }
     let (manifest, generation) = store.load()?.into_parts();
     let mut candidate = manifest.to_candidate();
     let mut report = SyncReport::default();
@@ -135,7 +129,7 @@ pub async fn sync(
         if request
             .provider
             .as_ref()
-            .is_some_and(|name| record.provenance.provider != *name)
+            .is_some_and(|name| record.provenance.provider.as_str() != name.as_str())
         {
             continue;
         }
@@ -160,15 +154,19 @@ pub async fn sync(
     }
 
     for (name, records) in groups {
-        let Some(provider) = services.providers.get(&name) else {
+        let Some(owner) = services.providers.owner(&name) else {
             // A manifest may legitimately name a provider this build lacks.
             // Refusing to refresh anything on that account would make the file
             // unmaintainable by the build that can still maintain most of it.
             report.unavailable.insert(name, records.len());
             continue;
         };
+        if !owner.is_remote() {
+            report.unrefreshable += records.len();
+            continue;
+        }
         refresh_group(
-            provider,
+            owner,
             services,
             &records,
             request,
@@ -197,24 +195,31 @@ struct Managed {
 
 /// Refresh every record owned by one provider.
 async fn refresh_group(
-    provider: &Arc<dyn Provider>,
+    owner: Provider,
     services: &Services,
     records: &[Managed],
     request: &SyncRequest,
     candidate: &mut ManifestCandidate,
     report: &mut SyncReport,
 ) {
-    let requests = records
+    let targets = records
         .iter()
-        .map(|record| RefreshRequest {
+        .map(|record| RefreshTarget {
             bibi_id: record.id,
             provider_id: record.provider_id.clone(),
             stored_revision: record.revision.clone(),
+            identifiers: record.identifiers.clone(),
         })
         .collect::<Vec<_>>();
     let items = match services
         .providers
-        .refresh_metadata(provider, &requests)
+        .refresh(
+            owner,
+            &targets,
+            RefreshOptions {
+                force: request.force,
+            },
+        )
         .await
     {
         Ok(items) => items,
@@ -232,7 +237,6 @@ async fn refresh_group(
         .iter()
         .map(|record| (record.id, record))
         .collect::<BTreeMap<_, _>>();
-    let mut changed: Vec<(&Managed, Box<ProviderMetadata>)> = Vec::new();
     for item in items {
         let Some(record) = by_id.get(&item.bibi_id) else {
             continue;
@@ -241,166 +245,59 @@ async fn refresh_group(
             Err(error) => report
                 .failures
                 .push(ItemFailure::new(record.key.to_string(), error.to_string())),
-            Ok(RefreshState::Unrefreshable) => report.unrefreshable += 1,
-            // Absence is a no-op with a warning. bibi does not re-resolve by
-            // identifier on its own: that would be a silent rebind inside a
-            // bulk operation, discovered late and corrupting a deliverable.
-            Ok(RefreshState::Missing) => report.absences.push(SyncAbsence {
+            Ok(RefreshOutcome::Unchanged) => report.unchanged += 1,
+            Ok(RefreshOutcome::Missing) => report.absences.push(SyncAbsence {
                 key: record.key.clone(),
                 reason: SyncAbsenceReason::ProviderGone,
             }),
-            Ok(RefreshState::Metadata(metadata)) => {
-                if metadata.provider_id != record.provider_id {
-                    report.failures.push(ItemFailure::new(
-                        record.key.to_string(),
-                        format!(
-                            "provider now reports id `{}` instead of `{}`; migrate it explicitly with `add --overwrite --provider`",
-                            metadata.provider_id, record.provider_id
-                        ),
-                    ));
-                    continue;
-                }
-                let current = !request.force
-                    && record.revision.is_some()
-                    && metadata.revision.is_some()
-                    && record.revision == metadata.revision;
-                if current {
-                    report.unchanged += 1;
-                } else {
-                    changed.push((record, metadata));
-                }
-            }
-        }
-    }
-
-    if changed.is_empty() {
-        return;
-    }
-    let requests = changed
-        .iter()
-        .map(|(record, metadata)| PayloadRequest {
-            provider_id: record.provider_id.clone(),
-            join_tokens: metadata.join_tokens.clone(),
-        })
-        .collect::<Vec<_>>();
-    let payloads = match services.providers.fetch_payloads(provider, &requests).await {
-        Ok(items) => items
-            .into_iter()
-            .map(|item| (item.provider_id, item.payload))
-            .collect::<BTreeMap<_, _>>(),
-        Err(error) => {
-            // An ambiguous join gave no trustworthy pairing for any record it
-            // covered, so none is written. Other providers still commit.
-            for (record, _) in &changed {
-                report
-                    .failures
-                    .push(ItemFailure::new(record.key.to_string(), error.to_string()));
-            }
-            return;
-        }
-    };
-
-    for (record, metadata) in changed {
-        let Some(Some(payload)) = payloads.get(&record.provider_id).cloned() else {
-            // Metadata arrived and the payload did not. Nothing about this
-            // record is written — above all not the revision, since an advanced
-            // revision beside an old payload would desync the two permanently
-            // *and* suppress the repair on the next sync.
-            report.absences.push(SyncAbsence {
+            Ok(RefreshOutcome::PayloadMissing) => report.absences.push(SyncAbsence {
                 key: record.key.clone(),
                 reason: SyncAbsenceReason::PayloadAbsent,
-            });
-            continue;
-        };
-        let doi = IdentifierChange::classify(
-            record.identifiers.doi.as_ref(),
-            metadata.identifiers.doi.as_ref(),
-        );
-        let arxiv = IdentifierChange::classify(
-            record.identifiers.arxiv.as_ref(),
-            metadata.identifiers.arxiv.as_ref(),
-        );
-        if let Some(message) = replacement(&doi, "DOI").or_else(|| replacement(&arxiv, "arXiv id"))
-        {
-            report
-                .failures
-                .push(ItemFailure::new(record.key.to_string(), message));
-            continue;
-        }
-
-        let owned = ProviderOwned {
-            provenance: Provenance::managed(
-                provider.name().clone(),
-                metadata.provider_id.clone(),
-                metadata.revision.clone(),
-            ),
-            identifiers: Identifiers {
-                doi: metadata
-                    .identifiers
-                    .doi
-                    .clone()
-                    .or(record.identifiers.doi.clone()),
-                arxiv: metadata
-                    .identifiers
-                    .arxiv
-                    .clone()
-                    .or(record.identifiers.arxiv.clone()),
-            },
-            payload,
-            description: metadata.description.clone(),
-        };
-        if let Err(error) = candidate.replace(&record.id, owned) {
-            report
-                .failures
-                .push(ItemFailure::new(record.key.to_string(), error.to_string()));
-            continue;
-        }
-
-        if let IdentifierChange::Added(value) = &doi {
-            report.identifier_additions.push(IdentifierAddition {
-                key: record.key.clone(),
-                kind: "DOI",
-                value: value.to_string(),
-            });
-        }
-        if let IdentifierChange::Added(value) = &arxiv {
-            report.identifier_additions.push(IdentifierAddition {
-                key: record.key.clone(),
-                kind: "arXiv id",
-                value: value.to_string(),
-            });
-        }
-        if metadata.description != record.description {
-            // Description changes are routine — a corrected title, a grown
-            // author list — so they are reported in aggregate.
-            report.description_changes += 1;
-        }
-        match candidate.get(&record.id).map(Record::rendered).transpose() {
-            Ok(Some(bibtex)) => report.refreshed.push(RefreshedRecord {
-                key: record.key.clone(),
-                bibtex,
             }),
-            Ok(None) | Err(_) => report.failures.push(ItemFailure::new(
-                record.key.to_string(),
-                "the refreshed record could not be rendered under its local key",
-            )),
+            Ok(RefreshOutcome::Updated(owned)) => {
+                let doi = IdentifierChange::classify(
+                    record.identifiers.doi.as_ref(),
+                    owned.identifiers.doi.as_ref(),
+                );
+                let arxiv = IdentifierChange::classify(
+                    record.identifiers.arxiv.as_ref(),
+                    owned.identifiers.arxiv.as_ref(),
+                );
+                let description_changed = owned.description != record.description;
+                if let Err(error) = candidate.replace(&record.id, *owned) {
+                    report
+                        .failures
+                        .push(ItemFailure::new(record.key.to_string(), error.to_string()));
+                    continue;
+                }
+                if let IdentifierChange::Added(value) = &doi {
+                    report.identifier_additions.push(IdentifierAddition {
+                        key: record.key.clone(),
+                        kind: "DOI",
+                        value: value.to_string(),
+                    });
+                }
+                if let IdentifierChange::Added(value) = &arxiv {
+                    report.identifier_additions.push(IdentifierAddition {
+                        key: record.key.clone(),
+                        kind: "arXiv id",
+                        value: value.to_string(),
+                    });
+                }
+                if description_changed {
+                    report.description_changes += 1;
+                }
+                match candidate.get(&record.id).map(Record::rendered).transpose() {
+                    Ok(Some(bibtex)) => report.refreshed.push(RefreshedRecord {
+                        key: record.key.clone(),
+                        bibtex,
+                    }),
+                    Ok(None) | Err(_) => report.failures.push(ItemFailure::new(
+                        record.key.to_string(),
+                        "the refreshed record could not be rendered under its local key",
+                    )),
+                }
+            }
         }
-    }
-}
-
-/// A replaced identifier fails its record.
-///
-/// These values do not change once set, so a replacement means the stored
-/// value, the new value, or the provider is wrong — and none of the three
-/// should be committed by a routine refresh.
-fn replacement<T: std::fmt::Display>(
-    change: &IdentifierChange<T>,
-    kind: &'static str,
-) -> Option<String> {
-    match change {
-        IdentifierChange::Replaced { old, new } => Some(format!(
-            "provider reports {kind} `{new}` where `{old}` is stored; identifiers do not change once set, so repair this with `add --overwrite`"
-        )),
-        _ => None,
     }
 }

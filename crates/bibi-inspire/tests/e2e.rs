@@ -6,9 +6,11 @@
 //!
 //! Run with: `cargo test -p bibi-inspire --test e2e -- --ignored`
 
-use bibi_core::{ArxivId, BibiId, Locator, ProviderId};
+use bibi_core::{
+    ArxivId, BibiId, Locator, ProviderId,
+    provider::{PayloadRequest, RefreshRequest, RefreshState, RemoteProvider, Resolution},
+};
 use bibi_inspire::InspireProvider;
-use bibi_provider::{PayloadRequest, Provider, RefreshRequest, RefreshState, Resolution};
 
 /// The ATLAS Higgs discovery paper: public, stable, and unlikely to move.
 const ARXIV: &str = "1207.7214";

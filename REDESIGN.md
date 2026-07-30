@@ -17,6 +17,16 @@ Everything here is decided. §12 lists what has been deliberately deferred, and
 > downloads one or more files into the working directory or an explicitly
 > selected directory. Everything else here still
 > holds. Full reconciliation waits until the second binary exists.
+>
+> **Provider architecture amendment.** The provider-neutral `RemoteProvider`
+> contract and result/error types live in `bibi-core` and use `Send` RPITIT
+> futures. `bibi-provider` is a closed facade over
+> `Provider::{Inspire, Local}` with exhaustive dispatch, direct local ingestion,
+> and complete conditional-refresh decisions. One invocation selects exactly
+> one provider, defaults to INSPIRE, and never falls back. Local input is
+> explicit as `add -f FILE --provider local`. This amendment supersedes older
+> passages below about ordered registries, capability dispatch, bare-id
+> recognition, fallback after absence, and `--force-local`.
 
 ---
 
@@ -412,11 +422,11 @@ present they must name the same provider; disagreement is a usage error detected
 before any network request.
 
 DOI and arXiv locators are provider-neutral. Without an explicit provider, bibi
-tries providers in the documented roster order (§4) and accepts the first
-successful resolution. Provider-specific record ids must be qualified unless
-their syntax identifies exactly one installed provider; an ambiguous bare id is
-an error rather than a guess. `--provider` constrains every locator in one
-invocation, including every entry resolved by `add -f`.
+uses INSPIRE. A qualifier or `--provider` selects the one provider for the whole
+invocation; repeated identical qualifiers are allowed, while mixed qualifiers
+or a qualifier/flag conflict fail before I/O. Provider-specific bare ids are
+interpreted by that selected provider. `--provider` also selects every entry
+resolved by `add -f`.
 
 Provider migration is consequently explicit:
 `add --overwrite --provider <name> <locator>` re-resolves through the named
@@ -435,13 +445,11 @@ Resolution has five outcomes:
 - **Mapping error** — retrieved content is malformed or cannot satisfy the
   provider contract.
 
-**Fallback occurs only after absence.** When resolution is unconstrained,
-`not found` and `unsupported locator` advance to the next provider in roster
-order. A retrieval or mapping error stops resolution of that locator immediately:
-bibi returns nonzero, names the failed provider, and tells the user to retry or
-manually choose another provider with `--provider`. A temporary outage must not
-silently determine permanent BibTeX and texkey provenance. Errors must also never
-be converted into local records (§6).
+**There is no resolution fallback.** Not-found, unsupported-locator, retrieval,
+and mapping outcomes are positional results from the one selected provider.
+None is offered to another implementation or converted into a local record.
+Keeping supplied BibTeX is a separate explicit operation:
+`add -f FILE --provider local`.
 
 ### Providers are built in two halves
 
@@ -930,7 +938,7 @@ that binds the wrong record corrupts data.
 | Command | Purpose | Principal flags |
 | --- | --- | --- |
 | `add [locator]…` | Resolve and store | `--key`, `--provider`, `--overwrite`, `--dry-run` |
-| `add -f <file>` | Resolve each entry; definitively absent entries become local (§6) | `--provider`, `--force-local`, `--overwrite` |
+| `add -f <file>` | Resolve every entry through one provider, or explicitly ingest locally (§6) | `--provider`, `--overwrite` |
 | `remove [selector]…` | Delete records, emitting them | `--dry-run` |
 | `rename <selector> <key>` | Change a local citation key (I4) | |
 | `list` | Filtered listing | `--format {table,bibtex,json}`, `--fields <field>…`, `--provider`, `--author`, `--title`, `--year`, `--local` |

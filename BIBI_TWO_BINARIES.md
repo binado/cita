@@ -439,28 +439,33 @@ materialization operations are useful in practice.
 
 ## Workspace structure
 
+> **Implemented provider amendment.** The planned standalone `bibi-sync`
+> extraction is removed. Provider-neutral transport operations live in
+> `bibi-core::provider`; complete conditional refresh lives behind
+> `bibi-provider::Providers::refresh`. `bibi-provider` is a closed facade that
+> depends on compiled provider crates and performs exhaustive dispatch.
+
 The binaries share domain, provider, and project-format crates, not a universal
 persistence interface.
 
 The shared stack, which knows nothing about either persistence model:
 
 ```text
-                         bibi-bibtex
-                              |
-                              v
-                          bibi-core
-                              |
-     +-------------+----------+-------------+
-     |             |          |             |
-     v             v          v             v
-bibi-provider  bibi-sync  bibi-documents  bibi-manifest
-     |             ^        (retrieval)   (project format)
-     v             |
-bibi-inspire ------+
+ bibi-bibtex
+      |
+      v
+  bibi-core -----------+----------------+
+      |                |                |
+      v                v                v
+bibi-inspire     bibi-manifest    bibi-documents
+      |
+      v
+bibi-provider
 ```
 
-`bibi-sync` depends on `bibi-provider` for the contract, never on a concrete
-provider. The two applications sit on top of that stack and diverge only in
+`bibi-core` owns the remote contract; `bibi-provider` owns construction,
+selection, local ingestion, exhaustive dispatch, and complete refresh
+decisions. The two applications sit on top of that stack and diverge only in
 storage:
 
 ```text
@@ -480,7 +485,8 @@ Shared crates should contain:
 
 - BibTeX scanning, validation, re-keying, and deterministic rendering;
 - provider-neutral record and identifier types;
-- provider contracts, registries, and concrete provider integrations;
+- the provider-neutral remote contract, closed facade, and concrete provider
+  integrations;
 - the conditional refresh algorithm, as a decision over owned values;
 - artifact retrieval;
 - pure domain operations that have the same semantics in both products.
@@ -507,8 +513,7 @@ abstraction, and it names no database.
 
 ### Where sync lives
 
-This section records where sync *belongs*, not work to do now; the extraction
-waits for a second caller. Conditional refresh is the densest logic in the tree
+Conditional refresh is the densest logic in the tree
 and none of it is project-specific. Revision comparison, the verified texkey join, the rule that a
 batch with an ambiguous join fails whole, and above all the rule that **a record
 is updated as a unit** — never an advanced revision beside an old payload — are
@@ -523,20 +528,20 @@ store.load() -> group by provider -> refresh (mutating a candidate) -> store.com
 
 Storage appears only on the first and last line. Everything between is a
 function from a provider and a set of managed handles to a set of refreshed
-records and a report. That middle belongs in a shared `bibi-sync` crate that
+records and a report. That middle lives behind the closed provider facade and
 touches no store at all:
 
 ```text
-bibi-sync
-    refresh(provider, &[Managed], options) -> RefreshOutcome
+bibi-provider
+    Providers::refresh(owner, &[RefreshTarget], options) -> Vec<RefreshedItem>
 
 small application:  load manifest -> refresh -> fold into a Candidate -> commit
 library application: select rows  -> refresh -> apply in a transaction
 ```
 
 This shares the algorithm without sharing a storage interface, the distinction
-drawn under "Why there is no generic CRUD backend" below. `Managed` is already
-the right shape for it: a projection of a record, not a manifest row.
+drawn under "Why there is no generic CRUD backend" below. `RefreshTarget` is a
+projection of a record, not a manifest row.
 
 ### Artifact retrieval versus document management
 

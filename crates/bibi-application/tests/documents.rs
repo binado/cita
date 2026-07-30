@@ -12,8 +12,8 @@ use bibi_application::{
 use bibi_core::{ArxivId, Identifiers};
 use bibi_documents::ArtifactClient;
 use bibi_provider::{
-    LocalProvider, Provider, ProviderRegistry,
-    testing::{FakeProvider, provider_record},
+    Provider,
+    testing::{FakeProvider, provider_record, providers},
 };
 use std::{
     io::{BufRead, Write},
@@ -80,14 +80,11 @@ async fn project() -> Project {
         arxiv: Some(ArxivId::new("1207.7214").unwrap()),
         doi: None,
     };
-    let providers: Vec<Arc<dyn Provider>> = vec![
-        Arc::new(FakeProvider::new("inspire").with_record("arxiv:1207.7214", managed)),
-        Arc::new(LocalProvider::new()),
-    ];
+    let remote = Arc::new(FakeProvider::new("inspire").with_record("arxiv:1207.7214", managed));
     let directory = tempfile::tempdir().unwrap();
     let project = Project {
         directory,
-        services: Services::new(Arc::new(ProviderRegistry::new(providers))),
+        services: Services::new(Arc::new(providers(remote))),
     };
     add_locators(
         &project.services,
@@ -105,9 +102,8 @@ async fn project() -> Project {
         &project.store(),
         &bibi_application::AddFileRequest {
             source: bibi_application::InputSource::Path(notes),
-            provider: None,
+            provider: Provider::Local,
             overwrite: false,
-            force_local: true,
             dry_run: false,
         },
     )
@@ -117,11 +113,10 @@ async fn project() -> Project {
 }
 
 async fn batch_project() -> Project {
-    let providers: Vec<Arc<dyn Provider>> = vec![Arc::new(LocalProvider::new())];
     let directory = tempfile::tempdir().unwrap();
     let project = Project {
         directory,
-        services: Services::new(Arc::new(ProviderRegistry::new(providers))),
+        services: Services::new(Arc::new(providers(Arc::new(FakeProvider::new("inspire"))))),
     };
     let entries = project.path("batch.bib");
     std::fs::write(
@@ -136,9 +131,8 @@ async fn batch_project() -> Project {
         &project.store(),
         &bibi_application::AddFileRequest {
             source: bibi_application::InputSource::Path(entries),
-            provider: None,
+            provider: Provider::Local,
             overwrite: false,
-            force_local: true,
             dry_run: false,
         },
     )

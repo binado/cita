@@ -21,6 +21,8 @@ mod provider_name;
 mod record;
 mod selector;
 
+pub mod provider;
+
 pub use error::Error;
 pub use filter::RecordFilter;
 pub use id::BibiId;

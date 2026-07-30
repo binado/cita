@@ -1,19 +1,18 @@
 //! The only ingestion verb.
 //!
-//! `add <locator>` resolves through providers; `add -f <file>` resolves each
-//! entry and keeps the user's own BibTeX only where every applicable provider
-//! reports absence. A single hand-written entry is a one-entry file, so there
-//! is no second rule for when the local escape hatch applies.
+//! `add <locator>` resolves through one selected remote provider. `add -f`
+//! either resolves every entry through one remote provider or, when explicitly
+//! selected, ingests every entry locally.
 
 use crate::{
     error::Error,
     reports::{BatchReport, ItemFailure, SkipReason, SkippedItem},
     services::Services,
 };
-use bibi_bibtex::{BibtexEntry, CitationKey, parse_file};
+use bibi_bibtex::{CitationKey, parse_file};
 use bibi_core::{BibiId, ProviderName, ProviderOwned, QualifiedLocator, Record};
 use bibi_manifest::{ManifestCandidate, ManifestStore};
-use bibi_provider::{LocatorOutcome, Resolution};
+use bibi_provider::{Provider, ResolveItem};
 use std::{io::Read, path::PathBuf};
 
 /// Where `add -f` reads entries from.
@@ -31,7 +30,7 @@ pub struct AddRequest {
     /// Override the citation key. Only valid for a single locator.
     pub key: Option<CitationKey>,
     /// Constrain every locator to one provider.
-    pub provider: Option<ProviderName>,
+    pub provider: Option<Provider>,
     /// Replace a matching record instead of skipping it.
     pub overwrite: bool,
     /// Report what would happen without writing.
@@ -44,11 +43,9 @@ pub struct AddFileRequest {
     /// Where to read entries from.
     pub source: InputSource,
     /// Constrain every entry to one provider.
-    pub provider: Option<ProviderName>,
+    pub provider: Provider,
     /// Replace matching records instead of skipping them.
     pub overwrite: bool,
-    /// Store every entry locally without consulting any provider.
-    pub force_local: bool,
     /// Report what would happen without writing.
     pub dry_run: bool,
 }
@@ -111,12 +108,12 @@ pub async fn add_locators(
         .collect::<Vec<_>>();
     let outcomes = services
         .providers
-        .resolve(&requests, request.provider.as_ref())
+        .resolve(request.provider, &requests)
         .await?;
 
     for ((raw, _), outcome) in parsed.iter().zip(outcomes) {
         match outcome {
-            LocatorOutcome::Found { record, .. } => {
+            ResolveItem::Found(record) => {
                 let key = request
                     .key
                     .clone()
@@ -133,46 +130,29 @@ pub async fn add_locators(
                 );
                 apply(&mut candidate, raw, key, *record, placement, &mut items)?;
             }
-            LocatorOutcome::NotFound => items.failures.push(ItemFailure::new(
+            ResolveItem::NotFound => items.failures.push(ItemFailure::new(
                 raw,
-                "no provider holds a record for this locator",
+                "the selected provider holds no record for this locator",
             )),
-            LocatorOutcome::Unrecognized => items.failures.push(ItemFailure::new(
+            ResolveItem::UnsupportedLocator => items.failures.push(ItemFailure::new(
                 raw,
-                "no installed provider recognizes this id; qualify it as `<provider>:<id>`",
+                "the selected provider does not support this locator",
             )),
-            LocatorOutcome::Ambiguous { providers } => items.failures.push(ItemFailure::new(
-                raw,
-                format!(
-                    "`{}` all recognize this id; name one with `--provider`",
-                    providers
-                        .iter()
-                        .map(ProviderName::to_string)
-                        .collect::<Vec<_>>()
-                        .join("`, `")
-                ),
-            )),
-            LocatorOutcome::Failed { provider, error } => items.failures.push(ItemFailure::new(
-                raw,
-                format!("{error}; retry, or choose another provider than `{provider}`"),
-            )),
+            ResolveItem::Failed(error) => items
+                .failures
+                .push(ItemFailure::new(raw, error.to_string())),
         }
     }
 
     commit(store, &generation, candidate, items, request.dry_run)
 }
 
-/// Resolve every entry in a file, keeping the user's BibTeX only where absent.
+/// Resolve or explicitly ingest every entry in a file.
 pub async fn add_file(
     services: &Services,
     store: &ManifestStore,
     request: &AddFileRequest,
 ) -> Result<AddReport, Error> {
-    if request.force_local && request.provider.is_some() {
-        return Err(Error::usage(
-            "`--force-local` stores entries without consulting a provider, so it cannot be combined with `--provider`",
-        ));
-    }
     let source = read(&request.source)?;
     // Parsing everything first means a malformed file costs no requests.
     let entries = parse_file(&source)?;
@@ -186,7 +166,7 @@ pub async fn add_file(
     let mut spans: Vec<std::ops::Range<usize>> = Vec::new();
     for entry in &entries {
         let start = requests.len();
-        if !request.force_local {
+        if request.provider != Provider::Local {
             let candidates = entry.payload.identifier_candidates();
             let locators = [
                 candidates.doi.as_deref().map(|doi| format!("doi:{doi}")),
@@ -208,28 +188,30 @@ pub async fn add_file(
     } else {
         services
             .providers
-            .resolve(&requests, request.provider.as_ref())
+            .resolve(Some(request.provider), &requests)
             .await?
     };
 
     for (entry, span) in entries.into_iter().zip(spans) {
         let name = entry.key.to_string();
-        let resolved = resolve_entry(&outcomes[span]);
-        let record = match resolved {
-            EntryResolution::Found(record) => *record,
-            EntryResolution::Failed(message) => {
-                // A provider failure says nothing about whether the work
-                // exists, so it must never quietly become a local record.
-                items.failures.push(ItemFailure::new(name, message));
-                continue;
-            }
-            EntryResolution::Absent => match ingest(services, entry.payload.clone()) {
+        let record = if request.provider == Provider::Local {
+            match services.providers.ingest_local(entry.payload.clone()) {
                 Ok(record) => record,
                 Err(message) => {
+                    items
+                        .failures
+                        .push(ItemFailure::new(name, message.to_string()));
+                    continue;
+                }
+            }
+        } else {
+            match resolve_entry(&outcomes[span]) {
+                EntryResolution::Found(record) => *record,
+                EntryResolution::Failed(message) => {
                     items.failures.push(ItemFailure::new(name, message));
                     continue;
                 }
-            },
+            }
         };
         let placement = plan(
             &candidate,
@@ -257,7 +239,6 @@ pub async fn add_file(
 /// What resolving one imported entry's identifiers produced.
 enum EntryResolution {
     Found(Box<ProviderOwned>),
-    Absent,
     Failed(String),
 }
 
@@ -265,12 +246,18 @@ enum EntryResolution {
 ///
 /// An imported entry offers only DOI and arXiv locators, so the outcomes that
 /// concern a bare provider id cannot arise here.
-fn resolve_entry(outcomes: &[LocatorOutcome]) -> EntryResolution {
+fn resolve_entry(outcomes: &[ResolveItem]) -> EntryResolution {
+    if outcomes.is_empty() {
+        return EntryResolution::Failed(
+            "the entry has no resolvable DOI or arXiv id; use `--provider local` to keep it as supplied"
+                .to_owned(),
+        );
+    }
     let mut failure = None;
     let mut found: Option<Box<ProviderOwned>> = None;
     for outcome in outcomes {
         match outcome {
-            LocatorOutcome::Found { record, .. } => {
+            ResolveItem::Found(record) => {
                 if let Some(first) = &found {
                     if !same_provider_record(first, record) {
                         return EntryResolution::Failed(format!(
@@ -283,21 +270,20 @@ fn resolve_entry(outcomes: &[LocatorOutcome]) -> EntryResolution {
                     found = Some(record.clone());
                 }
             }
-            LocatorOutcome::Failed { provider, error } => {
-                failure.get_or_insert_with(|| {
-                    format!("{error}; retry, or choose another provider than `{provider}`")
-                });
+            ResolveItem::Failed(error) => {
+                failure.get_or_insert_with(|| error.to_string());
             }
-            LocatorOutcome::NotFound
-            | LocatorOutcome::Ambiguous { .. }
-            | LocatorOutcome::Unrecognized => {}
+            ResolveItem::NotFound | ResolveItem::UnsupportedLocator => {}
         }
     }
     match failure {
         Some(message) => EntryResolution::Failed(message),
-        None => found
-            .map(EntryResolution::Found)
-            .unwrap_or(EntryResolution::Absent),
+        None => found.map(EntryResolution::Found).unwrap_or_else(|| {
+            EntryResolution::Failed(
+                "none of the entry's identifiers resolved through the selected provider; use `--provider local` to keep it as supplied"
+                    .to_owned(),
+            )
+        }),
     }
 }
 
@@ -314,19 +300,6 @@ fn provider_identity(record: &ProviderOwned) -> String {
         .identity()
         .map(|(provider, id)| format!("{provider}:{id}"))
         .unwrap_or_else(|| format!("{}:<no stable id>", record.provenance.provider))
-}
-
-/// Hand an entry to the provider that ingests user-supplied BibTeX.
-fn ingest(services: &Services, entry: BibtexEntry) -> Result<ProviderOwned, String> {
-    let provider = services
-        .providers
-        .ingest_provider()
-        .ok_or("no provider in this build can store a user-supplied entry")?;
-    match provider.ingest(entry) {
-        Ok(Resolution::Found(record)) => Ok(*record),
-        Ok(_) => Err("the ingest provider refused this entry".to_owned()),
-        Err(error) => Err(error.to_string()),
-    }
 }
 
 /// What to do with one resolved record.

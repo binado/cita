@@ -2,7 +2,7 @@
 
 use crate::error::Error;
 use bibi_documents::ArtifactClient;
-use bibi_provider::ProviderRegistry;
+use bibi_provider::Providers;
 use std::sync::{Arc, OnceLock};
 
 /// The collaborators every use case shares.
@@ -12,15 +12,15 @@ use std::sync::{Arc, OnceLock};
 /// providers exist.
 #[derive(Clone, Debug)]
 pub struct Services {
-    /// The installed providers, in roster order.
-    pub providers: Arc<ProviderRegistry>,
+    /// The closed installed-provider facade.
+    pub providers: Arc<Providers>,
     /// The arXiv artifact client, built on first use.
     documents: Arc<OnceLock<ArtifactClient>>,
 }
 
 impl Services {
     /// Assemble the services.
-    pub fn new(providers: Arc<ProviderRegistry>) -> Self {
+    pub fn new(providers: Arc<Providers>) -> Self {
         Self {
             providers,
             documents: Arc::new(OnceLock::new()),

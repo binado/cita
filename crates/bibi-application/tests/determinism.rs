@@ -9,7 +9,10 @@ use bibi_application::{
     AddFileRequest, InputSource, ListRequest, RenderOptions, Services, add_file,
     domain::ManifestStore, list, render_manifest, to_json,
 };
-use bibi_provider::{LocalProvider, ProviderRegistry};
+use bibi_provider::{
+    Provider,
+    testing::{FakeProvider, providers},
+};
 use std::sync::Arc;
 
 const BIBLIOGRAPHY: &str = include_str!("golden/bibliography.bib");
@@ -20,9 +23,7 @@ const SOURCE: &str = "@unpublished{zed:2026,\n  title = {Notes on nothing},\n  a
 
 async fn project() -> (tempfile::TempDir, Services, ManifestStore) {
     let directory = tempfile::tempdir().unwrap();
-    let services = Services::new(Arc::new(ProviderRegistry::new(vec![Arc::new(
-        LocalProvider::new(),
-    )])));
+    let services = Services::new(Arc::new(providers(Arc::new(FakeProvider::new("inspire")))));
     let store = ManifestStore::new(directory.path().join("bibi.toml"));
     let source = directory.path().join("source.bib");
     std::fs::write(&source, SOURCE).unwrap();
@@ -31,9 +32,8 @@ async fn project() -> (tempfile::TempDir, Services, ManifestStore) {
         &store,
         &AddFileRequest {
             source: InputSource::Path(source),
-            provider: None,
+            provider: Provider::Local,
             overwrite: false,
-            force_local: true,
             dry_run: false,
         },
     )

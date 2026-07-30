@@ -14,9 +14,8 @@ use crate::{
     transport::{RawBibtex, RawJson},
     wire::{LiteratureRecord, SearchResponse},
 };
-use bibi_bibtex::BibtexEntry;
+use bibi_core::provider::{BibtexEntry, MappingError, parse_file};
 use bibi_core::{ArxivId, Description, Doi, Identifiers, ProviderId, Revision};
-use bibi_provider::MappingError;
 
 /// One INSPIRE record, mapped.
 ///
@@ -181,7 +180,7 @@ pub fn map_declared_keys(raw: &RawJson) -> Result<Vec<DeclaredKeys>, MappingErro
 /// input validation; rejecting a well-formed one because a parse of it
 /// disagreed with the structured record is the cross-check this design drops.
 pub fn split_entries(raw: &RawBibtex) -> Result<Vec<BibtexEntry>, MappingError> {
-    let entries = bibi_bibtex::parse_file(raw.as_str()).map_err(error::invalid_payload)?;
+    let entries = parse_file(raw.as_str()).map_err(error::invalid_payload)?;
     Ok(entries.into_iter().map(|entry| entry.payload).collect())
 }
 

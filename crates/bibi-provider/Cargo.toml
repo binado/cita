@@ -1,6 +1,6 @@
 [package]
 name = "bibi-provider"
-description = "The object-safe provider contract, registry, and local provider for bibi."
+description = "Closed provider selection, construction, local ingestion, and conditional refresh for bibi."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 bibi-bibtex = { workspace = true }
 bibi-core = { workspace = true }
+bibi-inspire = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

@@ -4,19 +4,9 @@ use anyhow::{Context, Result};
 use bibi_application::domain::ManifestStore;
 use bibi_application::{Services, TargetResolver};
 use bibi_documents::ArtifactClient;
-use bibi_inspire::{InspireProvider, Transport};
-use bibi_provider::{LocalProvider, Provider, ProviderRegistry};
+use bibi_provider::Providers;
 use std::{path::Path, sync::Arc};
 
-/// Build the provider roster.
-///
-/// Order is roster order, and roster order is resolution order. The local
-/// provider comes last and declares no locator kinds, so it is never offered a
-/// locator: storing a user's own entry is a decision the application makes
-/// after every other provider has reported absence, not a fallback resolver.
-///
-/// No provider is selected by a `match` inside command code; adding one is a
-/// new crate plus one line here.
 /// A test-only override for INSPIRE's base URL.
 ///
 /// The CLI suite drives the binary against a local listener through this, so
@@ -24,13 +14,13 @@ use std::{path::Path, sync::Arc};
 /// v1 ships no configuration file, and nothing about ordinary use reads it.
 pub const INSPIRE_BASE_URL_ENV: &str = "BIBI_INSPIRE_BASE_URL";
 
-pub fn providers() -> Result<ProviderRegistry> {
-    let mut builder = Transport::builder();
+pub fn providers() -> Result<Providers> {
+    let mut builder = Providers::builder();
     if let Some(base_url) = std::env::var_os(INSPIRE_BASE_URL_ENV).filter(|value| !value.is_empty())
     {
-        builder = builder.base_url(base_url.to_string_lossy().into_owned());
+        builder = builder.inspire_base_url(base_url.to_string_lossy().into_owned());
     }
-    let transport = builder
+    builder
         // Retries are reported as they happen: a command that pauses for five
         // seconds should say why rather than appear to hang.
         .on_retry(|event| {
@@ -43,12 +33,7 @@ pub fn providers() -> Result<ProviderRegistry> {
             ));
         })
         .build()
-        .context("building the INSPIRE client")?;
-    let providers: Vec<Arc<dyn Provider>> = vec![
-        Arc::new(InspireProvider::with_transport(transport)),
-        Arc::new(LocalProvider::new()),
-    ];
-    Ok(ProviderRegistry::new(providers))
+        .context("building the provider facade")
 }
 
 /// A test-only override for arXiv's base URL.

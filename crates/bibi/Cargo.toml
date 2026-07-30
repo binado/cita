@@ -13,7 +13,6 @@ anstyle = { workspace = true }
 anyhow = { workspace = true }
 bibi-application = { workspace = true }
 bibi-documents = { workspace = true }
-bibi-inspire = { workspace = true }
 bibi-provider = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }

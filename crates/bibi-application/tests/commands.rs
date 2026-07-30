@@ -7,8 +7,8 @@ use bibi_application::{
 };
 use bibi_core::{ArxivId, Doi};
 use bibi_provider::{
-    LocalProvider, Provider, ProviderRegistry,
-    testing::{FakeProvider, provider_record},
+    Provider,
+    testing::{FakeProvider, provider_record, providers},
 };
 use std::{path::PathBuf, sync::Arc};
 use tempfile::TempDir;
@@ -20,18 +20,17 @@ struct Project {
 }
 
 impl Project {
-    fn with(providers: Vec<Arc<dyn Provider>>) -> Self {
+    fn with(remote: Arc<FakeProvider>) -> Self {
         let directory = tempfile::tempdir().unwrap();
-        let services = Services::new(Arc::new(ProviderRegistry::new(providers)));
+        let services = Services::new(Arc::new(providers(remote)));
         Self {
             directory,
             services,
         }
     }
 
-    /// The default roster: one network provider, then local.
     fn new(network: Arc<FakeProvider>) -> Self {
-        Self::with(vec![network, Arc::new(LocalProvider::new())])
+        Self::with(network)
     }
 
     fn store(&self) -> ManifestStore {
@@ -191,10 +190,7 @@ async fn overwrite_replaces_provider_data_and_preserves_id_and_key() {
     ));
     let project = Project {
         directory: project.directory,
-        services: Services::new(Arc::new(ProviderRegistry::new(vec![
-            updated,
-            Arc::new(LocalProvider::new()),
-        ]))),
+        services: Services::new(Arc::new(providers(updated))),
     };
     let report = add(
         &project,
@@ -272,7 +268,7 @@ async fn a_dry_run_reports_without_writing() {
 }
 
 #[tokio::test]
-async fn importing_resolves_what_it_can_and_keeps_the_rest_locally() {
+async fn importing_resolves_what_it_can_and_fails_entries_without_identifiers() {
     let project = Project::new(network());
     let path = project.file(
         "colleague.bib",
@@ -283,16 +279,16 @@ async fn importing_resolves_what_it_can_and_keeps_the_rest_locally() {
         &project.store(),
         &AddFileRequest {
             source: InputSource::Path(path),
-            provider: None,
+            provider: Provider::Inspire,
             overwrite: false,
-            force_local: false,
             dry_run: false,
         },
     )
     .await
     .unwrap();
 
-    assert_eq!(report.items.successes.len(), 2);
+    assert_eq!(report.items.successes.len(), 1);
+    assert_eq!(report.items.failures.len(), 1);
     let records = list(&project.loaded(), &ListRequest::default());
     let resolved = records
         .iter()
@@ -303,12 +299,11 @@ async fn importing_resolves_what_it_can_and_keeps_the_rest_locally() {
     assert!(resolved.payload.source().contains("@article{Aad:2012tfa,"));
     assert_eq!(resolved.description.title, "Observation");
 
-    let retained = records
-        .iter()
-        .find(|record| record.key.as_str() == "Notes:2026")
-        .unwrap();
-    assert_eq!(retained.provenance.provider.as_str(), "local");
-    assert!(retained.payload.source().contains("Lecture notes"));
+    assert!(
+        records
+            .iter()
+            .all(|record| record.key.as_str() != "Notes:2026")
+    );
 }
 
 #[tokio::test]
@@ -333,9 +328,8 @@ async fn importing_refuses_identifiers_that_resolve_to_different_records() {
         &project.store(),
         &AddFileRequest {
             source: InputSource::Path(path),
-            provider: None,
+            provider: Provider::Inspire,
             overwrite: false,
-            force_local: false,
             dry_run: false,
         },
     )
@@ -372,9 +366,8 @@ async fn importing_accepts_two_identifiers_for_the_same_provider_record() {
         &project.store(),
         &AddFileRequest {
             source: InputSource::Path(path),
-            provider: None,
+            provider: Provider::Inspire,
             overwrite: false,
-            force_local: false,
             dry_run: false,
         },
     )
@@ -387,11 +380,14 @@ async fn importing_accepts_two_identifiers_for_the_same_provider_record() {
 
 #[tokio::test]
 async fn importing_does_not_ignore_a_failure_after_an_identifier_resolved() {
-    let mut record = provider_record("primary", "1", "Found", "Found paper");
+    let mut record = provider_record("inspire", "1", "Found", "Found paper");
     record.identifiers.doi = Some(Doi::new("10.1/found").unwrap());
-    let primary = Arc::new(FakeProvider::new("primary").with_record("doi:10.1/found", record));
-    let failing = Arc::new(FakeProvider::new("backup").failing_retrieval("timed out"));
-    let project = Project::with(vec![primary, failing, Arc::new(LocalProvider::new())]);
+    let failing = Arc::new(
+        FakeProvider::new("inspire")
+            .with_record("doi:10.1/found", record)
+            .failing_retrieval("timed out"),
+    );
+    let project = Project::with(failing);
     let path = project.file(
         "partial.bib",
         "@article{Partial,title={Partial},doi={10.1/found},eprint={1207.7214}}\n",
@@ -402,9 +398,8 @@ async fn importing_does_not_ignore_a_failure_after_an_identifier_resolved() {
         &project.store(),
         &AddFileRequest {
             source: InputSource::Path(path),
-            provider: None,
+            provider: Provider::Inspire,
             overwrite: false,
-            force_local: false,
             dry_run: false,
         },
     )
@@ -417,7 +412,7 @@ async fn importing_does_not_ignore_a_failure_after_an_identifier_resolved() {
 }
 
 #[tokio::test]
-async fn force_local_stores_entries_a_provider_would_have_resolved() {
+async fn explicit_local_stores_entries_a_provider_would_have_resolved() {
     let project = Project::new(network());
     let path = project.file(
         "mine.bib",
@@ -428,9 +423,8 @@ async fn force_local_stores_entries_a_provider_would_have_resolved() {
         &project.store(),
         &AddFileRequest {
             source: InputSource::Path(path),
-            provider: None,
+            provider: Provider::Local,
             overwrite: false,
-            force_local: true,
             dry_run: false,
         },
     )
@@ -458,9 +452,8 @@ async fn a_provider_failure_never_becomes_a_local_record() {
         &project.store(),
         &AddFileRequest {
             source: InputSource::Path(path),
-            provider: None,
+            provider: Provider::Inspire,
             overwrite: false,
-            force_local: false,
             dry_run: false,
         },
     )
@@ -491,9 +484,8 @@ async fn an_imported_key_collision_is_skipped_or_identifies_the_overwrite_target
     );
     let import = |overwrite| AddFileRequest {
         source: InputSource::Path(path.clone()),
-        provider: None,
+        provider: Provider::Local,
         overwrite,
-        force_local: false,
         dry_run: false,
     };
 
@@ -527,9 +519,8 @@ async fn two_imported_entries_that_duplicate_each_other_fail_only_one_item() {
         &project.store(),
         &AddFileRequest {
             source: InputSource::Path(path),
-            provider: None,
+            provider: Provider::Local,
             overwrite: false,
-            force_local: true,
             dry_run: false,
         },
     )
@@ -564,9 +555,8 @@ async fn multiple_identifier_targets_fail_one_item_without_discarding_the_batch(
         &project.store(),
         &AddFileRequest {
             source: InputSource::Path(path),
-            provider: None,
+            provider: Provider::Local,
             overwrite: false,
-            force_local: true,
             dry_run: false,
         },
     )
@@ -594,7 +584,7 @@ async fn multiple_identifier_targets_fail_one_item_without_discarding_the_batch(
 }
 
 #[tokio::test]
-async fn the_local_filter_asks_the_registry_rather_than_matching_a_name() {
+async fn the_local_filter_uses_missing_provider_identity() {
     let project = Project::new(network());
     add(&project, &["1207.7214"], AddRequest::default()).await;
     let path = project.file("mine.bib", "@misc{Mine,title={Mine}}\n");
@@ -603,9 +593,8 @@ async fn the_local_filter_asks_the_registry_rather_than_matching_a_name() {
         &project.store(),
         &AddFileRequest {
             source: InputSource::Path(path),
-            provider: None,
+            provider: Provider::Local,
             overwrite: false,
-            force_local: true,
             dry_run: false,
         },
     )
@@ -618,7 +607,7 @@ async fn the_local_filter_asks_the_registry_rather_than_matching_a_name() {
         &project.loaded(),
         &ListRequest {
             filter: bibi_core::RecordFilter {
-                unrefreshable_providers: Some(project.services.providers.unrefreshable_names()),
+                local: true,
                 ..bibi_core::RecordFilter::default()
             },
         },
