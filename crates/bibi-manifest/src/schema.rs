@@ -8,7 +8,7 @@
 use crate::error::Error;
 use bibi_bibtex::{BibtexEntry, CitationKey};
 use bibi_core::{
-    ArxivId, BibiId, Description, Doi, Identifiers, Provenance, ProviderId, ProviderName,
+    ArxivId, BibiId, Description, Doi, Identifiers, Provenance, Provider, ProviderId,
     ProviderOwned, Record, Revision,
 };
 use serde::{Deserialize, Serialize};
@@ -120,7 +120,7 @@ impl RecordWire {
                 source,
             })?;
         let provenance = Provenance {
-            provider: ProviderName::new(self.provider).map_err(field("provider"))?,
+            provider: Provider::from_str(&self.provider).map_err(field("provider"))?,
             provider_id: self
                 .provider_id
                 .map(ProviderId::new)

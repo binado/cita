@@ -62,7 +62,7 @@ async fn repeated_qualifiers_select_one_provider() {
 }
 
 #[tokio::test]
-async fn conflicts_mixed_qualifiers_unknown_names_and_local_fail_before_http() {
+async fn conflicts_and_local_fail_before_http() {
     let fake = Arc::new(FakeProvider::new("inspire"));
     let facade = providers(fake.clone());
     assert!(matches!(
@@ -78,16 +78,24 @@ async fn conflicts_mixed_qualifiers_unknown_names_and_local_fail_before_http() {
         Err(Error::MixedProviders { .. })
     ));
     assert!(matches!(
-        facade.resolve(None, &locators(&["ads:1"])).await,
-        Err(Error::UnknownProvider { .. })
-    ));
-    assert!(matches!(
         facade
             .resolve(Some(Provider::Local), &locators(&["1207.7214"]))
             .await,
         Err(Error::LocalResolution)
     ));
     assert!(fake.calls().is_empty());
+}
+
+#[tokio::test]
+async fn an_unknown_provider_qualifier_falls_through_to_the_selected_provider() {
+    // `ads:1` does not name an installed provider, so it never qualifies as
+    // one: it reaches the selected (default) provider whole, as a bare id,
+    // rather than failing before any request is made.
+    let fake = Arc::new(FakeProvider::new("inspire"));
+    let facade = providers(fake.clone());
+    let outcomes = facade.resolve(None, &locators(&["ads:1"])).await.unwrap();
+    assert!(matches!(outcomes[0], ResolveItem::NotFound));
+    assert_eq!(fake.calls(), [ProviderCall::Resolve(vec!["ads:1".into()])]);
 }
 
 #[tokio::test]

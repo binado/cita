@@ -17,7 +17,7 @@ mod filter;
 mod id;
 mod identifiers;
 mod locator;
-mod provider_name;
+mod provenance;
 mod record;
 mod selector;
 
@@ -28,6 +28,6 @@ pub use filter::RecordFilter;
 pub use id::BibiId;
 pub use identifiers::{ArxivId, Doi, IdentifierChange};
 pub use locator::{Locator, QualifiedLocator};
-pub use provider_name::{ProviderId, ProviderName, Revision};
+pub use provenance::{Provider, ProviderId, Revision};
 pub use record::{Description, Identifiers, Provenance, ProviderOwned, Record};
 pub use selector::{Selector, SelectorForm};

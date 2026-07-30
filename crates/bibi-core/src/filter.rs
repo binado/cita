@@ -1,6 +1,6 @@
 //! Advisory filtering over listings.
 
-use crate::{provider_name::ProviderName, record::Record};
+use crate::{provenance::Provider, record::Record};
 
 /// A best-effort listing filter.
 ///
@@ -12,11 +12,8 @@ use crate::{provider_name::ProviderName, record::Record};
 /// Filtering preserves the caller's ordering.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RecordFilter {
-    /// Keep records owned by this provider name.
-    ///
-    /// A pure manifest query: the named provider need not be installed, and an
-    /// uninstalled one yields an empty listing rather than an error.
-    pub provider: Option<ProviderName>,
+    /// Keep records owned by this provider.
+    pub provider: Option<Provider>,
     /// Keep structurally local records: those with no provider handle.
     pub local: bool,
     /// Keep records with this substring in any author, case-insensitively.
@@ -31,8 +28,7 @@ impl RecordFilter {
     /// True when every stated criterion holds.
     pub fn matches(&self, record: &Record) -> bool {
         self.provider
-            .as_ref()
-            .is_none_or(|provider| *provider == record.provenance.provider)
+            .is_none_or(|provider| provider == record.provenance.provider)
             && (!self.local || record.provenance.provider_id.is_none())
             && self.author.as_ref().is_none_or(|needle| {
                 record
@@ -66,18 +62,18 @@ mod tests {
     use super::*;
     use crate::{
         id::BibiId,
-        provider_name::{ProviderId, Revision},
+        provenance::{ProviderId, Revision},
         record::{Description, Identifiers, Provenance, ProviderOwned},
     };
     use bibi_bibtex::{BibtexEntry, CitationKey};
 
-    fn record(provider: &str, title: &str, authors: &[&str], year: Option<i32>) -> Record {
+    fn record(provider: Provider, title: &str, authors: &[&str], year: Option<i32>) -> Record {
         Record::new(
             BibiId::new(),
             CitationKey::new("K").unwrap(),
             ProviderOwned {
                 provenance: Provenance::managed(
-                    ProviderName::new(provider).unwrap(),
+                    provider,
                     ProviderId::new("1").unwrap(),
                     Some(Revision::new("r").unwrap()),
                 ),
@@ -98,13 +94,13 @@ mod tests {
     fn an_empty_filter_matches_everything() {
         let filter = RecordFilter::default();
         assert!(filter.is_empty());
-        assert!(filter.matches(&record("inspire", "T", &["Doe, Jane"], Some(2012))));
+        assert!(filter.matches(&record(Provider::Inspire, "T", &["Doe, Jane"], Some(2012))));
     }
 
     #[test]
     fn criteria_are_conjunctive_and_case_insensitive() {
         let record = record(
-            "inspire",
+            Provider::Inspire,
             "Observation of a new particle",
             &["Aad, G."],
             Some(2012),
@@ -113,7 +109,7 @@ mod tests {
             title: Some("NEW PARTICLE".into()),
             author: Some("aad".into()),
             year: Some(2012),
-            provider: Some(ProviderName::new("inspire").unwrap()),
+            provider: Some(Provider::Inspire),
             ..RecordFilter::default()
         };
         assert!(filter.matches(&record));
@@ -128,7 +124,7 @@ mod tests {
 
     #[test]
     fn the_author_filter_also_searches_collaborations() {
-        let record = record("inspire", "T", &["Aad, G."], Some(2012));
+        let record = record(Provider::Inspire, "T", &["Aad, G."], Some(2012));
         assert!(
             RecordFilter {
                 author: Some("atlas".into()),
@@ -140,23 +136,14 @@ mod tests {
 
     #[test]
     fn the_local_filter_uses_missing_provider_identity() {
-        let mut local = record("local", "T", &[], None);
-        local.provenance = Provenance::unmanaged(ProviderName::new("local").unwrap());
-        let managed = record("inspire", "T", &[], None);
+        let mut local = record(Provider::Local, "T", &[], None);
+        local.provenance = Provenance::unmanaged(Provider::Local);
+        let managed = record(Provider::Inspire, "T", &[], None);
         let filter = RecordFilter {
             local: true,
             ..RecordFilter::default()
         };
         assert!(filter.matches(&local));
         assert!(!filter.matches(&managed));
-    }
-
-    #[test]
-    fn an_uninstalled_provider_name_simply_matches_nothing() {
-        let filter = RecordFilter {
-            provider: Some(ProviderName::new("ads").unwrap()),
-            ..RecordFilter::default()
-        };
-        assert!(!filter.matches(&record("inspire", "T", &[], None)));
     }
 }

@@ -417,9 +417,11 @@ consequence of the data model.
 ### Provider selection and locator qualification
 
 **Decided.** A caller may select a provider either with `--provider <name>` or
-with a qualified locator such as `inspire:12345` or `ads:2024ApJ...`. If both are
-present they must name the same provider; disagreement is a usage error detected
-before any network request.
+with a qualified locator such as `inspire:12345`. If both are present they must
+name the same provider; disagreement is a usage error detected before any
+network request. The provider set is closed, so a prefix outside it — `ads:...`
+before a `bibi-ads` crate exists, say — does not qualify: it falls through
+whole, as a bare id, for the selected provider to interpret in its own syntax.
 
 DOI and arXiv locators are provider-neutral. Without an explicit provider, bibi
 uses INSPIRE. A qualifier or `--provider` selects the one provider for the whole

@@ -86,12 +86,13 @@ bibi-provider ────────────────────┤
   key spans, structural validation, re-keying, identifier candidates, local
   metadata projection, deterministic rendering.
 - `bibi-core`: provider-neutral domain values and the statically dispatched
-  `RemoteProvider` contract — `BibiId`, `ProviderName`, `ProviderId`,
+  `RemoteProvider` contract — `BibiId`, the closed `Provider` enum, `ProviderId`,
   `Revision`, `Doi`, `ArxivId`, `Record`, locators, selection, filtering,
   remote outcomes, and provider errors.
-- `bibi-provider`: the closed `Provider::{Inspire, Local}` facade, exhaustive
-  dispatch, default selection, direct local ingestion, provider construction,
-  and complete conditional-refresh outcomes.
+- `bibi-provider`: exhaustive dispatch over `bibi_core::Provider`, default
+  selection, direct local ingestion, provider construction, and complete
+  conditional-refresh outcomes. Re-exports `Provider` rather than defining its
+  own.
 - `bibi-inspire`: INSPIRE transport, pure mapping, batching, the verified texkey
   join, pacing, and retry.
 - `bibi-manifest`: schema-1 TOML, candidate validation, indexes, optimistic
@@ -102,7 +103,9 @@ bibi-provider ────────────────────┤
 
 Two couplings are forbidden by the graph: `bibi-manifest` never names a
 provider crate, and `bibi-application` never depends on a concrete network
-provider.
+provider. `bibi-core` naming the closed provider roster is what makes the first
+possible: `bibi-manifest` can reject an unknown provider name at decode time by
+depending only on `bibi-core`, never on a network provider crate.
 
 ## Key decisions
 
@@ -118,12 +121,16 @@ where the user's BibTeX *is* the original.
 Local provenance is structurally identified by a missing provider id. The local
 path ingests user-supplied BibTeX directly and supports no refresh.
 
-Operational provider selection is closed and invocation-wide. `ProviderName`
-stays open-ended in the manifest so later-build provenance remains readable,
-but calls use `Provider::{Inspire, Local}`. One qualifier or `--provider`
-selects exactly one implementation; repeated identical qualifiers are allowed,
-mixed qualifiers fail before I/O, and no selection defaults to INSPIRE. There
-is no fallback after absence or failure. Local ingestion is explicit through
+Provider selection is closed everywhere, not only operationally: one `Provider`
+enum in `bibi-core`, `Provider::{Inspire, Local}`, is the sole provenance type
+— a manifest field, a `--provider` flag, and a `<provider>:` locator qualifier
+all name a value of it, and a name outside the set is rejected the moment it is
+parsed. A manifest is decoded through this enum, so a hand-edited or
+later-build `provider = "ads"` fails to load rather than being tolerated as an
+unrefreshable-but-filterable record. One qualifier or `--provider` selects
+exactly one implementation; repeated identical qualifiers are allowed, mixed
+qualifiers fail before I/O, and no selection defaults to INSPIRE. There is no
+fallback after absence or failure. Local ingestion is explicit through
 `add -f FILE --provider local` and local never implements `RemoteProvider`.
 
 ### Byte-preserved payloads
@@ -190,12 +197,11 @@ not only colour, is suppressed when `NO_COLOR` is set or the stream is not a
 terminal; one policy in `output::color_enabled` serves the table and warnings
 alike.
 
-**`--provider` accepts a provider this build carries *or* one the manifest
-already names.** Filtering never has to *call* a provider, so a manifest written
-by a later build stays filterable by an older one; but a name neither knows is
-an error rather than an empty listing. `add` and `sync` do call the provider, so
-they require it to be installed. The grammar `ProviderName` enforces is never
-shown to a user — a rejected name is answered with the names that would work.
+**`--provider` accepts only a provider this build carries.** Because a manifest
+cannot hold a foreign one either, `list`/`check` filtering and `add`/`sync`
+calling share the identical acceptance check, rather than filtering tolerating
+a wider set than calling does. A rejected name is answered with the names that
+would work, never with the parser's grammar.
 
 stdout carries the command's result in its most pipeable form; stderr carries
 everything meant for a human. Skips exit zero, failures exit one, Clap usage

@@ -2,18 +2,14 @@
 
 use bibi_bibtex::BibtexEntry;
 use bibi_core::{
-    ArxivId, Description, Doi, Identifiers, Provenance, ProviderName, ProviderOwned,
+    ArxivId, Description, Doi, Identifiers, Provenance, Provider, ProviderOwned,
     provider::{MappingError, ProviderError},
 };
 
-/// The manifest provenance name for explicitly local entries.
-pub const LOCAL_PROVIDER: &str = "local";
-
 pub(crate) fn ingest(entry: BibtexEntry) -> Result<ProviderOwned, ProviderError> {
-    let name = ProviderName::new(LOCAL_PROVIDER).expect("the local provider name is valid");
     let metadata = entry.local_metadata().map_err(|error| {
         ProviderError::Mapping(MappingError::InvalidPayload {
-            provider: name.clone(),
+            provider: Provider::Local,
             message: error.to_string(),
         })
     })?;
@@ -25,7 +21,7 @@ pub(crate) fn ingest(entry: BibtexEntry) -> Result<ProviderOwned, ProviderError>
             .and_then(|arxiv| ArxivId::new(arxiv).ok()),
     };
     Ok(ProviderOwned {
-        provenance: Provenance::unmanaged(name),
+        provenance: Provenance::unmanaged(Provider::Local),
         identifiers,
         description: Description {
             title: metadata.title,
@@ -54,7 +50,7 @@ mod tests {
         assert_eq!(record.description.authors, ["Roe, Richard"]);
         assert_eq!(record.description.year, Some(2024));
         assert_eq!(record.payload.source(), source);
-        assert_eq!(record.provenance.provider.as_str(), LOCAL_PROVIDER);
+        assert_eq!(record.provenance.provider, Provider::Local);
         assert!(record.provenance.provider_id.is_none());
     }
 

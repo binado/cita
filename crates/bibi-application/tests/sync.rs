@@ -384,7 +384,9 @@ async fn a_local_record_is_counted_rather_than_asked_about() {
 }
 
 #[tokio::test]
-async fn an_unavailable_owner_does_not_block_an_installed_group() {
+async fn a_manifest_naming_an_uninstalled_provider_fails_to_load() {
+    // The provider set is closed: a name outside it is rejected when the
+    // manifest is decoded, before sync ever groups records by owner.
     let project = Project::with(Arc::new(stocked(2)));
     seed(&project, 2).await;
     let manifest = std::fs::read_to_string(project.store().path()).unwrap();
@@ -393,23 +395,20 @@ async fn an_unavailable_owner_does_not_block_an_installed_group() {
         manifest.replacen("provider = \"inspire\"", "provider = \"ads\"", 1),
     )
     .unwrap();
-    let updated = Arc::new(
-        FakeProvider::new("inspire")
-            .with_refresh(
-                "2",
-                RefreshState::Metadata(Box::new(provider_metadata("2", Some("r2"), "Updated"))),
-            )
-            .with_payload("2", Some(payload("Key:2", "Updated"))),
-    );
-    let project = project.rebuild(updated);
 
-    let report = sync(&project.services, &project.store(), &SyncRequest::default())
+    let error = sync(&project.services, &project.store(), &SyncRequest::default())
         .await
-        .unwrap();
-    assert_eq!(report.unavailable.len(), 1);
-    assert!(report.failures.is_empty());
-    assert_eq!(report.refreshed.len(), 1);
-    assert!(report.committed);
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            bibi_application::Error::Manifest(bibi_manifest::Error::InvalidField {
+                field: "provider",
+                ..
+            })
+        ),
+        "{error}"
+    );
 }
 
 #[tokio::test]

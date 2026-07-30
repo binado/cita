@@ -2,9 +2,10 @@
 
 use crate::local;
 use bibi_bibtex::BibtexEntry;
+pub use bibi_core::Provider;
 use bibi_core::{
-    BibiId, IdentifierChange, Identifiers, Provenance, ProviderId, ProviderName, ProviderOwned,
-    QualifiedLocator, Revision,
+    BibiId, IdentifierChange, Identifiers, Provenance, ProviderId, ProviderOwned, QualifiedLocator,
+    Revision,
     provider::{
         MappingError, PayloadItem, PayloadRequest, ProviderError, ProviderMetadata, RefreshItem,
         RefreshRequest, RefreshState, RemoteProvider, Resolution, RetrievalError,
@@ -14,63 +15,9 @@ use bibi_inspire::{InspireProvider, RetryEvent, RetryObserver, Transport};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
-    str::FromStr,
     sync::Arc,
 };
 use thiserror::Error as ThisError;
-
-/// An installed provider owner.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum Provider {
-    /// The INSPIRE literature service.
-    #[default]
-    Inspire,
-    /// User-supplied BibTeX, stored without a remote handle.
-    Local,
-}
-
-impl Provider {
-    /// Every provider installed in this build.
-    pub const ALL: [Self; 2] = [Self::Inspire, Self::Local];
-
-    /// The exact manifest and command-line name.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Inspire => "inspire",
-            Self::Local => local::LOCAL_PROVIDER,
-        }
-    }
-
-    /// Convert to the open-ended manifest provenance type.
-    pub fn name(self) -> ProviderName {
-        ProviderName::new(self.as_str()).expect("installed provider names are valid")
-    }
-
-    /// Whether this owner has a remote implementation.
-    pub const fn is_remote(self) -> bool {
-        matches!(self, Self::Inspire)
-    }
-}
-
-impl fmt::Display for Provider {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-impl FromStr for Provider {
-    type Err = Error;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "inspire" => Ok(Self::Inspire),
-            "local" => Ok(Self::Local),
-            _ => Err(Error::UnknownProvider {
-                name: value.to_owned(),
-            }),
-        }
-    }
-}
 
 /// A usage or construction failure at the closed facade.
 #[derive(Debug, ThisError)]
@@ -184,7 +131,7 @@ impl fmt::Debug for Providers {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Providers")
-            .field("installed", &Self::installed_names())
+            .field("installed", &Provider::ALL)
             .finish_non_exhaustive()
     }
 }
@@ -200,26 +147,11 @@ impl Providers {
         Self::builder().build()
     }
 
-    /// Names installed in this build, in stable display order.
-    pub fn installed_names() -> Vec<ProviderName> {
-        Provider::ALL.into_iter().map(Provider::name).collect()
-    }
-
     /// Parse an exact installed name.
     pub fn installed(value: &str) -> Result<Provider, Error> {
-        value.parse()
-    }
-
-    /// Whether an open-ended manifest owner is installed.
-    pub fn contains(&self, name: &ProviderName) -> bool {
-        Provider::ALL
-            .into_iter()
-            .any(|provider| provider.as_str() == name.as_str())
-    }
-
-    /// Convert a stored installed owner into closed selection.
-    pub fn owner(&self, name: &ProviderName) -> Option<Provider> {
-        name.as_str().parse().ok()
+        value.parse().map_err(|_| Error::UnknownProvider {
+            name: value.to_owned(),
+        })
     }
 
     /// Resolve all locators through exactly one selected remote provider.
@@ -280,12 +212,12 @@ impl Providers {
         options: RefreshOptions,
         metadata_items: Vec<RefreshItem>,
     ) -> Vec<RefreshedItem> {
-        let provider_name = owner.name();
+        let provider_name = owner;
         if !metadata_correlates(targets, &metadata_items) {
             return fail_targets(
                 targets,
                 ProviderError::contract(
-                    &provider_name,
+                    provider_name,
                     format!(
                         "returned {} refresh results for {} requests",
                         metadata_items.len(),
@@ -315,7 +247,7 @@ impl Providers {
                         results.insert(
                             target.bibi_id,
                             Err(ProviderError::contract(
-                                &provider_name,
+                                provider_name,
                                 format!(
                                     "reported provider id `{}` for requested id `{}`",
                                     metadata.provider_id, target.provider_id
@@ -357,7 +289,7 @@ impl Providers {
                             target.bibi_id,
                             Err(first
                                 .take()
-                                .unwrap_or_else(|| restated(&provider_name, &rendered, retrieval))),
+                                .unwrap_or_else(|| restated(provider_name, &rendered, retrieval))),
                         );
                     }
                 }
@@ -370,7 +302,7 @@ impl Providers {
                     for (target, _) in changed {
                         results.insert(
                             target.bibi_id,
-                            Err(ProviderError::contract(&provider_name, message.clone())),
+                            Err(ProviderError::contract(provider_name, message.clone())),
                         );
                     }
                 }
@@ -442,10 +374,9 @@ impl ProvidersBuilder {
 fn preflight(selected: Option<Provider>, locators: &[QualifiedLocator]) -> Result<Provider, Error> {
     let mut qualified = None;
     for locator in locators {
-        let Some(name) = &locator.provider else {
+        let Some(provider) = locator.provider else {
             continue;
         };
-        let provider = Provider::from_str(name.as_str())?;
         if let Some(requested) = selected
             && requested != provider
         {
@@ -473,7 +404,7 @@ fn validate_resolutions(
     expected: usize,
     result: Result<Vec<Resolution>, ProviderError>,
 ) -> Vec<ResolveItem> {
-    let provider_name = owner.name();
+    let provider_name = owner;
     match result {
         Err(error) => {
             let rendered = error.to_string();
@@ -484,7 +415,7 @@ fn validate_resolutions(
                     ResolveItem::Failed(
                         first
                             .take()
-                            .unwrap_or_else(|| restated(&provider_name, &rendered, retrieval)),
+                            .unwrap_or_else(|| restated(provider_name, &rendered, retrieval)),
                     )
                 })
                 .collect()
@@ -492,7 +423,7 @@ fn validate_resolutions(
         Ok(items) if items.len() != expected => (0..expected)
             .map(|_| {
                 ResolveItem::Failed(ProviderError::contract(
-                    &provider_name,
+                    provider_name,
                     format!(
                         "returned {} resolutions for {} locators",
                         items.len(),
@@ -516,10 +447,10 @@ fn validate_resolutions(
 }
 
 fn validate_record(owner: Provider, record: &ProviderOwned) -> Result<(), ProviderError> {
-    let expected = owner.name();
+    let expected = owner;
     if record.provenance.provider != expected {
         return Err(ProviderError::contract(
-            &expected,
+            expected,
             format!(
                 "returned a record owned by `{}`",
                 record.provenance.provider
@@ -528,13 +459,13 @@ fn validate_record(owner: Provider, record: &ProviderOwned) -> Result<(), Provid
     }
     if record.provenance.provider_id.is_none() {
         return Err(ProviderError::contract(
-            &expected,
+            expected,
             "returned a remote record without a provider id",
         ));
     }
     if record.description.title.trim().is_empty() {
         return Err(ProviderError::contract(
-            &expected,
+            expected,
             "returned a record without a title",
         ));
     }
@@ -579,7 +510,7 @@ fn build_update(
 ) -> Result<ProviderOwned, ProviderError> {
     if metadata.description.title.trim().is_empty() {
         return Err(ProviderError::contract(
-            &owner.name(),
+            owner,
             "returned refresh metadata without a title",
         ));
     }
@@ -592,11 +523,11 @@ fn build_update(
         metadata.identifiers.arxiv.as_ref(),
     );
     if let Some(message) = replacement(&doi, "DOI").or_else(|| replacement(&arxiv, "arXiv id")) {
-        return Err(ProviderError::contract(&owner.name(), message));
+        return Err(ProviderError::contract(owner, message));
     }
     Ok(ProviderOwned {
         provenance: Provenance::managed(
-            owner.name(),
+            owner,
             metadata.provider_id.clone(),
             metadata.revision.clone(),
         ),
@@ -630,7 +561,7 @@ fn replacement<T: fmt::Display>(
 }
 
 fn fail_targets(targets: &[RefreshTarget], error: ProviderError) -> Vec<RefreshedItem> {
-    let name = error.provider().clone();
+    let name = error.provider();
     let rendered = error.to_string();
     let retrieval = matches!(error, ProviderError::Retrieval(_));
     let mut first = Some(error);
@@ -640,21 +571,21 @@ fn fail_targets(targets: &[RefreshTarget], error: ProviderError) -> Vec<Refreshe
             bibi_id: target.bibi_id,
             result: Err(first
                 .take()
-                .unwrap_or_else(|| restated(&name, &rendered, retrieval))),
+                .unwrap_or_else(|| restated(name, &rendered, retrieval))),
         })
         .collect()
 }
 
-fn restated(provider: &ProviderName, message: &str, retrieval: bool) -> ProviderError {
+fn restated(provider: Provider, message: &str, retrieval: bool) -> ProviderError {
     if retrieval {
         RetrievalError::Transport {
-            provider: provider.clone(),
+            provider,
             message: message.to_owned(),
         }
         .into()
     } else {
         MappingError::ContractViolation {
-            provider: provider.clone(),
+            provider,
             message: message.to_owned(),
         }
         .into()

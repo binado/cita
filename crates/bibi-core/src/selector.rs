@@ -8,10 +8,10 @@
 use crate::{
     error::Error,
     identifiers::{ArxivId, Doi},
-    provider_name::{ProviderId, ProviderName},
+    provenance::{Provider, ProviderId},
 };
 use bibi_bibtex::CitationKey;
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 /// One way a selector string could denote a record.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -19,7 +19,7 @@ pub enum SelectorForm {
     /// An exact local citation key.
     Key(CitationKey),
     /// A qualified provider identity.
-    ProviderIdentity(ProviderName, ProviderId),
+    ProviderIdentity(Provider, ProviderId),
     /// A normalized DOI.
     Doi(Doi),
     /// A normalized arXiv identifier.
@@ -52,7 +52,7 @@ impl Selector {
         }
         if let Some((prefix, rest)) = value.split_once(':')
             && let (Ok(provider), Ok(id)) =
-                (ProviderName::new(prefix), ProviderId::new(rest.trim()))
+                (Provider::from_str(prefix), ProviderId::new(rest.trim()))
         {
             forms.push(SelectorForm::ProviderIdentity(provider, id));
         }
@@ -129,7 +129,7 @@ mod tests {
             [
                 SelectorForm::Key(CitationKey::new("inspire:1124337").unwrap()),
                 SelectorForm::ProviderIdentity(
-                    ProviderName::new("inspire").unwrap(),
+                    Provider::Inspire,
                     ProviderId::new("1124337").unwrap()
                 ),
             ]

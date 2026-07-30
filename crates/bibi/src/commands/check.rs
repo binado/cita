@@ -13,7 +13,7 @@ pub fn run(services: &Services, target: Option<&Path>, args: CheckArgs) -> Resul
         &manifest,
         &path,
         &RenderOptions {
-            filter: crate::commands::list::filter(services, &manifest, &args.filter)?,
+            filter: crate::commands::list::filter(services, &args.filter)?,
         },
     )?;
     match &outcome {

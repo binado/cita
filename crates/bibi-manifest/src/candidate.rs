@@ -65,7 +65,7 @@ impl Manifest {
                 SelectorForm::ProviderIdentity(provider, id) => self
                     .indexes
                     .by_provider_identity
-                    .get(&(provider.clone(), id.clone())),
+                    .get(&(*provider, id.clone())),
                 SelectorForm::Doi(doi) => self.indexes.by_doi.get(doi),
                 SelectorForm::Arxiv(arxiv) => self.indexes.by_arxiv.get(arxiv),
             };
@@ -224,7 +224,7 @@ fn duplicates(record: &Record, identifiers: &Identifiers, provenance: &Provenanc
 mod tests {
     use super::*;
     use crate::test_support::record;
-    use bibi_core::{ArxivId, Doi, ProviderName};
+    use bibi_core::{ArxivId, Doi, Provider};
 
     #[test]
     fn validation_sorts_records_by_local_key() {
@@ -328,7 +328,7 @@ mod tests {
             doi: None,
             arxiv: Some(ArxivId::new("1207.7214v3").unwrap()),
         };
-        let unrelated = Provenance::unmanaged(ProviderName::new("local").unwrap());
+        let unrelated = Provenance::unmanaged(Provider::Local);
         assert!(candidate.duplicate_of(&by_arxiv, &unrelated).is_some());
         let by_identity = record("Other", "inspire", "1124337");
         assert!(
@@ -346,10 +346,10 @@ mod tests {
     #[test]
     fn duplicate_detection_can_return_every_possible_target() {
         let mut by_doi = record("ByDoi", "local", "unused");
-        by_doi.provenance = Provenance::unmanaged(ProviderName::new("local").unwrap());
+        by_doi.provenance = Provenance::unmanaged(Provider::Local);
         by_doi.identifiers.doi = Some(Doi::new("10.1/shared").unwrap());
         let mut by_arxiv = record("ByArxiv", "local", "unused");
-        by_arxiv.provenance = Provenance::unmanaged(ProviderName::new("local").unwrap());
+        by_arxiv.provenance = Provenance::unmanaged(Provider::Local);
         by_arxiv.identifiers.arxiv = Some(ArxivId::new("1207.7214").unwrap());
         let mut candidate = ManifestCandidate::empty();
         candidate.insert(by_doi).unwrap();
@@ -359,7 +359,7 @@ mod tests {
             doi: Some(Doi::new("10.1/shared").unwrap()),
             arxiv: Some(ArxivId::new("1207.7214v2").unwrap()),
         };
-        let provenance = Provenance::unmanaged(ProviderName::new("other").unwrap());
+        let provenance = Provenance::unmanaged(Provider::Inspire);
         let matches = candidate
             .duplicates_of(&identifiers, &provenance)
             .map(|record| record.key.as_str())

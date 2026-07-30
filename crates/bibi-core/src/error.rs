@@ -1,4 +1,13 @@
+use crate::provenance::Provider;
 use thiserror::Error as ThisError;
+
+fn installed_providers() -> String {
+    Provider::ALL
+        .iter()
+        .map(|provider| provider.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 /// Every failure this crate can produce.
 #[derive(Clone, Debug, Eq, PartialEq, ThisError)]
@@ -9,9 +18,12 @@ pub enum Error {
         /// The rejected value.
         value: String,
     },
-    /// A provider name is outside the `[a-z][a-z0-9-]*` grammar.
-    #[error("invalid provider name `{value}`; expected lowercase ASCII matching [a-z][a-z0-9-]*")]
-    InvalidProviderName {
+    /// A provider name is not one this build carries.
+    #[error(
+        "unknown provider `{value}`; installed providers: {}",
+        installed_providers()
+    )]
+    UnknownProvider {
         /// The rejected value.
         value: String,
     },

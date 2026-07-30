@@ -10,7 +10,7 @@ use crate::{
     services::Services,
 };
 use bibi_bibtex::{CitationKey, parse_file};
-use bibi_core::{BibiId, ProviderName, ProviderOwned, QualifiedLocator, Record};
+use bibi_core::{BibiId, ProviderOwned, QualifiedLocator, Record};
 use bibi_manifest::{ManifestCandidate, ManifestStore};
 use bibi_provider::{Provider, ResolveItem};
 use std::{io::Read, path::PathBuf};
@@ -65,7 +65,7 @@ pub struct AddedRecord {
     /// The local citation key it is stored under.
     pub key: CitationKey,
     /// Which provider owns it.
-    pub provider: ProviderName,
+    pub provider: Provider,
     /// What happened to it.
     pub kind: AddKind,
 }
@@ -393,7 +393,7 @@ fn apply(
 ) -> Result<(), Error> {
     match placement {
         Placement::Insert => {
-            let provider = record.provenance.provider.clone();
+            let provider = record.provenance.provider;
             let stored = Record::new(BibiId::new(), key, record)?;
             let id = stored.id;
             candidate.insert(stored)?;
@@ -402,7 +402,7 @@ fn apply(
                 .push(added(candidate, &id, provider, AddKind::Added));
         }
         Placement::Overwrite(id) => {
-            let provider = record.provenance.provider.clone();
+            let provider = record.provenance.provider;
             candidate.replace(&id, record)?;
             items
                 .successes
@@ -431,7 +431,7 @@ fn apply(
 fn added(
     candidate: &ManifestCandidate,
     id: &BibiId,
-    provider: ProviderName,
+    provider: Provider,
     kind: AddKind,
 ) -> AddedRecord {
     let stored = candidate

@@ -8,7 +8,7 @@ use crate::{
     wire::LiteratureRecord,
 };
 use bibi_core::{
-    ArxivId, Doi, Locator, Provenance, ProviderId, ProviderName, ProviderOwned,
+    ArxivId, Doi, Locator, Provenance, Provider, ProviderId, ProviderOwned,
     provider::{
         BibtexEntry, MappingError, PayloadItem, PayloadRequest, ProviderError, ProviderMetadata,
         RefreshItem, RefreshRequest, RefreshState, RemoteProvider, Resolution, RetrievalError,
@@ -19,7 +19,7 @@ use std::collections::HashMap;
 /// The INSPIRE provider.
 #[derive(Debug)]
 pub struct InspireProvider {
-    name: ProviderName,
+    name: Provider,
     transport: Transport,
 }
 
@@ -120,8 +120,8 @@ impl InspireProvider {
 }
 
 impl RemoteProvider for InspireProvider {
-    fn name(&self) -> &ProviderName {
-        &self.name
+    fn name(&self) -> Provider {
+        self.name
     }
 
     /// Resolve locators in batches, matching results back by identifier.
@@ -197,7 +197,7 @@ impl RemoteProvider for InspireProvider {
                     })?;
                     Ok(Resolution::Found(Box::new(ProviderOwned {
                         provenance: Provenance::managed(
-                            self.name.clone(),
+                            self.name,
                             record.provider_id.clone(),
                             record.revision.clone(),
                         ),

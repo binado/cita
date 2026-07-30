@@ -4,19 +4,19 @@ use crate::{
     error::Error,
     id::BibiId,
     identifiers::{ArxivId, Doi},
-    provider_name::{ProviderId, ProviderName, Revision},
+    provenance::{Provider, ProviderId, Revision},
 };
 use bibi_bibtex::{BibtexEntry, CitationKey};
 
 /// Which provider owns a record's refresh lifecycle.
 ///
-/// Only the name is always present. A local record has neither a provider id
-/// nor a revision, and a provider that cannot supply a useful revision leaves
-/// it absent — which is a different statement from "nothing changed".
+/// Only the provider is always present. A local record has neither a provider
+/// id nor a revision, and a provider that cannot supply a useful revision
+/// leaves it absent — which is a different statement from "nothing changed".
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Provenance {
     /// The owning provider.
-    pub provider: ProviderName,
+    pub provider: Provider,
     /// The provider's stable handle for this record.
     pub provider_id: Option<ProviderId>,
     /// The provider's opaque change token.
@@ -26,7 +26,7 @@ pub struct Provenance {
 impl Provenance {
     /// A record owned by a provider that refreshes it.
     pub fn managed(
-        provider: ProviderName,
+        provider: Provider,
         provider_id: ProviderId,
         revision: Option<Revision>,
     ) -> Self {
@@ -38,7 +38,7 @@ impl Provenance {
     }
 
     /// A record whose provider holds no handle for it.
-    pub fn unmanaged(provider: ProviderName) -> Self {
+    pub fn unmanaged(provider: Provider) -> Self {
         Self {
             provider,
             provider_id: None,
@@ -47,8 +47,8 @@ impl Provenance {
     }
 
     /// The `(provider, id)` pair records are deduplicated by, when there is one.
-    pub fn identity(&self) -> Option<(&ProviderName, &ProviderId)> {
-        self.provider_id.as_ref().map(|id| (&self.provider, id))
+    pub fn identity(&self) -> Option<(Provider, &ProviderId)> {
+        self.provider_id.as_ref().map(|id| (self.provider, id))
     }
 }
 
@@ -222,7 +222,7 @@ mod tests {
     fn owned() -> ProviderOwned {
         ProviderOwned {
             provenance: Provenance::managed(
-                ProviderName::new("inspire").unwrap(),
+                Provider::Inspire,
                 ProviderId::new("1124337").unwrap(),
                 Some(Revision::new("2026-01-01").unwrap()),
             ),
@@ -271,7 +271,7 @@ mod tests {
     fn construction_refuses_a_revision_without_a_provider_id() {
         let dangling = ProviderOwned {
             provenance: Provenance {
-                provider: ProviderName::new("inspire").unwrap(),
+                provider: Provider::Inspire,
                 provider_id: None,
                 revision: Some(Revision::new("2026-01-01").unwrap()),
             },

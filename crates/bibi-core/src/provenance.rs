@@ -3,44 +3,56 @@
 use crate::error::Error;
 use std::{fmt, str::FromStr};
 
-/// The name of a provider, in the grammar `[a-z][a-z0-9-]*`.
+/// A provider this build carries.
 ///
-/// A name is how a manifest refers to a provider that a given build may not
-/// carry, so the grammar is fixed rather than derived from the installed set.
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ProviderName(String);
+/// Closed: the set is fixed at compile time, so a name outside it is rejected
+/// wherever it appears — a manifest field, a `--provider` flag, or a
+/// `<provider>:<id>` qualifier. Kept here rather than in `bibi-provider`
+/// because `bibi-manifest` and the locator parsers must name a provider
+/// without depending on a network crate.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum Provider {
+    /// INSPIRE-HEP, the remote provider.
+    #[default]
+    Inspire,
+    /// The local provider: user-supplied BibTeX, no refresh.
+    Local,
+}
 
-impl ProviderName {
-    /// Validate and construct a provider name.
-    pub fn new(value: impl Into<String>) -> Result<Self, Error> {
-        let value = value.into();
-        let mut bytes = value.bytes();
-        let valid = bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
-            && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
-        if valid {
-            Ok(Self(value))
-        } else {
-            Err(Error::InvalidProviderName { value })
+impl Provider {
+    /// Every provider this build carries.
+    pub const ALL: [Self; 2] = [Self::Inspire, Self::Local];
+
+    /// The stable name written into record provenance and manifests.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Inspire => "inspire",
+            Self::Local => "local",
         }
     }
 
-    /// Borrow the name.
-    pub fn as_str(&self) -> &str {
-        &self.0
+    /// Whether this provider has a remote implementation, i.e. supports refresh.
+    pub const fn is_remote(self) -> bool {
+        matches!(self, Self::Inspire)
     }
 }
 
-impl fmt::Display for ProviderName {
+impl fmt::Display for Provider {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        formatter.write_str(self.as_str())
     }
 }
 
-impl FromStr for ProviderName {
+impl FromStr for Provider {
     type Err = Error;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::new(value)
+        Self::ALL
+            .into_iter()
+            .find(|provider| provider.as_str() == value)
+            .ok_or_else(|| Error::UnknownProvider {
+                value: value.to_owned(),
+            })
     }
 }
 
@@ -102,14 +114,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_names_accept_the_documented_grammar() {
-        for value in ["inspire", "ads", "local", "doi-registry", "a1"] {
-            assert!(ProviderName::new(value).is_ok(), "{value}");
+    fn provider_parses_only_the_installed_set() {
+        assert_eq!("inspire".parse(), Ok(Provider::Inspire));
+        assert_eq!("local".parse(), Ok(Provider::Local));
+        for value in ["", "INSPIRE", "ads", "inspire ", " local"] {
+            assert!(value.parse::<Provider>().is_err(), "{value}");
         }
-        for value in [
-            "", "INSPIRE", "1inspire", "-inspire", "in spire", "in_spire", "inspiré",
-        ] {
-            assert!(ProviderName::new(value).is_err(), "{value}");
+    }
+
+    #[test]
+    fn provider_display_round_trips_through_from_str() {
+        for provider in Provider::ALL {
+            assert_eq!(provider.to_string().parse::<Provider>().unwrap(), provider);
         }
     }
 

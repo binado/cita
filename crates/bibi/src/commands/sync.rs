@@ -32,11 +32,6 @@ fn present(report: &SyncReport, dry_run: bool) -> bool {
     for absence in &report.absences {
         output::warn(format!("`{}`: {}", absence.key, absence.reason));
     }
-    for (provider, count) in &report.unavailable {
-        output::warn(format!(
-            "{count} record(s) are owned by `{provider}`, which this build does not carry"
-        ));
-    }
     // An identifier addition is rare and consequential, so each one is named.
     for addition in &report.identifier_additions {
         output::note(format!(

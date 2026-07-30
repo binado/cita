@@ -281,8 +281,8 @@ fn fields_are_tab_separated_and_an_absent_value_keeps_its_column() {
 /// A manifest naming a provider this build does not carry.
 ///
 /// Hand-written rather than produced by `add`, because there is no way to make
-/// this build create an `ads` record — which is the point: a manifest written
-/// by a later build has to remain readable by this one.
+/// this build create an `ads` record — which is the point: the provider set is
+/// closed, so a manifest naming one outside it can no longer be read at all.
 const FOREIGN: &str = "schema = 1\n\n\
     [[records]]\n\
     id = \"7641d991-6a03-4795-b302-82b2c0cb3adc\"\n\
@@ -305,7 +305,7 @@ fn an_unknown_provider_names_the_ones_that_would_have_worked() {
     assert_eq!(code(&shouted), 1);
     assert_eq!(
         stderr(&shouted).trim_end(),
-        "bibi: provider `TEST` not found. Known providers: inspire, local"
+        "bibi: provider `TEST` not found. Installed providers: inspire, local"
     );
     assert!(!stderr(&shouted).contains("[a-z]"), "no regex is shown");
 
@@ -322,29 +322,23 @@ fn an_unknown_provider_names_the_ones_that_would_have_worked() {
 }
 
 #[test]
-fn a_provider_only_the_manifest_knows_is_still_filterable() {
+fn a_manifest_naming_an_uninstalled_provider_is_rejected_at_load() {
     let (_directory, path) = project();
     std::fs::write(path.join("bibi.toml"), FOREIGN).unwrap();
 
-    // This build carries no `ads` provider and cannot refresh the record, but
-    // the record is here, so filtering to it is a question with an answer.
+    // The provider set is closed, so an unknown name fails to decode rather
+    // than producing a manifest that is filterable but not syncable. Any
+    // command that has to load the manifest hits the same rejection.
     let listed = bibi(&path, &["list", "--provider", "ads", "--fields", "key"]);
-    assert_eq!(code(&listed), 0);
-    assert_eq!(stdout(&listed), "Someone:2030abc\n");
+    assert_eq!(code(&listed), 1);
+    assert!(stdout(&listed).is_empty());
+    assert!(stderr(&listed).contains("record `Someone:2030abc`"));
+    assert!(stderr(&listed).contains("invalid `provider` field"));
 
-    // Naming it where it must actually be called still fails, and says why.
-    let synced = bibi(&path, &["sync", "--provider", "ads"]);
+    let synced = bibi(&path, &["sync"]);
     assert_eq!(code(&synced), 1);
-    assert_eq!(
-        stderr(&synced).trim_end(),
-        "bibi: provider `ads` not found. Installed providers: inspire, local"
-    );
-
-    // `add` refuses before it resolves anything: no base URL is configured
-    // here, so reaching the network at all would hang or fail differently.
-    let added = bibi(&path, &["add", "--provider", "ads", "1207.7214"]);
-    assert_eq!(code(&added), 1);
-    assert!(stderr(&added).contains("Installed providers: inspire, local"));
+    assert!(stderr(&synced).contains("record `Someone:2030abc`"));
+    assert!(stderr(&synced).contains("invalid `provider` field"));
 }
 
 #[test]

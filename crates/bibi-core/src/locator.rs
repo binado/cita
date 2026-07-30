@@ -8,7 +8,7 @@
 use crate::{
     error::Error,
     identifiers::{ArxivId, Doi},
-    provider_name::ProviderName,
+    provenance::Provider,
 };
 use percent_encoding::percent_decode_str;
 use std::{borrow::Cow, fmt, str::FromStr};
@@ -43,7 +43,7 @@ impl fmt::Display for Locator {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QualifiedLocator {
     /// The provider named by a `<provider>:` qualifier.
-    pub provider: Option<ProviderName>,
+    pub provider: Option<Provider>,
     /// What to resolve.
     pub locator: Locator,
 }
@@ -91,9 +91,11 @@ impl FromStr for QualifiedLocator {
                 locator,
             });
         }
-        // A `<name>:<rest>` prefix in the provider-name grammar qualifies the
-        // rest as that provider's own id. Installed-provider validation is the
-        // facade's, so an unknown name parses and fails later, by name.
+        // A `<name>:<rest>` prefix naming an installed provider exactly
+        // qualifies the rest as that provider's own id. A name outside the
+        // installed set falls through instead of qualifying, so a texkey like
+        // `Aad:2012tfa` is never truncated to id `2012tfa` under a provider
+        // named `Aad`.
         // `//` after the colon is a URL authority, not a provider id: without
         // this guard `https://inspirehep.net/...` parses as a provider named
         // `https`, and a URL whose host bibi does not know must instead reach
@@ -101,7 +103,7 @@ impl FromStr for QualifiedLocator {
         if let Some((prefix, rest)) = value.split_once(':')
             && !rest.trim().is_empty()
             && !rest.starts_with("//")
-            && let Ok(provider) = ProviderName::new(prefix)
+            && let Ok(provider) = Provider::from_str(prefix)
         {
             return Ok(Self {
                 provider: Some(provider),
@@ -211,16 +213,16 @@ mod tests {
     #[test]
     fn a_provider_qualifier_carries_the_rest_verbatim() {
         let qualified = parse("inspire:1124337");
-        assert_eq!(
-            qualified.provider,
-            Some(ProviderName::new("inspire").unwrap())
-        );
+        assert_eq!(qualified.provider, Some(Provider::Inspire));
         assert_eq!(qualified.locator, Locator::ProviderId("1124337".into()));
         assert!(!qualified.needs_provider_recognition());
-        // An uninstalled provider still parses; naming it is the facade's job.
+        // A name outside the installed set does not qualify: it falls through
+        // whole, for the selected provider to interpret in its own syntax.
+        let unqualified = parse("ads:2024ApJ...900..1X");
+        assert_eq!(unqualified.provider, None);
         assert_eq!(
-            parse("ads:2024ApJ...900..1X").provider,
-            Some(ProviderName::new("ads").unwrap())
+            unqualified.locator,
+            Locator::ProviderId("ads:2024ApJ...900..1X".into())
         );
     }
 

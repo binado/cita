@@ -4,7 +4,7 @@
 //! construction, and conditional-refresh policy live above this module.
 
 use crate::{
-    BibiId, Description, Identifiers, Locator, ProviderId, ProviderName, ProviderOwned, Revision,
+    BibiId, Description, Identifiers, Locator, Provider, ProviderId, ProviderOwned, Revision,
 };
 pub use bibi_bibtex::{BibtexEntry, parse_file};
 use std::future::Future;
@@ -17,7 +17,7 @@ use thiserror::Error as ThisError;
 /// `Send`; the contract is deliberately not object-safe.
 pub trait RemoteProvider: Send + Sync {
     /// The stable name written into record provenance.
-    fn name(&self) -> &ProviderName;
+    fn name(&self) -> Provider;
 
     /// Resolve locators, returning exactly one positional result per locator.
     fn resolve(
@@ -129,7 +129,7 @@ pub enum RetrievalError {
     #[error("{provider}: request failed: {message}")]
     Transport {
         /// The provider that failed.
-        provider: ProviderName,
+        provider: Provider,
         /// What went wrong.
         message: String,
     },
@@ -137,7 +137,7 @@ pub enum RetrievalError {
     #[error("{provider}: returned HTTP {status}: {body}")]
     Status {
         /// The provider that failed.
-        provider: ProviderName,
+        provider: Provider,
         /// HTTP status code.
         status: u16,
         /// Response body retained for diagnostics.
@@ -147,7 +147,7 @@ pub enum RetrievalError {
     #[error("{provider}: authentication failed: {message}")]
     Authentication {
         /// The provider that failed.
-        provider: ProviderName,
+        provider: Provider,
         /// What went wrong.
         message: String,
     },
@@ -155,7 +155,7 @@ pub enum RetrievalError {
     #[error("{provider}: rate limit not cleared after {attempts} retries")]
     RateLimited {
         /// The provider that failed.
-        provider: ProviderName,
+        provider: Provider,
         /// Number of retries attempted.
         attempts: usize,
     },
@@ -163,7 +163,7 @@ pub enum RetrievalError {
     #[error("{provider}: {message}")]
     Configuration {
         /// The provider that failed.
-        provider: ProviderName,
+        provider: Provider,
         /// What is missing or wrong.
         message: String,
     },
@@ -176,7 +176,7 @@ pub enum MappingError {
     #[error("{provider}: response is missing `{field}`")]
     MissingField {
         /// The provider that failed.
-        provider: ProviderName,
+        provider: Provider,
         /// The absent field.
         field: &'static str,
     },
@@ -184,7 +184,7 @@ pub enum MappingError {
     #[error("{provider}: `{value}` is not a valid {kind}")]
     InvalidValue {
         /// The provider that failed.
-        provider: ProviderName,
+        provider: Provider,
         /// What the value should have been.
         kind: &'static str,
         /// The offending value.
@@ -194,7 +194,7 @@ pub enum MappingError {
     #[error("{provider}: returned unusable BibTeX: {message}")]
     InvalidPayload {
         /// The provider that failed.
-        provider: ProviderName,
+        provider: Provider,
         /// What was wrong.
         message: String,
     },
@@ -202,7 +202,7 @@ pub enum MappingError {
     #[error("{provider}: could not pair the response with the request: {message}")]
     AmbiguousJoin {
         /// The provider that failed.
-        provider: ProviderName,
+        provider: Provider,
         /// What could not be paired.
         message: String,
     },
@@ -210,7 +210,7 @@ pub enum MappingError {
     #[error("{provider}: violated the provider contract: {message}")]
     ContractViolation {
         /// The provider that failed.
-        provider: ProviderName,
+        provider: Provider,
         /// Which promise was broken.
         message: String,
     },
@@ -218,29 +218,29 @@ pub enum MappingError {
 
 impl ProviderError {
     /// The provider that produced this failure.
-    pub fn provider(&self) -> &ProviderName {
+    pub fn provider(&self) -> Provider {
         match self {
             Self::Retrieval(error) => match error {
                 RetrievalError::Transport { provider, .. }
                 | RetrievalError::Status { provider, .. }
                 | RetrievalError::Authentication { provider, .. }
                 | RetrievalError::RateLimited { provider, .. }
-                | RetrievalError::Configuration { provider, .. } => provider,
+                | RetrievalError::Configuration { provider, .. } => *provider,
             },
             Self::Mapping(error) => match error {
                 MappingError::MissingField { provider, .. }
                 | MappingError::InvalidValue { provider, .. }
                 | MappingError::InvalidPayload { provider, .. }
                 | MappingError::AmbiguousJoin { provider, .. }
-                | MappingError::ContractViolation { provider, .. } => provider,
+                | MappingError::ContractViolation { provider, .. } => *provider,
             },
         }
     }
 
     /// Construct a contract violation attributed to `provider`.
-    pub fn contract(provider: &ProviderName, message: impl Into<String>) -> Self {
+    pub fn contract(provider: Provider, message: impl Into<String>) -> Self {
         Self::Mapping(MappingError::ContractViolation {
-            provider: provider.clone(),
+            provider,
             message: message.into(),
         })
     }

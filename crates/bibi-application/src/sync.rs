@@ -7,9 +7,7 @@
 
 use crate::{error::Error, reports::ItemFailure, services::Services};
 use bibi_bibtex::CitationKey;
-use bibi_core::{
-    BibiId, Description, IdentifierChange, Identifiers, ProviderId, ProviderName, Record, Revision,
-};
+use bibi_core::{BibiId, Description, IdentifierChange, Identifiers, ProviderId, Record, Revision};
 use bibi_manifest::{ManifestCandidate, ManifestStore};
 use bibi_provider::{Provider, RefreshOptions, RefreshOutcome, RefreshTarget};
 use std::collections::BTreeMap;
@@ -99,8 +97,6 @@ pub struct SyncReport {
     pub absences: Vec<SyncAbsence>,
     /// Records no provider will ever refresh.
     pub unrefreshable: usize,
-    /// Records owned by providers this build does not carry.
-    pub unavailable: BTreeMap<ProviderName, usize>,
     /// Records that could not be refreshed.
     pub failures: Vec<ItemFailure>,
     /// Whether the manifest was written.
@@ -124,12 +120,11 @@ pub async fn sync(
     let mut candidate = manifest.to_candidate();
     let mut report = SyncReport::default();
 
-    let mut groups: BTreeMap<ProviderName, Vec<Managed>> = BTreeMap::new();
+    let mut groups: BTreeMap<Provider, Vec<Managed>> = BTreeMap::new();
     for record in manifest.records() {
         if request
             .provider
-            .as_ref()
-            .is_some_and(|name| record.provenance.provider.as_str() != name.as_str())
+            .is_some_and(|provider| record.provenance.provider != provider)
         {
             continue;
         }
@@ -139,28 +134,23 @@ pub async fn sync(
             // to send. This is a property of the record, not a test for any
             // particular provider's name.
             None => report.unrefreshable += 1,
-            Some(provider_id) => groups
-                .entry(record.provenance.provider.clone())
-                .or_default()
-                .push(Managed {
-                    id: record.id,
-                    key: record.key.clone(),
-                    provider_id: provider_id.clone(),
-                    revision: record.provenance.revision.clone(),
-                    identifiers: record.identifiers.clone(),
-                    description: record.description.clone(),
-                }),
+            Some(provider_id) => {
+                groups
+                    .entry(record.provenance.provider)
+                    .or_default()
+                    .push(Managed {
+                        id: record.id,
+                        key: record.key.clone(),
+                        provider_id: provider_id.clone(),
+                        revision: record.provenance.revision.clone(),
+                        identifiers: record.identifiers.clone(),
+                        description: record.description.clone(),
+                    })
+            }
         }
     }
 
-    for (name, records) in groups {
-        let Some(owner) = services.providers.owner(&name) else {
-            // A manifest may legitimately name a provider this build lacks.
-            // Refusing to refresh anything on that account would make the file
-            // unmaintainable by the build that can still maintain most of it.
-            report.unavailable.insert(name, records.len());
-            continue;
-        };
+    for (owner, records) in groups {
         if !owner.is_remote() {
             report.unrefreshable += records.len();
             continue;

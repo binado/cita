@@ -1,16 +1,12 @@
 //! Failures, stamped with the provider that produced them.
 
 use bibi_core::{
-    ProviderName,
+    Provider,
     provider::{MappingError, RetrievalError},
 };
 
-/// The name INSPIRE records are stored under.
-pub const INSPIRE_PROVIDER: &str = "inspire";
-
-/// The provider name, constructed once.
-pub(crate) fn provider() -> ProviderName {
-    ProviderName::new(INSPIRE_PROVIDER).expect("the INSPIRE provider name is valid")
+pub(crate) fn provider() -> Provider {
+    Provider::Inspire
 }
 
 pub(crate) fn transport(message: impl std::fmt::Display) -> RetrievalError {

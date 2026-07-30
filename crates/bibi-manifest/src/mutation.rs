@@ -111,7 +111,7 @@ fn describe(record: &Record) -> String {
 mod tests {
     use super::*;
     use crate::test_support::{entry, record};
-    use bibi_core::{ArxivId, Description, Identifiers, Provenance, ProviderName};
+    use bibi_core::{ArxivId, Description, Identifiers, Provenance, Provider};
 
     fn candidate() -> ManifestCandidate {
         let mut candidate = ManifestCandidate::empty();
@@ -165,7 +165,7 @@ mod tests {
         let mut candidate = candidate();
         let target = candidate.records()[0].id;
         let mut migrated = record("Ignored", "local", "9").provider_owned();
-        migrated.provenance = Provenance::unmanaged(ProviderName::new("local").unwrap());
+        migrated.provenance = Provenance::unmanaged(Provider::Local);
         migrated.payload = entry("@misc{Whatever,title={Migrated}}");
         migrated.description = Description {
             title: "Migrated".into(),

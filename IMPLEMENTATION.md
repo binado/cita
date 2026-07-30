@@ -184,7 +184,7 @@ pub struct Record {
 }
 
 pub struct Provenance {
-    pub provider: ProviderName,
+    pub provider: Provider,
     pub provider_id: Option<ProviderId>,
     pub revision: Option<Revision>,
 }
@@ -210,8 +210,10 @@ normalization or validation once:
 
 - `BibiId` wraps `uuid::Uuid` and serializes in canonical lowercase hyphenated
   form.
-- `ProviderName` accepts lowercase ASCII provider names matching
-  `[a-z][a-z0-9-]*`.
+- `Provider` is a closed enum, `Provider::{Inspire, Local}`, not a validated
+  string: the set this build carries is fixed at compile time, so a name
+  outside it is rejected wherever it appears — a manifest field, a
+  `--provider` flag, or a `<provider>:` locator qualifier.
 - `ProviderId` and `Revision` are non-empty opaque strings. They are never
   parsed as numbers by generic code.
 - `Doi` is trimmed and ASCII-lowercased.
@@ -452,7 +454,7 @@ Parse command-line input into:
 
 ```rust
 pub struct QualifiedLocator {
-    pub provider: Option<ProviderName>,
+    pub provider: Option<Provider>,
     pub locator: Locator,
 }
 
@@ -2095,8 +2097,9 @@ intentional, and the full CI matrix passes.
 - add `bibi-ads`, credential loading, captured mapping fixtures, and hermetic
   transport tests;
 - select the DOI registry for software/datasets based on returned BibTeX quality;
-- add its provider crate and place both providers between INSPIRE and local in
-  registry order;
+- add its provider crate, add a matching variant to `bibi-core`'s closed
+  `Provider` enum, and place both providers between INSPIRE and local in
+  roster order;
 - add cross-provider absence/error and explicit-migration tests.
 
 This milestone completes the intended first-three external provider roster. It

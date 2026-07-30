@@ -5,8 +5,7 @@ use super::{
     RefreshRequest, RefreshState, RemoteProvider, Resolution, RetrievalError,
 };
 use crate::{
-    Description, Identifiers, Locator, Provenance, ProviderId, ProviderName, ProviderOwned,
-    Revision,
+    Description, Identifiers, Locator, Provenance, Provider, ProviderId, ProviderOwned, Revision,
 };
 use bibi_bibtex::BibtexEntry;
 use std::{collections::HashMap, future::Future, sync::Mutex};
@@ -31,7 +30,7 @@ enum Answer {
 
 /// A scriptable remote provider.
 pub struct FakeProvider {
-    name: ProviderName,
+    name: Provider,
     answer: Answer,
     unsupported: Vec<String>,
     metadata: HashMap<ProviderId, RefreshState>,
@@ -45,7 +44,7 @@ impl FakeProvider {
     /// Construct an empty fake.
     pub fn new(name: &str) -> Self {
         Self {
-            name: ProviderName::new(name).expect("test provider name"),
+            name: name.parse().expect("test provider name"),
             answer: Answer::Records(HashMap::new()),
             unsupported: Vec::new(),
             metadata: HashMap::new(),
@@ -123,7 +122,7 @@ impl FakeProvider {
 
     fn retrieval(&self, message: &str) -> ProviderError {
         RetrievalError::Transport {
-            provider: self.name.clone(),
+            provider: self.name,
             message: message.to_owned(),
         }
         .into()
@@ -131,7 +130,7 @@ impl FakeProvider {
 
     fn mapping(&self, message: &str) -> ProviderError {
         MappingError::AmbiguousJoin {
-            provider: self.name.clone(),
+            provider: self.name,
             message: message.to_owned(),
         }
         .into()
@@ -139,8 +138,8 @@ impl FakeProvider {
 }
 
 impl RemoteProvider for FakeProvider {
-    fn name(&self) -> &ProviderName {
-        &self.name
+    fn name(&self) -> Provider {
+        self.name
     }
 
     fn resolve(
@@ -249,7 +248,7 @@ pub fn provider_record(
 ) -> ProviderOwned {
     ProviderOwned {
         provenance: Provenance::managed(
-            ProviderName::new(provider).expect("test provider name"),
+            provider.parse().expect("test provider name"),
             ProviderId::new(provider_id).expect("test id"),
             Some(Revision::new("r1").expect("test revision")),
         ),
@@ -288,8 +287,8 @@ pub fn provider_metadata(
 
 /// Verify the shape, identity, provenance, and correlation promises.
 pub async fn verify_contract<P: RemoteProvider>(provider: &P, locators: &[Locator]) {
-    let name = provider.name().clone();
-    assert_eq!(*provider.name(), name, "provider name must be stable");
+    let name = provider.name();
+    assert_eq!(provider.name(), name, "provider name must be stable");
 
     let resolutions = provider
         .resolve(locators)

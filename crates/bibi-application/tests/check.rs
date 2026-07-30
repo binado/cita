@@ -9,7 +9,7 @@ use bibi_application::{
     AddRequest, CheckOutcome, RenderOptions, Services, SyncRequest, add_locators, check,
     domain::Manifest, domain::ManifestStore, render_manifest, sync,
 };
-use bibi_core::{ProviderName, RecordFilter};
+use bibi_core::RecordFilter;
 use bibi_provider::{
     Provider,
     testing::{FakeProvider, RefreshState, payload, provider_metadata, provider_record, providers},
@@ -212,7 +212,7 @@ async fn check_accepts_the_filters_the_rendering_was_made_with() {
     let project = project_with_two_records().await;
     add_local_record(&project).await;
     let filter = RecordFilter {
-        provider: Some(ProviderName::new("inspire").unwrap()),
+        provider: Some(Provider::Inspire),
         ..RecordFilter::default()
     };
     let subset = project.path("inspire.bib");

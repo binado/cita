@@ -31,7 +31,6 @@ pub mod testing;
 pub mod transport;
 
 pub use batching::{MAX_BATCH_RECORDS, MAX_ENCODED_QUERY};
-pub use error::INSPIRE_PROVIDER;
 pub use join::DeclaredKeys;
 pub use mapping::MappedRecord;
 pub use provider::InspireProvider;

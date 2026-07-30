@@ -6,7 +6,7 @@
 
 use crate::error::Error;
 use bibi_bibtex::CitationKey;
-use bibi_core::{ArxivId, BibiId, Doi, ProviderId, ProviderName, Record};
+use bibi_core::{ArxivId, BibiId, Doi, Provider, ProviderId, Record};
 use std::collections::HashMap;
 
 /// Position lookups for one validated record list.
@@ -14,7 +14,7 @@ use std::collections::HashMap;
 pub(crate) struct Indexes {
     pub(crate) by_id: HashMap<BibiId, usize>,
     pub(crate) by_key: HashMap<CitationKey, usize>,
-    pub(crate) by_provider_identity: HashMap<(ProviderName, ProviderId), usize>,
+    pub(crate) by_provider_identity: HashMap<(Provider, ProviderId), usize>,
     pub(crate) by_doi: HashMap<Doi, usize>,
     pub(crate) by_arxiv: HashMap<ArxivId, usize>,
 }
@@ -43,7 +43,7 @@ impl Indexes {
             if let Some((provider, id)) = record.provenance.identity() {
                 insert(
                     &mut indexes.by_provider_identity,
-                    (provider.clone(), id.clone()),
+                    (provider, id.clone()),
                     position,
                     records,
                     "provider identity",

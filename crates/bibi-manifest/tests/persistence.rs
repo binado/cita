@@ -2,7 +2,7 @@
 
 use bibi_bibtex::{BibtexEntry, CitationKey};
 use bibi_core::{
-    ArxivId, BibiId, Description, Doi, Identifiers, Provenance, ProviderId, ProviderName,
+    ArxivId, BibiId, Description, Doi, Identifiers, Provenance, Provider, ProviderId,
     ProviderOwned, Record, Revision,
 };
 use bibi_manifest::{ManifestCandidate, ManifestStore};
@@ -15,7 +15,7 @@ fn managed(id: &str, key: &str, provider_id: &str, payload: &str, title: &str) -
         CitationKey::new(key).unwrap(),
         ProviderOwned {
             provenance: Provenance::managed(
-                ProviderName::new("inspire").unwrap(),
+                Provider::Inspire,
                 ProviderId::new(provider_id).unwrap(),
                 Some(Revision::new("2026-07-27T12:34:56+00:00").unwrap()),
             ),
@@ -40,7 +40,7 @@ fn local(id: &str, key: &str, payload: &str, title: &str) -> Record {
         id.parse::<BibiId>().unwrap(),
         CitationKey::new(key).unwrap(),
         ProviderOwned {
-            provenance: Provenance::unmanaged(ProviderName::new("local").unwrap()),
+            provenance: Provenance::unmanaged(Provider::Local),
             identifiers: Identifiers::default(),
             payload: BibtexEntry::parse_one(payload.to_owned()).unwrap(),
             description: Description {
