@@ -117,12 +117,6 @@ async fn an_explicit_key_overrides_the_adopted_one() {
     )
     .await;
     assert_eq!(report.items.successes[0].key.as_str(), "Higgs");
-    // The payload keeps the provider's key; only the rendering adopts the local one.
-    assert!(
-        report.items.successes[0]
-            .bibtex
-            .starts_with("@article{Higgs,")
-    );
     assert!(project.manifest().contains("@article{Aad:2012tfa,"));
 }
 
@@ -144,7 +138,7 @@ async fn an_explicit_key_accepts_exactly_one_locator() {
 }
 
 #[tokio::test]
-async fn a_duplicate_is_skipped_and_still_emits_its_bibtex() {
+async fn a_duplicate_is_skipped_and_still_reports_its_key() {
     let project = Project::new(network());
     add(&project, &["1207.7214"], AddRequest::default()).await;
     let report = add(&project, &["1207.7214"], AddRequest::default()).await;
@@ -153,12 +147,9 @@ async fn a_duplicate_is_skipped_and_still_emits_its_bibtex() {
     assert_eq!(report.items.skipped.len(), 1);
     assert!(!report.items.has_failures(), "a skip is not a failure");
     assert!(!report.committed, "nothing changed, so nothing was written");
-    assert!(
-        report.items.skipped[0]
-            .bibtex
-            .as_ref()
-            .unwrap()
-            .contains("@article{Aad:2012tfa,")
+    assert_eq!(
+        report.items.skipped[0].key.as_ref().unwrap().as_str(),
+        "Aad:2012tfa"
     );
 }
 
@@ -687,7 +678,7 @@ async fn removing_emits_what_it_deleted_and_renaming_preserves_the_payload() {
 
     let report = remove(&project.store(), &["Higgs".to_owned()], false).unwrap();
     assert_eq!(report.items.successes.len(), 1);
-    assert!(report.items.successes[0].bibtex.contains("@article{Higgs,"));
+    assert_eq!(report.items.successes[0].key.as_str(), "Higgs");
     assert!(list(&project.loaded(), &ListRequest::default()).is_empty());
 }
 
@@ -702,7 +693,7 @@ async fn removing_the_same_record_twice_is_an_idempotent_skip() {
     assert_eq!(report.items.skipped.len(), 1);
     assert!(report.items.failures.is_empty());
     assert!(report.committed);
-    assert!(report.items.skipped[0].bibtex.is_none());
+    assert!(report.items.skipped[0].key.is_none());
 
     add(&project, &["1207.7214"], AddRequest::default()).await;
     let dry_run = remove(&project.store(), &selectors, true).unwrap();

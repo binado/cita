@@ -90,14 +90,14 @@ fn a_read_command_without_a_manifest_fails_and_creates_nothing() {
 }
 
 #[test]
-fn adding_a_file_writes_bibtex_to_stdout_and_a_summary_to_stderr() {
+fn adding_a_file_writes_keys_to_stdout_and_a_summary_to_stderr() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
     let output = bibi(&path, &["add", "-f", "library.bib"]);
 
     assert_eq!(code(&output), 0);
-    // stdout is the entries themselves, in a form another tool can consume.
-    assert_eq!(stdout(&output), LIBRARY.trim_end().to_owned() + "\n");
+    // stdout is one local key per line, so the output can be piped into other commands.
+    assert_eq!(stdout(&output), "astropy:2022\nnotes:2026\n");
     assert!(stderr(&output).contains("added 2"));
     assert!(path.join("bibi.toml").exists());
 }
@@ -169,7 +169,7 @@ fn piped_remove_and_show_use_trimmed_nonblank_selectors() {
 
     let removed = bibi_with_stdin(&path, &["remove"], " notes:2026\n\nastropy:2022 ");
     assert_eq!(code(&removed), 0, "{}", stderr(&removed));
-    assert_eq!(stdout(&removed).matches('@').count(), 2);
+    assert_eq!(stdout(&removed), "notes:2026\nastropy:2022\n");
 }
 
 #[test]
@@ -205,7 +205,7 @@ fn adding_the_same_file_twice_skips_and_still_exits_zero() {
 
     // The requested end state already holds, so a build script may proceed.
     assert_eq!(code(&output), 0);
-    assert_eq!(stdout(&output), LIBRARY.trim_end().to_owned() + "\n");
+    assert_eq!(stdout(&output), "astropy:2022\nnotes:2026\n");
     assert!(stderr(&output).contains("skipped"));
 }
 
@@ -386,7 +386,7 @@ fn show_emits_one_entry_under_its_local_key() {
 }
 
 #[test]
-fn rename_rewrites_only_the_key_and_remove_emits_what_it_deleted() {
+fn rename_rewrites_only_the_key_and_remove_emits_its_key() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
     bibi(&path, &["add", "-f", "library.bib"]);
@@ -398,7 +398,7 @@ fn rename_rewrites_only_the_key_and_remove_emits_what_it_deleted() {
 
     let removed = bibi(&path, &["remove", "Roe:2026"]);
     assert_eq!(code(&removed), 0);
-    assert!(stdout(&removed).contains("@unpublished{Roe:2026,"));
+    assert_eq!(stdout(&removed), "Roe:2026\n");
     assert_eq!(
         stdout(&bibi(&path, &["list", "--fields", "key"])),
         "astropy:2022\n"
@@ -413,10 +413,7 @@ fn removing_the_same_record_twice_is_a_successful_skip() {
 
     let removed = bibi(&path, &["remove", "notes:2026", "notes:2026"]);
     assert_eq!(code(&removed), 0);
-    assert_eq!(
-        stdout(&removed).matches("@unpublished{notes:2026,").count(),
-        1
-    );
+    assert_eq!(stdout(&removed), "notes:2026\n");
     assert!(stderr(&removed).contains("already removed"));
     assert_eq!(
         stdout(&bibi(&path, &["list", "--fields", "key"])),
@@ -433,7 +430,7 @@ fn a_dry_run_changes_nothing_on_disk() {
 
     let output = bibi(&path, &["remove", "astropy:2022", "--dry-run"]);
     assert_eq!(code(&output), 0);
-    assert!(stdout(&output).contains("@software{astropy:2022,"));
+    assert_eq!(stdout(&output), "astropy:2022\n");
     assert!(stderr(&output).contains("dry run"));
     assert_eq!(
         std::fs::read_to_string(path.join("bibi.toml")).unwrap(),
@@ -520,7 +517,7 @@ fn adding_a_locator_adopts_the_providers_texkey_and_stores_its_bibtex() {
 
     let output = bibi_against(&path, &server, &["add", "1207.7214"]);
     assert_eq!(code(&output), 0);
-    assert!(stdout(&output).starts_with("@article{Aad:2012tfa,"));
+    assert_eq!(stdout(&output), "Aad:2012tfa\n");
 
     // The record is provider-owned, with a handle and a token to refresh by.
     let json = bibi(&path, &["list", "--format", "json"]);
@@ -545,7 +542,7 @@ fn piped_add_reads_newline_delimited_locators() {
 
     let output = bibi_against_with_stdin(&path, &server, &["add"], "\n 1207.7214 \n\n");
     assert_eq!(code(&output), 0, "{}", stderr(&output));
-    assert!(stdout(&output).starts_with("@article{Aad:2012tfa,"));
+    assert_eq!(stdout(&output), "Aad:2012tfa\n");
     assert!(path.join("bibi.toml").exists());
 }
 
@@ -580,8 +577,7 @@ fn an_imported_entry_a_provider_holds_is_upgraded_but_keeps_its_key() {
     let output = bibi_against(&path, &server, &["add", "-f", "colleague.bib"]);
     assert_eq!(code(&output), 0);
     // The colleague's citation key survives; the provider's bytes replace theirs.
-    assert!(stdout(&output).contains("@article{TheirKey:2012,"));
-    assert!(stdout(&output).contains("Provider formatting"));
+    assert_eq!(stdout(&output), "TheirKey:2012\n");
     let manifest = std::fs::read_to_string(path.join("bibi.toml")).unwrap();
     assert!(manifest.contains("provider = \"inspire\""));
     assert!(manifest.contains("@article{Aad:2012tfa,"));

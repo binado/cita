@@ -21,16 +21,16 @@ pub fn run_show(target: Option<&Path>, args: ShowArgs) -> Result<bool> {
 pub fn run_remove(target: Option<&Path>, args: RemoveArgs) -> Result<bool> {
     let store = crate::bootstrap::store(target)?;
     let report = remove(&store, &args.selectors, args.dry_run)?;
-    // What was removed goes to stdout, which makes it recovery input: piping it
-    // back through `add -f` restores the records.
-    let entries = report
+    // What was removed goes to stdout as one local key per line, so it can be
+    // piped into other commands such as `fetch` or `list --selectors`.
+    let keys = report
         .items
         .successes
         .iter()
-        .map(|removed| removed.bibtex.clone())
+        .map(|removed| removed.key.to_string())
         .collect::<Vec<_>>();
-    if !entries.is_empty() {
-        output::emit(&(entries.join("\n\n") + "\n"))?;
+    if !keys.is_empty() {
+        output::emit(&(keys.join("\n") + "\n"))?;
     }
     output::report(&report.items);
     if args.dry_run {

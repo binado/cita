@@ -30,7 +30,7 @@ pub struct TargetArgs {
 pub enum Command {
     /// Resolve references and store them
     Add(AddArgs),
-    /// Delete records, emitting what was deleted
+    /// Delete records, emitting their local keys
     Remove(RemoveArgs),
     /// Change a record's local citation key
     Rename(RenameArgs),

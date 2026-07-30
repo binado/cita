@@ -69,8 +69,6 @@ pub struct AddedRecord {
     pub key: CitationKey,
     /// Which provider owns it.
     pub provider: ProviderName,
-    /// Its BibTeX, under the local key.
-    pub bibtex: String,
     /// What happened to it.
     pub kind: AddKind,
 }
@@ -428,31 +426,28 @@ fn apply(
             candidate.insert(stored)?;
             items
                 .successes
-                .push(added(candidate, &id, provider, AddKind::Added)?);
+                .push(added(candidate, &id, provider, AddKind::Added));
         }
         Placement::Overwrite(id) => {
             let provider = record.provenance.provider.clone();
             candidate.replace(&id, record)?;
             items
                 .successes
-                .push(added(candidate, &id, provider, AddKind::Overwritten)?);
+                .push(added(candidate, &id, provider, AddKind::Overwritten));
         }
         Placement::Skip(reason) => {
-            // A skip still emits the stored record's BibTeX, so a bulk add's
-            // stdout is the complete set of entries it was asked about.
+            // A skip still emits the stored record's key, so a bulk add's
+            // stdout is the complete set of keys it was asked about.
             let existing = match &reason {
                 SkipReason::Duplicate { existing } | SkipReason::KeyCollision { existing } => {
-                    candidate
-                        .by_key(existing)
-                        .map(Record::rendered)
-                        .transpose()?
+                    candidate.by_key(existing).map(|record| record.key.clone())
                 }
                 SkipReason::AlreadyRemoved { .. } => None,
             };
             items.skipped.push(SkippedItem {
                 item: item.to_owned(),
                 reason,
-                bibtex: existing,
+                key: existing,
             });
         }
         Placement::Fail(message) => items.failures.push(ItemFailure::new(item, message)),
@@ -465,16 +460,15 @@ fn added(
     id: &BibiId,
     provider: ProviderName,
     kind: AddKind,
-) -> Result<AddedRecord, Error> {
+) -> AddedRecord {
     let stored = candidate
         .get(id)
         .expect("the record was just written into the candidate");
-    Ok(AddedRecord {
+    AddedRecord {
         key: stored.key.clone(),
         provider,
-        bibtex: stored.rendered()?,
         kind,
-    })
+    }
 }
 
 /// Commit the successes, unless there are none or this is a dry run.

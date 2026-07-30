@@ -52,8 +52,8 @@ pub struct SkippedItem {
     pub item: String,
     /// Why it was skipped.
     pub reason: SkipReason,
-    /// The stored record's BibTeX when the command emits skipped records.
-    pub bibtex: Option<String>,
+    /// The local citation key of the stored record when the command emits it.
+    pub key: Option<CitationKey>,
 }
 
 /// Why an item was skipped.

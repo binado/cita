@@ -60,23 +60,23 @@ pub async fn run(services: &Services, target: Option<&Path>, args: AddArgs) -> R
     present(&report, args.dry_run)
 }
 
-/// Write the BibTeX to stdout and the explanations to stderr.
+/// Write the local keys to stdout and the explanations to stderr.
 ///
-/// Every item bibi was asked about produces an entry on stdout — added,
-/// overwritten, or skipped — so the output is the complete set of entries the
+/// Every item bibi was asked about produces a line on stdout — added,
+/// overwritten, or skipped — so the output is the complete set of keys the
 /// command concerns, usable as input to something else.
 fn present(report: &AddReport, dry_run: bool) -> Result<bool> {
-    let mut entries = Vec::new();
+    let mut keys = Vec::new();
     for record in &report.items.successes {
-        entries.push(record.bibtex.clone());
+        keys.push(record.key.to_string());
     }
     for skipped in &report.items.skipped {
-        if let Some(bibtex) = &skipped.bibtex {
-            entries.push(bibtex.clone());
+        if let Some(key) = &skipped.key {
+            keys.push(key.to_string());
         }
     }
-    if !entries.is_empty() {
-        output::emit(&(entries.join("\n\n") + "\n"))?;
+    if !keys.is_empty() {
+        output::emit(&(keys.join("\n") + "\n"))?;
     }
     output::report(&report.items);
 

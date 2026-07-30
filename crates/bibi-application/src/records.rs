@@ -33,8 +33,6 @@ pub fn show(store: &ManifestStore, selector: &str) -> Result<String, Error> {
 pub struct RemovedRecord {
     /// The key it was stored under.
     pub key: CitationKey,
-    /// Its BibTeX, under that key, so the removal is recoverable input.
-    pub bibtex: String,
 }
 
 /// What a removal did.
@@ -78,7 +76,7 @@ pub fn remove(
                     reason: SkipReason::AlreadyRemoved {
                         existing: record.key.clone(),
                     },
-                    bibtex: None,
+                    key: None,
                 });
             }
             Ok(record) => {
@@ -86,7 +84,6 @@ pub fn remove(
                 removed.push(deleted.id);
                 items.successes.push(RemovedRecord {
                     key: deleted.key.clone(),
-                    bibtex: deleted.rendered()?,
                 });
             }
         }
