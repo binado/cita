@@ -1,5 +1,5 @@
 use bibi_core::{
-    ArxivId, BibiId, Doi, Identifiers, ProviderId, QualifiedLocator, Revision,
+    ArxivId, BibiId, Doi, ProviderId, QualifiedLocator, Revision,
     remote::{ProviderMetadata, RefreshState},
 };
 use bibi_provider::{
@@ -17,7 +17,6 @@ fn target(revision: Option<&str>) -> RefreshTarget {
         bibi_id: BibiId::new(),
         provider_id: ProviderId::new("1").unwrap(),
         stored_revision: revision.map(|value| Revision::new(value).unwrap()),
-        identifiers: Identifiers::default(),
     }
 }
 
@@ -185,7 +184,7 @@ async fn missing_payload_never_exposes_advanced_metadata() {
 }
 
 #[tokio::test]
-async fn refresh_rejects_provider_id_and_identifier_replacement_but_merges_additions() {
+async fn refresh_rejects_provider_id_and_merges_provider_identifiers() {
     let mut wrong_id = provider_metadata("2", Some("r2"), "Changed");
     wrong_id.identifiers.doi = Some(Doi::new("10.1/new").unwrap());
     let id_target = target(Some("r1"));
@@ -200,8 +199,6 @@ async fn refresh_rejects_provider_id_and_identifier_replacement_but_merges_addit
         .unwrap();
     assert!(failed[0].result.is_err());
 
-    let mut replacement_target = target(None);
-    replacement_target.identifiers.doi = Some(Doi::new("10.1/old").unwrap());
     let mut replacement = provider_metadata("1", Some("r2"), "Changed");
     replacement.identifiers.doi = Some(Doi::new("10.1/new").unwrap());
     let fake = Arc::new(
@@ -209,15 +206,18 @@ async fn refresh_rejects_provider_id_and_identifier_replacement_but_merges_addit
             .with_refresh("1", RefreshState::Metadata(Box::new(replacement)))
             .with_payload("1", Some(payload("Remote:1", "Changed"))),
     );
-    let failed = providers(fake)
+    let updated = providers(fake)
         .refresh(
             Provider::Inspire,
-            &[replacement_target],
+            &[target(None)],
             RefreshOptions::default(),
         )
         .await
         .unwrap();
-    assert!(failed[0].result.is_err());
+    let Ok(RefreshOutcome::Updated(record)) = &updated[0].result else {
+        panic!("expected update");
+    };
+    assert_eq!(record.identifiers.doi, Some(Doi::new("10.1/new").unwrap()));
 
     let mut addition = provider_metadata("1", Some("r2"), "Changed");
     addition.identifiers.arxiv = Some(ArxivId::new("1207.7214").unwrap());

@@ -287,9 +287,7 @@ async fn a_missing_record_is_a_warning_and_never_a_rebind() {
 }
 
 #[tokio::test]
-async fn a_replaced_identifier_fails_its_record_while_an_added_one_is_reported() {
-    // One record is seeded with an arXiv id already stored, so a provider that
-    // reports a different one is proposing a replacement rather than a gain.
+async fn provider_identifiers_replace_the_stored_values() {
     let mut stored = provider_record("inspire", "2", "Key:2", "Title 2");
     stored.identifiers.arxiv = Some(bibi_core::ArxivId::new("2401.00002").unwrap());
     let seeder = Arc::new(
@@ -298,13 +296,21 @@ async fn a_replaced_identifier_fails_its_record_while_an_added_one_is_reported()
                 "arxiv:2401.00001",
                 provider_record("inspire", "1", "Key:1", "Title 1"),
             )
-            .with_record("arxiv:2401.00002", stored),
+            .with_record("arxiv:2401.00002", stored)
+            .with_record(
+                "arxiv:2401.00003",
+                provider_record("inspire", "3", "Key:3", "Title 3"),
+            ),
     );
     let project = Project::with(seeder);
     add_locators(
         &project.services,
         &project.store(),
-        &["2401.00001".to_owned(), "2401.00002".to_owned()],
+        &[
+            "2401.00001".to_owned(),
+            "2401.00002".to_owned(),
+            "2401.00003".to_owned(),
+        ],
         &AddRequest::default(),
     )
     .await
@@ -314,44 +320,42 @@ async fn a_replaced_identifier_fails_its_record_while_an_added_one_is_reported()
     gains_a_doi.identifiers.doi = Some(bibi_core::Doi::new("10.1/new").unwrap());
     let mut replaces_an_arxiv_id = provider_metadata("2", Some("r2"), "Title 2");
     replaces_an_arxiv_id.identifiers.arxiv = Some(bibi_core::ArxivId::new("2912.99999").unwrap());
+    let removes_an_arxiv_id = provider_metadata("3", Some("r2"), "Title 3");
 
     let provider = Arc::new(
         FakeProvider::new("inspire")
             .with_refresh("1", RefreshState::Metadata(Box::new(gains_a_doi)))
             .with_payload("1", Some(payload("Key:1", "Title 1")))
             .with_refresh("2", RefreshState::Metadata(Box::new(replaces_an_arxiv_id)))
-            .with_payload("2", Some(payload("Key:2", "Title 2"))),
+            .with_payload("2", Some(payload("Key:2", "Title 2")))
+            .with_refresh("3", RefreshState::Metadata(Box::new(removes_an_arxiv_id)))
+            .with_payload("3", Some(payload("Key:3", "Title 3"))),
     );
     let project = project.rebuild(provider);
     let report = sync(&project.services, &project.store(), &SyncRequest::default())
         .await
         .unwrap();
 
-    // A preprint gaining a DOI on publication is ordinary, and named.
-    assert_eq!(report.identifier_additions.len(), 1);
-    assert_eq!(report.identifier_additions[0].kind, "DOI");
-    assert_eq!(report.identifier_additions[0].value, "10.1/new");
-    assert_eq!(report.refreshed.len(), 1);
-
-    // A replacement contradicts the claim that identifiers never change once
-    // set, so the record fails rather than being quietly rewritten.
-    assert_eq!(report.failures.len(), 1);
-    assert!(
-        report.failures[0]
-            .message
-            .contains("do not change once set")
-    );
-    assert!(report.committed, "the good record still commits");
+    assert_eq!(report.failures.len(), 0);
+    assert_eq!(report.refreshed.len(), 3);
+    assert!(report.committed);
     let after = list(&project.loaded(), &ListRequest::default());
-    let untouched = after.iter().find(|r| r.key.as_str() == "Key:2").unwrap();
+    let gained = after.iter().find(|r| r.key.as_str() == "Key:1").unwrap();
     assert_eq!(
-        untouched.identifiers.arxiv.as_ref().unwrap().as_str(),
-        "2401.00002"
+        gained.identifiers.doi.as_ref().unwrap().as_str(),
+        "10.1/new"
+    );
+    let replaced = after.iter().find(|r| r.key.as_str() == "Key:2").unwrap();
+    assert_eq!(
+        replaced.identifiers.arxiv.as_ref().unwrap().as_str(),
+        "2912.99999"
     );
     assert_eq!(
-        untouched.provenance.revision.as_ref().unwrap().as_str(),
-        "r1"
+        replaced.provenance.revision.as_ref().unwrap().as_str(),
+        "r2"
     );
+    let removed = after.iter().find(|r| r.key.as_str() == "Key:3").unwrap();
+    assert!(removed.identifiers.arxiv.is_none());
 }
 
 #[tokio::test]

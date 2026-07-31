@@ -26,7 +26,7 @@ pub mod remote;
 pub use error::Error;
 pub use filter::RecordFilter;
 pub use id::BibiId;
-pub use identifiers::{ArxivId, Doi, IdentifierChange};
+pub use identifiers::{ArxivId, Doi};
 pub use locator::{Locator, QualifiedLocator};
 pub use provenance::{Provenance, Provider, ProviderId, Revision};
 pub use record::{Description, Identifiers, ProviderOwned, Record};

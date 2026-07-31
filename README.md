@@ -136,8 +136,10 @@ $ bibi sync
 examined 214, unchanged 213, refreshed 1, 1 description change(s)
 ```
 
-`sync` fetches a narrowed structured record for everything it manages, compares
-each provider's change token, and fetches BibTeX only for what actually changed.
+`sync` fetches the provider's complete current metadata for everything it
+manages, compares each provider's change token, and fetches BibTeX only for
+what actually changed. Provider-owned metadata, including optional
+identifiers, is replaced with the provider's current values.
 An unchanged project issues no BibTeX request at all, and a forced refresh of
 three hundred records costs six requests rather than six hundred.
 

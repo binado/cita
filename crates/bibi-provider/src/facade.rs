@@ -4,8 +4,7 @@ use crate::local;
 use bibi_bibtex::BibtexEntry;
 pub use bibi_core::Provider;
 use bibi_core::{
-    BibiId, IdentifierChange, Identifiers, Locator, Provenance, ProviderId, ProviderOwned,
-    QualifiedLocator, Revision,
+    BibiId, Locator, Provenance, ProviderId, ProviderOwned, QualifiedLocator, Revision,
     remote::{
         MappingError, PayloadItem, PayloadRequest, ProviderError, ProviderMetadata, RefreshItem,
         RefreshRequest, RefreshState, RemoteProvider, Resolution, RetrievalError,
@@ -87,8 +86,6 @@ pub struct RefreshTarget {
     pub provider_id: ProviderId,
     /// Stored opaque revision.
     pub stored_revision: Option<Revision>,
-    /// Stored identifiers, used to validate additions versus replacements.
-    pub identifiers: Identifiers,
 }
 
 /// Conditional refresh options.
@@ -336,7 +333,7 @@ impl Providers {
                         let payload = by_id.remove(&target.provider_id).flatten();
                         let outcome = match payload {
                             None => Ok(RefreshOutcome::PayloadMissing),
-                            Some(payload) => build_update(owner, target, &metadata, payload)
+                            Some(payload) => build_update(owner, &metadata, payload)
                                 .map(|owned| RefreshOutcome::Updated(Box::new(owned))),
                         };
                         results.insert(target.bibi_id, outcome);
@@ -512,7 +509,6 @@ fn payloads_correlate(requests: &[PayloadRequest], items: &[PayloadItem]) -> boo
 
 fn build_update(
     owner: Provider,
-    target: &RefreshTarget,
     metadata: &ProviderMetadata,
     payload: BibtexEntry,
 ) -> Result<ProviderOwned, ProviderError> {
@@ -522,50 +518,16 @@ fn build_update(
             "returned refresh metadata without a title",
         ));
     }
-    let doi = IdentifierChange::classify(
-        target.identifiers.doi.as_ref(),
-        metadata.identifiers.doi.as_ref(),
-    );
-    let arxiv = IdentifierChange::classify(
-        target.identifiers.arxiv.as_ref(),
-        metadata.identifiers.arxiv.as_ref(),
-    );
-    if let Some(message) = replacement(&doi, "DOI").or_else(|| replacement(&arxiv, "arXiv id")) {
-        return Err(ProviderError::contract(owner, message));
-    }
     Ok(ProviderOwned {
         provenance: Provenance::managed(
             owner,
             metadata.provider_id.clone(),
             metadata.revision.clone(),
         ),
-        identifiers: Identifiers {
-            doi: metadata
-                .identifiers
-                .doi
-                .clone()
-                .or(target.identifiers.doi.clone()),
-            arxiv: metadata
-                .identifiers
-                .arxiv
-                .clone()
-                .or(target.identifiers.arxiv.clone()),
-        },
+        identifiers: metadata.identifiers.clone(),
         description: metadata.description.clone(),
         payload,
     })
-}
-
-fn replacement<T: fmt::Display>(
-    change: &IdentifierChange<T>,
-    kind: &'static str,
-) -> Option<String> {
-    match change {
-        IdentifierChange::Replaced { old, new } => Some(format!(
-            "provider reports {kind} `{new}` where `{old}` is stored; identifiers do not change once set, so repair this with `add --overwrite`"
-        )),
-        _ => None,
-    }
 }
 
 fn fail_targets(targets: &[RefreshTarget], error: ProviderError) -> Vec<RefreshedItem> {

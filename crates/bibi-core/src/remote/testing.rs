@@ -15,7 +15,7 @@ use std::{collections::HashMap, future::Future, sync::Mutex};
 pub enum ProviderCall {
     /// A resolution batch.
     Resolve(Vec<String>),
-    /// A narrowed metadata batch.
+    /// A complete current metadata batch.
     RefreshMetadata(Vec<ProviderId>),
     /// A payload batch.
     FetchPayloads(Vec<ProviderId>),

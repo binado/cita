@@ -32,13 +32,6 @@ fn present(report: &SyncReport, dry_run: bool) -> bool {
     for absence in &report.absences {
         output::warn(format!("`{}`: {}", absence.key, absence.reason));
     }
-    // An identifier addition is rare and consequential, so each one is named.
-    for addition in &report.identifier_additions {
-        output::note(format!(
-            "`{}` gained {} {}",
-            addition.key, addition.kind, addition.value
-        ));
-    }
     for failure in &report.failures {
         output::note(format!("error: `{}`: {}", failure.item, failure.message));
     }

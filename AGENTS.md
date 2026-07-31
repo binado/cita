@@ -154,8 +154,11 @@ the overwrite target.
 
 ### Conditional sync
 
-Refresh fetches narrowed structured fields for every managed id, compares the
+Refresh fetches complete current metadata for every managed id, compares the
 provider's opaque revision token, and fetches BibTeX only for changed records.
+Successful refreshes replace provider-owned metadata wholesale; the provider's
+omitted optional identifiers are authoritative removals. The bibi UUID and
+local citation key remain manifest-owned.
 Bulk BibTeX is paired back to records through a **verified** texkey join: an
 unplaceable entry or a texkey claimed twice fails that batch whole, while a
 record that received no entry is a warning and a no-op.

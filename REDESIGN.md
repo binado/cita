@@ -246,20 +246,18 @@ of them display, and a wrong value in any of them reaches the deliverable:
   value fetches the wrong document.
 - **Import resolution** extracts them from user BibTeX to resolve records (§6).
 
-A second axis separates them, running opposite to intuition. **Identifiers are
-immutable once set** — an arXiv identifier never changes, and a DOI may be
-*added* on publication but never changes value. **Description genuinely
-changes**: referees demand title changes, author lists shift between preprint and
+A second axis separates them, running opposite to intuition. **Providers own
+the current identifiers and description**: a trusted provider may add, replace,
+or remove an identifier during refresh. **Description genuinely changes**:
+referees demand title changes, author lists shift between preprint and
 publication, and the year moves from preprint to publication. Of everything in
 the record, description is the least stable.
 
 Two consequences follow:
 
-- **Refresh distinguishes them** (§5), and now on a principled basis rather than
-  a judgment call. Description changes are routine and reported in aggregate.
-  An identifier change is rare and significant — a preprint gaining a DOI may
-  create a duplicate relationship with another record or change which cached
-  document it addresses — and is reported individually.
+- **Refresh accepts provider-owned changes** (§5). Description changes remain
+  routine and are reported in aggregate; identifiers are replaced wholesale
+  from the provider's complete current metadata.
 - **Local records carry a correct trust gradient.** A software or dataset
   citation may have a real DOI while its title and authors are whatever the user
   pasted. The identifier is as authoritative as on any managed record — it is a
@@ -669,17 +667,11 @@ themselves.
 
 ### What refresh reports
 
-Changes are not all equal, and the output distinguishes them (§3, identifiers):
-
 - **Description changes** — a corrected title, a grown author list — are routine
   and reported only in aggregate.
-- **Identifier changes** are reported individually. A preprint gaining a DOI on
-  publication may create a duplicate relationship with an existing record or
-  change which document belongs to it, and neither should pass silently. An
-  identifier *added* is accepted; one *replaced* fails that record, because §3
-  holds that these values do not change once set — so a replacement means the
-  stored value, the new value, or the provider is wrong, and repair is the
-  explicit re-resolution below rather than a routine refresh.
+- **Provider-owned identifiers** are accepted from the trusted provider as part
+  of the complete current metadata. Additions, replacements, and removals are
+  not reported separately.
 - **Records that cannot be refreshed** — those owned by the local provider (§4) —
   are counted, so that a growing population of them stays visible.
 - **Records owned by a provider this build does not carry** are counted
@@ -697,10 +689,9 @@ proceeds. This covers both a record absent from a structured batch and a record
 that received no BibTeX entry from one — absence is per-record, whichever
 representation went missing.
 
-This is a normal event rather than an exception: ADS identifiers change when a
-preprint becomes a published paper (§4), and providers occasionally merge or
-withdraw records. Failing the whole refresh over one of them would make routine
-maintenance impossible.
+This is a normal event rather than an exception: providers occasionally merge,
+withdraw, or correct records. A successful provider response updates the
+provider-owned fields, while the bibi id and local key remain stable.
 
 bibi does not attempt to re-resolve the record automatically by DOI or arXiv id.
 That would be silent rebinding inside a bulk operation — the failure class §6

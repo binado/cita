@@ -53,8 +53,5 @@ pub use records::{RemoveReport, RemovedRecord, init, remove, rename, show};
 pub use render::{RenderOptions, render_manifest, render_records};
 pub use reports::{BatchReport, ItemFailure, SkipReason, SkippedItem};
 pub use services::Services;
-pub use sync::{
-    IdentifierAddition, RefreshedRecord, SyncAbsence, SyncAbsenceReason, SyncReport, SyncRequest,
-    sync,
-};
+pub use sync::{RefreshedRecord, SyncAbsence, SyncAbsenceReason, SyncReport, SyncRequest, sync};
 pub use target::{MANIFEST_NAME, TargetResolver};

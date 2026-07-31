@@ -25,7 +25,8 @@ pub trait RemoteProvider: Send + Sync {
         locators: &[Locator],
     ) -> impl Future<Output = Result<Vec<Resolution>, ProviderError>> + Send;
 
-    /// Fetch narrowed metadata for managed records.
+    /// Fetch complete current metadata for managed records, omitting only
+    /// fields that are genuinely absent at the provider.
     fn refresh_metadata(
         &self,
         requests: &[RefreshRequest],
@@ -49,7 +50,7 @@ pub struct RefreshRequest {
     pub stored_revision: Option<Revision>,
 }
 
-/// The narrowed half of a record: everything but the payload.
+/// The provider's complete current metadata: everything but the payload.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderMetadata {
     /// The provider's handle, as reported now.
@@ -87,7 +88,7 @@ pub enum Resolution {
 /// What examining one managed record produced.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RefreshState {
-    /// The record's current narrowed metadata.
+    /// The record's complete current provider metadata.
     Metadata(Box<ProviderMetadata>),
     /// The provider no longer holds this record.
     Missing,

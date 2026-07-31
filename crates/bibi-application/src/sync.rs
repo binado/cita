@@ -7,7 +7,7 @@
 
 use crate::{error::Error, reports::ItemFailure, services::Services};
 use bibi_bibtex::CitationKey;
-use bibi_core::{BibiId, Description, IdentifierChange, Identifiers, ProviderId, Record, Revision};
+use bibi_core::{BibiId, Description, ProviderId, Record, Revision};
 use bibi_manifest::{ManifestCandidate, ManifestStore};
 use bibi_provider::{Provider, RefreshOptions, RefreshOutcome, RefreshTarget};
 use std::collections::BTreeMap;
@@ -30,21 +30,6 @@ pub struct RefreshedRecord {
     pub key: CitationKey,
     /// Its new BibTeX, under that key.
     pub bibtex: String,
-}
-
-/// An identifier a record gained.
-///
-/// Reported individually, unlike description changes: a preprint gaining a DOI
-/// may create a duplicate relationship with an existing record, and that should
-/// not pass silently.
-#[derive(Clone, Debug)]
-pub struct IdentifierAddition {
-    /// The record that gained it.
-    pub key: CitationKey,
-    /// Which identifier.
-    pub kind: &'static str,
-    /// Its new value.
-    pub value: String,
 }
 
 /// A record sync left alone with a warning (not a failure).
@@ -91,8 +76,6 @@ pub struct SyncReport {
     pub refreshed: Vec<RefreshedRecord>,
     /// How many updates changed a title, author list, or year.
     pub description_changes: usize,
-    /// Identifiers that were added.
-    pub identifier_additions: Vec<IdentifierAddition>,
     /// Records left unchanged with a warning.
     pub absences: Vec<SyncAbsence>,
     /// Records no provider will ever refresh.
@@ -143,7 +126,6 @@ pub async fn sync(
                         key: record.key.clone(),
                         provider_id: provider_id.clone(),
                         revision: record.provenance.revision.clone(),
-                        identifiers: record.identifiers.clone(),
                         description: record.description.clone(),
                     })
             }
@@ -179,7 +161,6 @@ struct Managed {
     key: CitationKey,
     provider_id: ProviderId,
     revision: Option<Revision>,
-    identifiers: Identifiers,
     description: Description,
 }
 
@@ -198,7 +179,6 @@ async fn refresh_group(
             bibi_id: record.id,
             provider_id: record.provider_id.clone(),
             stored_revision: record.revision.clone(),
-            identifiers: record.identifiers.clone(),
         })
         .collect::<Vec<_>>();
     let items = match services
@@ -245,34 +225,12 @@ async fn refresh_group(
                 reason: SyncAbsenceReason::PayloadAbsent,
             }),
             Ok(RefreshOutcome::Updated(owned)) => {
-                let doi = IdentifierChange::classify(
-                    record.identifiers.doi.as_ref(),
-                    owned.identifiers.doi.as_ref(),
-                );
-                let arxiv = IdentifierChange::classify(
-                    record.identifiers.arxiv.as_ref(),
-                    owned.identifiers.arxiv.as_ref(),
-                );
                 let description_changed = owned.description != record.description;
                 if let Err(error) = candidate.replace(&record.id, *owned) {
                     report
                         .failures
                         .push(ItemFailure::new(record.key.to_string(), error.to_string()));
                     continue;
-                }
-                if let IdentifierChange::Added(value) = &doi {
-                    report.identifier_additions.push(IdentifierAddition {
-                        key: record.key.clone(),
-                        kind: "DOI",
-                        value: value.to_string(),
-                    });
-                }
-                if let IdentifierChange::Added(value) = &arxiv {
-                    report.identifier_additions.push(IdentifierAddition {
-                        key: record.key.clone(),
-                        kind: "arXiv id",
-                        value: value.to_string(),
-                    });
                 }
                 if description_changed {
                     report.description_changes += 1;

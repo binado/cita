@@ -428,25 +428,10 @@ candidate manifest.
 - legacy archive identifiers such as `hep-th/9901001` remain valid;
 - cache paths may retain the legacy archive slash only after validation.
 
-Identifiers are single optional canonical values. A helper implements the sync
-transition policy:
-
-```rust
-pub enum IdentifierChange<T> {
-    Unchanged,
-    Added(T),
-    Replaced { old: T, new: T },
-}
-```
-
-Normal sync accepts `Unchanged` and `Added`; replacing a non-empty DOI or arXiv
-id is an item failure requiring explicit overwrite/provider migration.
-
-This last rule is an amendment to `REDESIGN.md` §5, which requires identifier
-changes to be reported individually but does not say what happens to them. It
-follows from §3's claim that these values do not change once set: a replacement
-means the stored value, the new value, or the provider is wrong, and none of the
-three should be committed on a routine refresh.
+Identifiers are single optional canonical values. A successful refresh treats
+the selected provider as authoritative and replaces complete provider-owned
+metadata, including identifier additions, replacements, and removals. The
+manifest-owned bibi id and local citation key remain stable.
 
 ### Locators
 
@@ -1603,7 +1588,6 @@ it is a usage error raised before any I/O.
 - unchanged;
 - refreshed;
 - description changes;
-- individual identifier additions;
 - absences, each typed as provider-gone or payload-absent;
 - unrefreshable;
 - unavailable, grouped by provider name;
