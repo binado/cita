@@ -3,7 +3,7 @@
 use crate::{
     error::Error,
     local_metadata::{self, LocalMetadata},
-    scanner::{self, RawEntry},
+    scanner::{self, RawEntry, RawField},
 };
 use std::{fmt, ops::Range, str::FromStr};
 
@@ -82,6 +82,8 @@ pub struct BibtexEntry {
     source: String,
     source_key: CitationKey,
     key_span: Range<usize>,
+    /// Field spans relative to `source`, in source order.
+    fields: Vec<RawField>,
 }
 
 impl BibtexEntry {
@@ -100,12 +102,21 @@ impl BibtexEntry {
     pub(crate) fn from_raw(source: &str, raw: RawEntry) -> Self {
         let start = raw.entry.start;
         let key_span = (raw.key.start - start)..(raw.key.end - start);
+        let fields = raw
+            .fields
+            .into_iter()
+            .map(|field| RawField {
+                name: (field.name.start - start)..(field.name.end - start),
+                value: (field.value.start - start)..(field.value.end - start),
+            })
+            .collect();
         let source = source[raw.entry].to_owned();
         let source_key = CitationKey(source[key_span.clone()].to_owned());
         Self {
             source,
             source_key,
             key_span,
+            fields,
         }
     }
 
@@ -152,16 +163,8 @@ impl BibtexEntry {
 
     /// Read the DOI and arXiv identifiers this entry declares, if any.
     pub fn identifier_candidates(&self) -> IdentifierCandidates {
-        let Ok(mut entries) = scanner::scan(&self.source) else {
-            debug_assert!(false, "a validated entry always re-scans");
-            return IdentifierCandidates::default();
-        };
-        debug_assert_eq!(entries.len(), 1);
-        let Some(raw) = entries.pop() else {
-            return IdentifierCandidates::default();
-        };
         let field = |name: &str| {
-            raw.fields
+            self.fields
                 .iter()
                 .find(|field| self.source[field.name.clone()].eq_ignore_ascii_case(name))
                 .map(|field| field_text(&self.source[field.value.clone()]))
@@ -343,6 +346,16 @@ mod tests {
         assert_eq!(
             literal.identifier_candidates().doi.as_deref(),
             Some("10.1/x # y")
+        );
+    }
+
+    #[test]
+    fn field_spans_survive_a_rekey() {
+        let original = entry("@misc{Old, doi = {10.1/x}, eprint = {1207.7214}}");
+        let rekeyed = BibtexEntry::parse_one(original.rekey(&key("Longer")).unwrap()).unwrap();
+        assert_eq!(
+            rekeyed.identifier_candidates(),
+            original.identifier_candidates()
         );
     }
 }
