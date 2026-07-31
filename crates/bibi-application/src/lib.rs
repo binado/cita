@@ -35,7 +35,7 @@ mod target;
 /// keeps that boundary honest: whatever is not here is not the CLI's business.
 pub mod domain {
     pub use bibi_bibtex::CitationKey;
-    pub use bibi_core::{Record, RecordFilter, Selector};
+    pub use bibi_core::{Locator, Record, RecordFilter};
     pub use bibi_documents::ArtifactClient;
     pub use bibi_manifest::{Manifest, ManifestStore};
 }

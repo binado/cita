@@ -52,7 +52,8 @@ pub enum Command {
 
 #[derive(Args, Debug)]
 pub struct AddArgs {
-    /// arXiv ids, DOIs, or `<provider>:<id>` locators; omit to read stdin
+    /// arXiv ids, DOIs, `<provider>:<id>`, or a citation key with `k:`, e.g.
+    /// `k:Aad:2012tfa`; omit to read stdin
     #[arg(value_name = "LOCATOR")]
     pub locators: Vec<String>,
     /// Read entries from a BibTeX file, or `-` for standard input
@@ -74,7 +75,8 @@ pub struct AddArgs {
 
 #[derive(Args, Debug)]
 pub struct RemoveArgs {
-    /// Citation keys, DOIs, arXiv ids, or `<provider>:<id>`; omit to read stdin
+    /// A citation key with `k:` (e.g. `k:Aad:2012tfa`), an arXiv id, a DOI, or
+    /// `<provider>:<id>`; omit to read stdin
     #[arg(value_name = "SELECTOR")]
     pub selectors: Vec<String>,
     /// Report what would happen without writing
@@ -84,7 +86,8 @@ pub struct RemoveArgs {
 
 #[derive(Args, Debug)]
 pub struct RenameArgs {
-    /// The record to rename
+    /// The record to rename; a citation key needs `k:`, e.g. `k:Aad:2012tfa`
+    /// (also an arXiv id, a DOI, or `<provider>:<id>`)
     #[arg(value_name = "SELECTOR")]
     pub selector: String,
     /// Its new citation key
@@ -169,7 +172,9 @@ pub enum Field {
 
 #[derive(Args, Debug)]
 pub struct FetchArgs {
-    /// Records to fetch for; omit to read selectors from stdin
+    /// Records to fetch for; a citation key needs `k:`, e.g. `k:Aad:2012tfa`
+    /// (also an arXiv id, a DOI, or `<provider>:<id>`); omit to read selectors
+    /// from stdin
     #[arg(value_name = "SELECTOR")]
     pub selectors: Vec<String>,
     /// Fetch the original source archive instead of the PDF
@@ -224,7 +229,9 @@ pub struct CompletionsArgs {
 
 #[derive(Args, Debug)]
 pub struct ShowArgs {
-    /// The record to emit; omit to read exactly one selector from stdin
+    /// The record to emit; a citation key needs `k:`, e.g. `k:Aad:2012tfa`
+    /// (also an arXiv id, a DOI, or `<provider>:<id>`); omit to read exactly
+    /// one selector from stdin
     #[arg(value_name = "SELECTOR")]
     pub selector: Option<String>,
 }

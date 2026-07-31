@@ -374,11 +374,13 @@ impl InspireProvider {
 /// The query term that asks for one locator, if INSPIRE handles its kind.
 fn query_term(locator: &Locator) -> Option<String> {
     match locator {
+        Locator::Key(key) => Some(format!("texkeys:{key}")),
         Locator::Arxiv(id) => Some(format!("arxiv:{id}")),
         Locator::Doi(doi) => Some(format!("doi:{doi}")),
-        Locator::ProviderId(value) => {
-            control_number(value).map(|id| format!("control_number:{id}"))
+        Locator::ProviderIdentity(_, id) => {
+            control_number(id.as_str()).map(|id| format!("control_number:{id}"))
         }
+        Locator::Opaque(value) => control_number(value).map(|id| format!("control_number:{id}")),
     }
 }
 
@@ -427,6 +429,11 @@ fn control_number(value: &str) -> Option<u64> {
 /// mapping applies when projecting the canonical identifiers.
 fn identifies_wire(record: &LiteratureRecord, locator: &Locator) -> bool {
     match locator {
+        Locator::Key(key) => record
+            .metadata
+            .texkeys
+            .iter()
+            .any(|texkey| texkey == key.as_str()),
         Locator::Arxiv(id) => record
             .metadata
             .arxiv_eprints
@@ -437,7 +444,10 @@ fn identifies_wire(record: &LiteratureRecord, locator: &Locator) -> bool {
             .dois
             .iter()
             .any(|declared| Doi::new(&declared.value).is_ok_and(|candidate| candidate == *doi)),
-        Locator::ProviderId(value) => {
+        Locator::ProviderIdentity(_, id) => {
+            control_number(id.as_str()).is_some_and(|id| record.record_id() == Some(id))
+        }
+        Locator::Opaque(value) => {
             control_number(value).is_some_and(|id| record.record_id() == Some(id))
         }
     }
@@ -469,6 +479,12 @@ mod tests {
     #[test]
     fn builds_the_query_term_each_locator_kind_deserves() {
         assert_eq!(
+            query_term(&Locator::Key(
+                bibi_bibtex::CitationKey::new("Aad:2012tfa").unwrap()
+            )),
+            Some("texkeys:Aad:2012tfa".to_owned())
+        );
+        assert_eq!(
             query_term(&Locator::Arxiv(
                 bibi_core::ArxivId::new("1207.7214v2").unwrap()
             )),
@@ -479,13 +495,17 @@ mod tests {
             Some("doi:10.1/abc".to_owned())
         );
         assert_eq!(
-            query_term(&Locator::ProviderId("1124337".into())),
+            query_term(&Locator::ProviderIdentity(
+                bibi_core::Provider::Inspire,
+                bibi_core::ProviderId::new("1124337").unwrap()
+            )),
+            Some("control_number:1124337".to_owned())
+        );
+        assert_eq!(
+            query_term(&Locator::Opaque("1124337".into())),
             Some("control_number:1124337".to_owned())
         );
         // An id INSPIRE cannot read is unsupported, not not-found.
-        assert_eq!(
-            query_term(&Locator::ProviderId("2024ApJ...1X".into())),
-            None
-        );
+        assert_eq!(query_term(&Locator::Opaque("2024ApJ...1X".into())), None);
     }
 }

@@ -2,6 +2,7 @@
 
 mod support;
 
+use bibi_bibtex::CitationKey;
 use bibi_core::{
     ArxivId, BibiId, Doi, Locator, ProviderId,
     remote::{
@@ -72,7 +73,7 @@ async fn one_batched_search_resolves_mixed_locator_kinds() {
     let locators = [
         Locator::Arxiv(ArxivId::new("1207.7214").unwrap()),
         Locator::Doi(Doi::new("10.1/b").unwrap()),
-        Locator::ProviderId("3".into()),
+        Locator::Opaque("3".into()),
     ];
 
     let resolutions = provider.resolve(&locators).await.unwrap();
@@ -101,6 +102,24 @@ async fn one_batched_search_resolves_mixed_locator_kinds() {
         "{query}"
     );
     assert!(server.query(1).contains("format=bibtex"));
+}
+
+#[tokio::test]
+async fn a_key_locator_resolves_by_texkey() {
+    let server = TestServer::new(vec![
+        Reply::ok(hits(vec![record(
+            1,
+            "Aad:2012tfa",
+            Some("1207.7214"),
+            None,
+        )])),
+        Reply::ok(entry("Aad:2012tfa")),
+    ]);
+    let provider = provider(&server, Arc::new(TestClock::new()));
+    let locators = [Locator::Key(CitationKey::new("Aad:2012tfa").unwrap())];
+    let resolutions = provider.resolve(&locators).await.unwrap();
+    assert!(matches!(resolutions[0], Resolution::Found(_)));
+    assert!(server.query(0).contains("texkeys:Aad:2012tfa"));
 }
 
 #[tokio::test]
@@ -157,7 +176,7 @@ async fn a_locator_kind_inspire_cannot_read_is_unsupported_not_absent() {
     let server = TestServer::new(vec![]);
     let provider = provider(&server, Arc::new(TestClock::new()));
     let resolutions = provider
-        .resolve(&[Locator::ProviderId("2024ApJ...900..1X".into())])
+        .resolve(&[Locator::Opaque("2024ApJ...900..1X".into())])
         .await
         .unwrap();
     assert!(matches!(resolutions[0], Resolution::UnsupportedLocator));

@@ -4,7 +4,7 @@ use crate::local;
 use bibi_bibtex::BibtexEntry;
 pub use bibi_core::Provider;
 use bibi_core::{
-    BibiId, Locator, Provenance, ProviderId, ProviderOwned, QualifiedLocator, Revision,
+    BibiId, Locator, Provenance, ProviderId, ProviderOwned, Revision,
     remote::{
         MappingError, PayloadItem, PayloadRequest, ProviderError, ProviderMetadata, RefreshItem,
         RefreshRequest, RefreshState, RemoteProvider, Resolution, RetrievalError,
@@ -191,18 +191,14 @@ impl Providers {
     pub async fn resolve(
         &self,
         selected: Option<Provider>,
-        locators: &[QualifiedLocator],
+        locators: &[Locator],
     ) -> Result<Vec<ResolveItem>, Error> {
         let provider = preflight(selected, locators)?;
         if !provider.is_remote() {
             return Err(Error::LocalResolution);
         }
-        let requested = locators
-            .iter()
-            .map(|locator| locator.locator.clone())
-            .collect::<Vec<_>>();
-        let result = self.remote.resolve(&requested).await;
-        Ok(validate_resolutions(provider, requested.len(), result))
+        let result = self.remote.resolve(locators).await;
+        Ok(validate_resolutions(provider, locators.len(), result))
     }
 
     /// Ingest one entry explicitly as local provenance.
@@ -389,12 +385,13 @@ impl ProvidersBuilder {
     }
 }
 
-fn preflight(selected: Option<Provider>, locators: &[QualifiedLocator]) -> Result<Provider, Error> {
+fn preflight(selected: Option<Provider>, locators: &[Locator]) -> Result<Provider, Error> {
     let mut qualified = None;
     for locator in locators {
-        let Some(provider) = locator.provider else {
+        let Locator::ProviderIdentity(provider, _) = locator else {
             continue;
         };
+        let provider = *provider;
         if let Some(requested) = selected
             && requested != provider
         {

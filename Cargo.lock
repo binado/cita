@@ -142,6 +142,7 @@ dependencies = [
 name = "bibi-inspire"
 version = "0.1.0"
 dependencies = [
+ "bibi-bibtex",
  "bibi-core",
  "httpdate",
  "reqwest",

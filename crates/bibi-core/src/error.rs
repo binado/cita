@@ -39,17 +39,9 @@ pub enum Error {
     },
     /// A locator string is not a supported locator.
     #[error(
-        "invalid locator `{value}`; use an arXiv id, a DOI, an explicit `arxiv:`, `doi:`, or `<provider>:` locator, or a canonical URL"
+        "invalid locator `{value}`; expected a citation key with `k:`, an arXiv id, a DOI, an explicit `arxiv:`, `doi:`, or `<provider>:` locator, or a canonical URL"
     )]
     InvalidLocator {
-        /// The rejected value.
-        value: String,
-    },
-    /// A selector string denotes nothing bibi can look up.
-    #[error(
-        "invalid selector `{value}`; expected a citation key, DOI, arXiv id, or `<provider>:<id>`"
-    )]
-    InvalidSelector {
         /// The rejected value.
         value: String,
     },

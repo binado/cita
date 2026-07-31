@@ -1,5 +1,5 @@
 use bibi_core::{
-    ArxivId, BibiId, Doi, ProviderId, QualifiedLocator, Revision,
+    ArxivId, BibiId, Doi, Locator, ProviderId, Revision,
     remote::{ProviderMetadata, RefreshState},
 };
 use bibi_provider::{
@@ -8,7 +8,7 @@ use bibi_provider::{
 };
 use std::sync::Arc;
 
-fn locators(values: &[&str]) -> Vec<QualifiedLocator> {
+fn locators(values: &[&str]) -> Vec<Locator> {
     values.iter().map(|value| value.parse().unwrap()).collect()
 }
 
@@ -46,8 +46,14 @@ async fn resolution_defaults_to_inspire_and_uses_one_implementation() {
 async fn repeated_qualifiers_select_one_provider() {
     let fake = Arc::new(
         FakeProvider::new("inspire")
-            .with_record("1", provider_record("inspire", "1", "One:2024", "One"))
-            .with_record("2", provider_record("inspire", "2", "Two:2024", "Two")),
+            .with_record(
+                "inspire:1",
+                provider_record("inspire", "1", "One:2024", "One"),
+            )
+            .with_record(
+                "inspire:2",
+                provider_record("inspire", "2", "Two:2024", "Two"),
+            ),
     );
     let outcomes = providers(fake)
         .resolve(None, &locators(&["inspire:1", "inspire:2"]))

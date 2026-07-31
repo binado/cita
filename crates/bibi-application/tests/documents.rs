@@ -150,7 +150,7 @@ async fn a_url_is_answered_without_building_a_client() {
         &project.store(),
         &FetchRequest {
             url: true,
-            ..project.request("Aad:2012tfa")
+            ..project.request("k:Aad:2012tfa")
         },
         &mut Progress::silent(),
     )
@@ -166,7 +166,7 @@ async fn a_url_is_answered_without_building_a_client() {
         &FetchRequest {
             url: true,
             source: true,
-            ..project.request("Aad:2012tfa")
+            ..project.request("k:Aad:2012tfa")
         },
         &mut Progress::silent(),
     )
@@ -184,7 +184,7 @@ async fn an_already_present_default_destination_is_a_collision() {
     let error = fetch_one(
         &project.services,
         &project.store(),
-        &project.request("Aad:2012tfa"),
+        &project.request("k:Aad:2012tfa"),
         &mut Progress::silent(),
     )
     .await
@@ -207,7 +207,7 @@ async fn an_explicit_output_is_never_treated_as_already_present() {
         &project.store(),
         &FetchRequest {
             output: Some(PathBuf::from("higgs.pdf")),
-            ..project.request("Aad:2012tfa")
+            ..project.request("k:Aad:2012tfa")
         },
         &mut Progress::silent(),
     )
@@ -238,7 +238,7 @@ async fn force_replaces_an_occupied_destination() {
         &project.store(),
         &FetchRequest {
             force: true,
-            ..project.request("Aad:2012tfa")
+            ..project.request("k:Aad:2012tfa")
         },
         &mut Progress::silent(),
     )
@@ -258,7 +258,7 @@ async fn a_record_without_an_arxiv_identifier_says_so_rather_than_guessing() {
         &project.store(),
         &FetchRequest {
             url: true,
-            ..project.request("Roe:2026")
+            ..project.request("k:Roe:2026")
         },
         &mut Progress::silent(),
     )
@@ -328,7 +328,7 @@ async fn a_download_progresses_through_the_recorder_closure() {
     let target = fetch_one(
         &project.services,
         &project.store(),
-        &project.request("Aad:2012tfa"),
+        &project.request("k:Aad:2012tfa"),
         &mut progress,
     )
     .await
@@ -366,7 +366,7 @@ async fn a_silent_progress_passes_through_a_real_download_uneventfully() {
     let target = fetch_one(
         &project.services,
         &project.store(),
-        &project.request("Aad:2012tfa"),
+        &project.request("k:Aad:2012tfa"),
         &mut progress,
     )
     .await
@@ -380,7 +380,7 @@ async fn a_silent_progress_passes_through_a_real_download_uneventfully() {
 async fn a_url_batch_preserves_order_and_reports_every_selector() {
     let project = batch_project().await;
     let request = FetchRequest {
-        selectors: ["First", "missing", "Second", "Notes", "1207.7214"]
+        selectors: ["k:First", "missing", "k:Second", "k:Notes", "1207.7214"]
             .into_iter()
             .map(ToOwned::to_owned)
             .collect(),
@@ -399,7 +399,7 @@ async fn a_url_batch_preserves_order_and_reports_every_selector() {
 
     assert_eq!(
         reporters,
-        ["First", "missing", "Second", "Notes", "1207.7214"]
+        ["k:First", "missing", "k:Second", "k:Notes", "1207.7214"]
     );
     assert!(matches!(
         &report.outcomes[0],
@@ -419,7 +419,7 @@ async fn a_url_batch_preserves_order_and_reports_every_selector() {
     assert!(matches!(&report.outcomes[3], FetchOutcome::Failure { .. }));
     assert!(matches!(
         &report.outcomes[4],
-        FetchOutcome::Skipped { first, .. } if first == "First"
+        FetchOutcome::Skipped { first, .. } if first == "k:First"
     ));
     assert!(report.has_failures());
 }
@@ -483,7 +483,7 @@ async fn downloads_are_sequential_and_an_output_directory_uses_default_names() {
     );
     std::fs::create_dir(project.path("downloads")).unwrap();
     let request = FetchRequest {
-        selectors: vec!["Second".to_owned(), "First".to_owned()],
+        selectors: vec!["k:Second".to_owned(), "k:First".to_owned()],
         output: Some(PathBuf::from("downloads")),
         working_directory: project.directory.path().to_path_buf(),
         ..FetchRequest::default()
@@ -514,7 +514,7 @@ async fn downloads_are_sequential_and_an_output_directory_uses_default_names() {
 async fn multiple_selectors_require_an_existing_output_directory() {
     let project = batch_project().await;
     let request = FetchRequest {
-        selectors: vec!["First".to_owned(), "Second".to_owned()],
+        selectors: vec!["k:First".to_owned(), "k:Second".to_owned()],
         output: Some(PathBuf::from("missing")),
         working_directory: project.directory.path().to_path_buf(),
         ..FetchRequest::default()
@@ -542,7 +542,7 @@ async fn occupied_destinations_fail_per_item_and_force_replaces_them() {
     );
     std::fs::write(project.path("1207.7214.pdf"), "mine").unwrap();
     let request = FetchRequest {
-        selectors: vec!["First".to_owned(), "Second".to_owned()],
+        selectors: vec!["k:First".to_owned(), "k:Second".to_owned()],
         working_directory: project.directory.path().to_path_buf(),
         ..FetchRequest::default()
     };
@@ -570,7 +570,7 @@ async fn occupied_destinations_fail_per_item_and_force_replaces_them() {
             .unwrap(),
     );
     let forced = FetchRequest {
-        selectors: vec!["First".to_owned()],
+        selectors: vec!["k:First".to_owned()],
         force: true,
         working_directory: project.directory.path().to_path_buf(),
         ..FetchRequest::default()

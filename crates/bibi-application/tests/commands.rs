@@ -654,7 +654,7 @@ async fn removing_emits_what_it_deleted_and_renaming_preserves_the_payload() {
 
     let renamed = rename(
         &project.store(),
-        "Aad:2012tfa",
+        "k:Aad:2012tfa",
         &CitationKey::new("Higgs").unwrap(),
     )
     .unwrap();
@@ -665,7 +665,7 @@ async fn removing_emits_what_it_deleted_and_renaming_preserves_the_payload() {
     let shown = show(&project.store(), "inspire:1124337").unwrap();
     assert!(shown.starts_with("@article{Higgs,"));
 
-    let report = remove(&project.store(), &["Higgs".to_owned()], false).unwrap();
+    let report = remove(&project.store(), &["k:Higgs".to_owned()], false).unwrap();
     assert_eq!(report.items.successes.len(), 1);
     assert_eq!(report.items.successes[0].key.as_str(), "Higgs");
     assert!(list(&project.loaded(), &ListRequest::default()).is_empty());
@@ -676,7 +676,7 @@ async fn removing_the_same_record_twice_is_an_idempotent_skip() {
     let project = Project::new(network());
     add(&project, &["1207.7214"], AddRequest::default()).await;
 
-    let selectors = ["Aad:2012tfa".to_owned(), "inspire:1124337".to_owned()];
+    let selectors = ["k:Aad:2012tfa".to_owned(), "inspire:1124337".to_owned()];
     let report = remove(&project.store(), &selectors, false).unwrap();
     assert_eq!(report.items.successes.len(), 1);
     assert_eq!(report.items.skipped.len(), 1);

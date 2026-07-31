@@ -5,7 +5,7 @@ use crate::{
     reports::{BatchReport, ItemFailure, SkipReason, SkippedItem},
 };
 use bibi_bibtex::CitationKey;
-use bibi_core::{Record, Selector};
+use bibi_core::{Locator, Record};
 use bibi_manifest::ManifestStore;
 
 /// Create an empty manifest at the selected target.
@@ -24,7 +24,7 @@ pub fn init(store: &ManifestStore) -> Result<(), Error> {
 /// provider-specific tooling, not an alternate meaning of `show`.
 pub fn show(store: &ManifestStore, selector: &str) -> Result<String, Error> {
     let manifest = store.load()?.manifest;
-    let record = manifest.resolve(&Selector::parse(selector)?)?;
+    let record = manifest.resolve(&Locator::parse(selector)?)?;
     crate::render::render_records([record])
 }
 
@@ -61,7 +61,7 @@ pub fn remove(
     let mut removed = Vec::new();
 
     for selector in selectors {
-        let resolved = Selector::parse(selector)
+        let resolved = Locator::parse(selector)
             .map_err(Error::from)
             .and_then(|parsed| Ok(manifest.resolve(&parsed)?));
         match resolved {
@@ -103,7 +103,7 @@ pub fn remove(
 /// in the user's document, which only they can update.
 pub fn rename(store: &ManifestStore, selector: &str, key: &CitationKey) -> Result<Record, Error> {
     let (manifest, generation) = store.load()?.into_parts();
-    let id = manifest.resolve(&Selector::parse(selector)?)?.id;
+    let id = manifest.resolve(&Locator::parse(selector)?)?.id;
     let mut candidate = manifest.to_candidate();
     candidate.rename(&id, key.clone())?;
     let renamed = candidate

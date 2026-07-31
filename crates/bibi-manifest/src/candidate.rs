@@ -2,7 +2,7 @@
 
 use crate::{error::Error, indexes::Indexes, schema};
 use bibi_bibtex::CitationKey;
-use bibi_core::{BibiId, Identifiers, Provenance, Record, RecordFilter, Selector, SelectorForm};
+use bibi_core::{BibiId, Identifiers, Locator, Provenance, Record, RecordFilter};
 
 /// A validated manifest: sorted records plus their identity indexes.
 ///
@@ -53,29 +53,33 @@ impl Manifest {
         self.indexes.by_key.get(key).map(|at| &self.records[*at])
     }
 
-    /// Resolve a selector to exactly one record.
+    /// Resolve a locator to exactly one record.
     ///
-    /// Forms are tried in the documented order and the first hit wins, so the
-    /// answer depends on what the manifest holds rather than on how the user
-    /// happened to spell the selector.
-    pub fn resolve(&self, selector: &Selector) -> Result<&Record, Error> {
-        for form in selector.forms() {
-            let found = match form {
-                SelectorForm::Key(key) => self.indexes.by_key.get(key),
-                SelectorForm::ProviderIdentity(provider, id) => self
-                    .indexes
-                    .by_provider_identity
-                    .get(&(*provider, id.clone())),
-                SelectorForm::Doi(doi) => self.indexes.by_doi.get(doi),
-                SelectorForm::Arxiv(arxiv) => self.indexes.by_arxiv.get(arxiv),
-            };
-            if let Some(at) = found {
-                return Ok(&self.records[*at]);
+    /// A [`Locator::Opaque`] value matches no index by construction, so it is
+    /// rejected before any lookup rather than reported as a plain no-match:
+    /// folding it into [`Error::NoMatch`] would misleadingly suggest the
+    /// manifest was searched, when the value it was passed could never
+    /// resolve for any manifest.
+    pub fn resolve(&self, locator: &Locator) -> Result<&Record, Error> {
+        let found = match locator {
+            Locator::Key(key) => self.indexes.by_key.get(key),
+            Locator::ProviderIdentity(provider, id) => self
+                .indexes
+                .by_provider_identity
+                .get(&(*provider, id.clone())),
+            Locator::Doi(doi) => self.indexes.by_doi.get(doi),
+            Locator::Arxiv(arxiv) => self.indexes.by_arxiv.get(arxiv),
+            Locator::Opaque(value) => {
+                return Err(Error::UnrecognizedLocator {
+                    value: value.clone(),
+                });
             }
-        }
-        Err(Error::NoMatch {
-            selector: selector.as_str().to_owned(),
-        })
+        };
+        found
+            .map(|at| &self.records[*at])
+            .ok_or_else(|| Error::NoMatch {
+                selector: locator.to_string(),
+            })
     }
 
     /// Find the record that already represents this work, if any.
@@ -283,38 +287,58 @@ mod tests {
     }
 
     #[test]
-    fn selector_resolution_prefers_an_exact_key() {
+    fn a_key_shaped_locator_never_collides_with_the_matching_identifier() {
+        // A record literally keyed `2401.00001` and a different record
+        // carrying that arXiv id can now both be resolved, unambiguously,
+        // because the string itself is never both things at once: bare is
+        // always the arXiv id, `k:`-prefixed is always the key.
         let mut keyed = record("2401.00001", Provider::Inspire, "1");
         keyed.identifiers.arxiv = None;
         let mut by_arxiv = record("Other", Provider::Inspire, "2");
         by_arxiv.identifiers.arxiv = Some(ArxivId::new("2401.00001").unwrap());
         let manifest = Manifest::validate(vec![keyed, by_arxiv]).unwrap();
-        let resolved = manifest
-            .resolve(&Selector::parse("2401.00001").unwrap())
-            .unwrap();
-        assert_eq!(resolved.key.as_str(), "2401.00001");
+        assert_eq!(
+            manifest
+                .resolve(&Locator::Arxiv(ArxivId::new("2401.00001").unwrap()))
+                .unwrap()
+                .key
+                .as_str(),
+            "Other"
+        );
+        assert_eq!(
+            manifest
+                .resolve(&Locator::Key(CitationKey::new("2401.00001").unwrap()))
+                .unwrap()
+                .key
+                .as_str(),
+            "2401.00001"
+        );
     }
 
     #[test]
-    fn selector_resolution_falls_through_to_identifiers() {
+    fn resolution_covers_every_locator_kind() {
         let mut record = record("Key", Provider::Inspire, "1124337");
         record.identifiers.doi = Some(Doi::new("10.1/abc").unwrap());
         record.identifiers.arxiv = Some(ArxivId::new("1207.7214").unwrap());
         let manifest = Manifest::validate(vec![record]).unwrap();
-        for selector in ["Key", "inspire:1124337", "10.1/abc", "1207.7214v2"] {
+        for locator in ["k:Key", "inspire:1124337", "10.1/abc", "1207.7214v2"] {
             assert_eq!(
                 manifest
-                    .resolve(&Selector::parse(selector).unwrap())
+                    .resolve(&Locator::parse(locator).unwrap())
                     .unwrap()
                     .key
                     .as_str(),
                 "Key",
-                "{selector}"
+                "{locator}"
             );
         }
         assert!(matches!(
-            manifest.resolve(&Selector::parse("Missing").unwrap()),
+            manifest.resolve(&Locator::parse("k:Missing").unwrap()),
             Err(Error::NoMatch { .. })
+        ));
+        assert!(matches!(
+            manifest.resolve(&Locator::parse("9999999").unwrap()),
+            Err(Error::UnrecognizedLocator { .. })
         ));
     }
 

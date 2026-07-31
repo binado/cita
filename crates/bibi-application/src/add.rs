@@ -10,7 +10,7 @@ use crate::{
     services::Services,
 };
 use bibi_bibtex::{CitationKey, parse_file};
-use bibi_core::{BibiId, ProviderOwned, QualifiedLocator, Record};
+use bibi_core::{BibiId, Locator, ProviderOwned, Record};
 use bibi_manifest::{ManifestCandidate, ManifestStore};
 use bibi_provider::{Provider, ResolveItem};
 use std::{io::Read, path::PathBuf};
@@ -94,7 +94,7 @@ pub async fn add_locators(
     let mut items = BatchReport::new();
     let mut parsed = Vec::new();
     for raw in locators {
-        match raw.parse::<QualifiedLocator>() {
+        match Locator::parse(raw) {
             Ok(locator) => parsed.push((raw.clone(), locator)),
             Err(error) => items
                 .failures
@@ -162,7 +162,7 @@ pub async fn add_file(
     // One entry can offer two locators — a DOI and an arXiv id for one paper is
     // ordinary in an imported file — so the batch is flattened and each entry
     // remembers which slice of it is its own.
-    let mut requests: Vec<QualifiedLocator> = Vec::new();
+    let mut requests: Vec<Locator> = Vec::new();
     let mut spans: Vec<std::ops::Range<usize>> = Vec::new();
     for entry in &entries {
         let start = requests.len();
@@ -176,7 +176,7 @@ pub async fn add_file(
                     .map(|arxiv| format!("arxiv:{arxiv}")),
             ];
             for locator in locators.into_iter().flatten() {
-                if let Ok(parsed) = locator.parse::<QualifiedLocator>() {
+                if let Ok(parsed) = Locator::parse(&locator) {
                     requests.push(parsed);
                 }
             }

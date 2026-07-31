@@ -123,6 +123,15 @@ pub enum Error {
         /// The selector as written.
         selector: String,
     },
+    /// A locator has no recognized local-lookup shape.
+    #[error(
+        "`{value}` is not a citation key, DOI, arXiv id, or provider identity; \
+         citation keys need an explicit `k:` prefix for a local lookup, e.g. `k:{value}`"
+    )]
+    UnrecognizedLocator {
+        /// The rejected value.
+        value: String,
+    },
 }
 
 impl Error {

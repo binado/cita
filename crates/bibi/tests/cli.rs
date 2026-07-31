@@ -159,15 +159,15 @@ fn piped_remove_and_show_use_trimmed_nonblank_selectors() {
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
     bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
-    let shown = bibi_with_stdin(&path, &["show"], "\n  notes:2026 \n");
+    let shown = bibi_with_stdin(&path, &["show"], "\n  k:notes:2026 \n");
     assert_eq!(code(&shown), 0, "{}", stderr(&shown));
     assert!(stdout(&shown).starts_with("@unpublished{notes:2026,"));
 
-    let too_many = bibi_with_stdin(&path, &["show"], "notes:2026\nastropy:2022\n");
+    let too_many = bibi_with_stdin(&path, &["show"], "k:notes:2026\nk:astropy:2022\n");
     assert_eq!(code(&too_many), 2);
     assert!(stderr(&too_many).contains("exactly one selector"));
 
-    let removed = bibi_with_stdin(&path, &["remove"], " notes:2026\n\nastropy:2022 ");
+    let removed = bibi_with_stdin(&path, &["remove"], " k:notes:2026\n\nk:astropy:2022 ");
     assert_eq!(code(&removed), 0, "{}", stderr(&removed));
     assert_eq!(stdout(&removed), "notes:2026\nastropy:2022\n");
 }
@@ -178,7 +178,7 @@ fn explicit_positionals_win_over_standard_input() {
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
     bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
-    let shown = bibi_with_stdin(&path, &["show", "notes:2026"], "astropy:2022\nextra\n");
+    let shown = bibi_with_stdin(&path, &["show", "k:notes:2026"], "astropy:2022\nextra\n");
     assert_eq!(code(&shown), 0, "{}", stderr(&shown));
     assert!(stdout(&shown).starts_with("@unpublished{notes:2026,"));
 }
@@ -192,7 +192,10 @@ fn a_literal_dash_is_an_ordinary_selector() {
     for command in ["show", "remove", "fetch"] {
         let output = bibi_with_stdin(&path, &[command, "-"], "notes:2026\n");
         assert_eq!(code(&output), 1, "{command}: {}", stderr(&output));
-        assert!(stderr(&output).contains("no record matches"));
+        // A literal `-` has no recognized local-lookup shape: it is not a
+        // citation key without a `k:` prefix, so it is opaque rather than a
+        // (non-matching) key.
+        assert!(stderr(&output).contains("is not a citation key"));
     }
 }
 
@@ -367,14 +370,14 @@ fn show_emits_one_entry_under_its_local_key() {
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
     bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
-    let output = bibi(&path, &["show", "notes:2026"]);
+    let output = bibi(&path, &["show", "k:notes:2026"]);
     assert_eq!(code(&output), 0);
     assert_eq!(
         stdout(&output),
         "@unpublished{notes:2026,\n  title = {Lecture notes},\n  author = {Roe, Richard},\n  year = 2026\n}\n"
     );
 
-    let missing = bibi(&path, &["show", "nothing:here"]);
+    let missing = bibi(&path, &["show", "k:nothing:here"]);
     assert_eq!(code(&missing), 1);
     assert!(stderr(&missing).contains("no record matches"));
 }
@@ -385,12 +388,12 @@ fn rename_rewrites_only_the_key_and_remove_emits_its_key() {
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
     bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
-    let renamed = bibi(&path, &["rename", "notes:2026", "Roe:2026"]);
+    let renamed = bibi(&path, &["rename", "k:notes:2026", "Roe:2026"]);
     assert_eq!(code(&renamed), 0);
     assert!(stdout(&renamed).starts_with("@unpublished{Roe:2026,"));
     assert!(stderr(&renamed).contains("\\cite{}"));
 
-    let removed = bibi(&path, &["remove", "Roe:2026"]);
+    let removed = bibi(&path, &["remove", "k:Roe:2026"]);
     assert_eq!(code(&removed), 0);
     assert_eq!(stdout(&removed), "Roe:2026\n");
     assert_eq!(
@@ -405,7 +408,7 @@ fn removing_the_same_record_twice_is_a_successful_skip() {
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
     bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
 
-    let removed = bibi(&path, &["remove", "notes:2026", "notes:2026"]);
+    let removed = bibi(&path, &["remove", "k:notes:2026", "k:notes:2026"]);
     assert_eq!(code(&removed), 0);
     assert_eq!(stdout(&removed), "notes:2026\n");
     assert!(stderr(&removed).contains("already removed"));
@@ -422,7 +425,7 @@ fn a_dry_run_changes_nothing_on_disk() {
     bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
     let before = std::fs::read_to_string(path.join("bibi.toml")).unwrap();
 
-    let output = bibi(&path, &["remove", "astropy:2022", "--dry-run"]);
+    let output = bibi(&path, &["remove", "k:astropy:2022", "--dry-run"]);
     assert_eq!(code(&output), 0);
     assert_eq!(stdout(&output), "astropy:2022\n");
     assert!(stderr(&output).contains("dry run"));
@@ -823,7 +826,7 @@ fn bibi_fetching(directory: &Path, body: &[u8], args: &[&str]) -> Output {
 fn fetch_reports_a_url_without_downloading_anything() {
     let (_directory, path) = project_with_an_arxiv_record();
 
-    let output = bibi(&path, &["fetch", "Aad:2012tfa", "--url"]);
+    let output = bibi(&path, &["fetch", "k:Aad:2012tfa", "--url"]);
     assert_eq!(code(&output), 0);
     // One line, so `open $(bibi fetch <selector> --url)` works.
     assert_eq!(stdout(&output), "https://arxiv.org/pdf/1207.7214\n");
@@ -831,7 +834,7 @@ fn fetch_reports_a_url_without_downloading_anything() {
     assert!(!path.join("1207.7214.pdf").exists());
 
     // `--source` asks the same question about the other artifact.
-    let source = bibi(&path, &["fetch", "Aad:2012tfa", "--url", "--source"]);
+    let source = bibi(&path, &["fetch", "k:Aad:2012tfa", "--url", "--source"]);
     assert_eq!(code(&source), 0);
     assert_eq!(stdout(&source), "https://arxiv.org/e-print/1207.7214\n");
 }
@@ -840,7 +843,7 @@ fn fetch_reports_a_url_without_downloading_anything() {
 fn piped_fetch_accepts_a_selector_batch() {
     let (_directory, path) = project_with_an_arxiv_record();
 
-    let output = bibi_with_stdin(&path, &["fetch", "--url"], "\n Aad:2012tfa\n1207.7214 \n");
+    let output = bibi_with_stdin(&path, &["fetch", "--url"], "\n k:Aad:2012tfa\n1207.7214 \n");
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert_eq!(stdout(&output), "https://arxiv.org/pdf/1207.7214\n");
     assert!(stderr(&output).contains("same artifact as earlier selector"));
@@ -850,7 +853,7 @@ fn piped_fetch_accepts_a_selector_batch() {
 fn a_fetch_url_batch_preserves_success_order_across_partial_failures() {
     let (_directory, path) = project_with_two_arxiv_records();
 
-    let output = bibi(&path, &["fetch", "Second", "missing", "First", "--url"]);
+    let output = bibi(&path, &["fetch", "k:Second", "missing", "k:First", "--url"]);
     assert_eq!(code(&output), 1);
     assert_eq!(
         stdout(&output),
@@ -863,7 +866,10 @@ fn a_fetch_url_batch_preserves_success_order_across_partial_failures() {
 fn several_fetches_reject_a_non_directory_output_before_downloading() {
     let (_directory, path) = project_with_two_arxiv_records();
 
-    let output = bibi(&path, &["fetch", "First", "Second", "-o", "combined.pdf"]);
+    let output = bibi(
+        &path,
+        &["fetch", "k:First", "k:Second", "-o", "combined.pdf"],
+    );
     assert_eq!(code(&output), 1);
     assert!(stderr(&output).contains("must be an existing directory"));
     assert!(!path.join("combined.pdf").exists());
@@ -875,7 +881,7 @@ fn several_fetches_reject_a_non_directory_output_before_downloading() {
 fn a_fetch_downloads_into_the_working_directory_under_the_arxiv_name() {
     let (_directory, path) = project_with_an_arxiv_record();
 
-    let output = bibi_fetching(&path, b"%PDF-1.7\nbody", &["fetch", "Aad:2012tfa"]);
+    let output = bibi_fetching(&path, b"%PDF-1.7\nbody", &["fetch", "k:Aad:2012tfa"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let destination = path.join("1207.7214.pdf");
     assert!(destination.exists());
@@ -897,7 +903,7 @@ fn a_fetch_onto_an_existing_file_is_a_collision_rather_than_a_replacement() {
     let destination = path.join("1207.7214.pdf");
     std::fs::write(&destination, "mine").unwrap();
 
-    let output = bibi_fetching(&path, b"%PDF-1.7\nnew", &["fetch", "Aad:2012tfa"]);
+    let output = bibi_fetching(&path, b"%PDF-1.7\nnew", &["fetch", "k:Aad:2012tfa"]);
     // The user asked for a download and did not get one, so this fails.
     assert_eq!(code(&output), 1);
     assert!(stderr(&output).contains("already exists"));
@@ -911,7 +917,7 @@ fn an_output_path_names_an_exact_file() {
     let output = bibi_fetching(
         &path,
         b"%PDF-1.7\nbody",
-        &["fetch", "Aad:2012tfa", "-o", "paper.pdf"],
+        &["fetch", "k:Aad:2012tfa", "-o", "paper.pdf"],
     );
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(path.join("paper.pdf").exists());
@@ -923,7 +929,7 @@ fn a_response_that_is_not_the_artifact_leaves_nothing_behind() {
     let (_directory, path) = project_with_an_arxiv_record();
 
     // arXiv serves an HTML holding page for a withdrawn work.
-    let output = bibi_fetching(&path, b"<!DOCTYPE html>", &["fetch", "Aad:2012tfa"]);
+    let output = bibi_fetching(&path, b"<!DOCTYPE html>", &["fetch", "k:Aad:2012tfa"]);
     assert_eq!(code(&output), 1);
     assert!(stderr(&output).contains("not a PDF"));
     assert!(!path.join("1207.7214.pdf").exists());
@@ -943,7 +949,7 @@ fn fetching_a_record_without_an_arxiv_id_explains_why_it_cannot() {
     let (_directory, path) = project();
     std::fs::write(path.join("library.bib"), LIBRARY).unwrap();
     bibi(&path, &["add", "-f", "library.bib", "--provider", "local"]);
-    let output = bibi(&path, &["fetch", "notes:2026", "--url"]);
+    let output = bibi(&path, &["fetch", "k:notes:2026", "--url"]);
     assert_eq!(code(&output), 1);
     assert!(stderr(&output).contains("no arXiv identifier"));
 }
@@ -957,7 +963,7 @@ fn a_forced_fetch_replaces_an_existing_file() {
     let output = bibi_fetching(
         &path,
         b"%PDF-1.7\nnew",
-        &["fetch", "Aad:2012tfa", "--force"],
+        &["fetch", "k:Aad:2012tfa", "--force"],
     );
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert_eq!(std::fs::read(&destination).unwrap(), b"%PDF-1.7\nnew");
@@ -982,7 +988,7 @@ fn a_non_broken_stdout_error_exits_nonzero() {
     let output = Command::new(env!("CARGO_BIN_EXE_bibi"))
         .current_dir(&path)
         .env("BIBI_CACHE_ROOT", path.join("cache/bibi"))
-        .args(["show", "notes:2026"])
+        .args(["show", "k:notes:2026"])
         .stdout(Stdio::from(sink))
         .output()
         .expect("running bibi");
@@ -1004,7 +1010,7 @@ fn a_closed_stdout_pipe_still_exits_zero() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_bibi"))
         .current_dir(&path)
         .env("BIBI_CACHE_ROOT", path.join("cache/bibi"))
-        .args(["show", "Large"])
+        .args(["show", "k:Large"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

@@ -1,71 +1,70 @@
-//! Parsing what the user typed into something a provider can resolve.
+//! Parsing what the user typed into something that names exactly one record.
 //!
-//! Parsing generic syntax belongs here. Deciding whether a provider *supports* a
-//! locator belongs to the provider layer, which is why an unqualified value that
-//! is neither an arXiv id nor a DOI becomes a bare id for the one selected
-//! provider, rather than an error or a guess.
+//! One type serves both jobs a user-supplied string used to do separately:
+//! naming something for a provider to resolve (`add`) and naming something
+//! already in the manifest (`remove`, `rename`, `fetch`, `show`). A citation
+//! key's grammar can look identical to a DOI or a modern arXiv id, which used
+//! to force a selector to keep every form a string could denote and try them
+//! in a fixed priority order — silently unreachable for whichever record lost
+//! the tie. The `k:` sigil removes the ambiguity structurally instead: a bare
+//! string is never a citation key, so nothing needs to be tried twice.
+//!
+//! Deciding whether a provider *supports* a locator belongs to the provider
+//! layer, which is why an unqualified value that matches no recognized shape
+//! becomes [`Locator::Opaque`] rather than an error or a guess.
 
 use crate::{
     error::Error,
     identifiers::{ArxivId, Doi},
-    provenance::Provider,
+    provenance::{Provider, ProviderId},
 };
+use bibi_bibtex::CitationKey;
 use percent_encoding::percent_decode_str;
 use std::{borrow::Cow, fmt, str::FromStr};
 use url::Url;
 
-/// Something a provider can be asked to resolve.
+/// Something that names exactly one record: a local citation key, a provider's
+/// own identity, a provider-neutral identifier, or an opaque value deferred to
+/// whichever provider is selected.
+///
+/// No provider may ever be named `k`: `k:1124337` would otherwise be ambiguous
+/// between a citation key and a qualifier for a provider named `k`. The `k:`
+/// rule is checked before every other rule, so this is the only place that
+/// ever reasons about it.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Locator {
-    /// A normalized arXiv identifier. Provider-neutral.
-    Arxiv(ArxivId),
+    /// An exact local citation key, given with a mandatory `k:` sigil.
+    Key(CitationKey),
+    /// A qualified provider identity: `<provider>:<id>`.
+    ProviderIdentity(Provider, ProviderId),
     /// A normalized DOI. Provider-neutral.
     Doi(Doi),
-    /// A provider's own record id, exactly as written.
-    ProviderId(String),
+    /// A normalized arXiv identifier. Provider-neutral.
+    Arxiv(ArxivId),
+    /// No recognized shape. Deferred to whichever provider is selected.
+    Opaque(String),
+}
+
+impl Locator {
+    /// Parse a locator. A thin wrapper so call sites need no turbofish.
+    pub fn parse(input: &str) -> Result<Self, Error> {
+        input.parse()
+    }
 }
 
 impl fmt::Display for Locator {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Arxiv(id) => write!(formatter, "arxiv:{id}"),
+            Self::Key(key) => write!(formatter, "k:{key}"),
+            Self::ProviderIdentity(provider, id) => write!(formatter, "{provider}:{id}"),
             Self::Doi(doi) => write!(formatter, "doi:{doi}"),
-            Self::ProviderId(id) => formatter.write_str(id),
+            Self::Arxiv(id) => write!(formatter, "arxiv:{id}"),
+            Self::Opaque(value) => formatter.write_str(value),
         }
     }
 }
 
-/// A locator, with the provider the user named for it, if any.
-///
-/// A qualifier and a `--provider` flag that disagree are a usage error caught
-/// before any request, because a wrong provider permanently determines the
-/// BibTeX and texkey a record is stored with.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct QualifiedLocator {
-    /// The provider named by a `<provider>:` qualifier.
-    pub provider: Option<Provider>,
-    /// What to resolve.
-    pub locator: Locator,
-}
-
-impl QualifiedLocator {
-    /// True when this locator names no provider and no identifier kind, so the
-    /// selected provider must interpret the value in its own syntax.
-    pub fn needs_provider_recognition(&self) -> bool {
-        self.provider.is_none() && matches!(self.locator, Locator::ProviderId(_))
-    }
-}
-
-impl fmt::Display for QualifiedLocator {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.provider {
-            Some(provider) => write!(formatter, "{provider}:{}", self.locator),
-            None => write!(formatter, "{}", self.locator),
-        }
-    }
-}
-
-impl FromStr for QualifiedLocator {
+impl FromStr for Locator {
     type Err = Error;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
@@ -73,23 +72,19 @@ impl FromStr for QualifiedLocator {
         if value.is_empty() {
             return Err(invalid(input));
         }
+        if let Some(rest) = strip_prefix_ci(value, "k:") {
+            return CitationKey::new(rest)
+                .map(Self::Key)
+                .map_err(|_| invalid(input));
+        }
         if let Some(rest) = strip_prefix_ci(value, "arxiv:") {
-            return Ok(Self {
-                provider: None,
-                locator: Locator::Arxiv(ArxivId::new(rest)?),
-            });
+            return Ok(Self::Arxiv(ArxivId::new(rest)?));
         }
         if let Some(rest) = strip_prefix_ci(value, "doi:") {
-            return Ok(Self {
-                provider: None,
-                locator: Locator::Doi(Doi::new(rest)?),
-            });
+            return Ok(Self::Doi(Doi::new(rest)?));
         }
         if let Some(locator) = canonical_url(value) {
-            return Ok(Self {
-                provider: None,
-                locator,
-            });
+            return Ok(locator);
         }
         // A `<name>:<rest>` prefix naming an installed provider exactly
         // qualifies the rest as that provider's own id. A name outside the
@@ -105,27 +100,16 @@ impl FromStr for QualifiedLocator {
             && !rest.starts_with("//")
             && let Ok(provider) = Provider::from_str(prefix)
         {
-            return Ok(Self {
-                provider: Some(provider),
-                locator: Locator::ProviderId(rest.trim().to_owned()),
-            });
+            let id = ProviderId::new(rest.trim()).expect("checked non-empty above");
+            return Ok(Self::ProviderIdentity(provider, id));
         }
         if let Ok(arxiv) = ArxivId::new(value) {
-            return Ok(Self {
-                provider: None,
-                locator: Locator::Arxiv(arxiv),
-            });
+            return Ok(Self::Arxiv(arxiv));
         }
         if let Ok(doi) = Doi::new(value) {
-            return Ok(Self {
-                provider: None,
-                locator: Locator::Doi(doi),
-            });
+            return Ok(Self::Doi(doi));
         }
-        Ok(Self {
-            provider: None,
-            locator: Locator::ProviderId(value.to_owned()),
-        })
+        Ok(Self::Opaque(value.to_owned()))
     }
 }
 
@@ -181,60 +165,83 @@ fn invalid(value: &str) -> Error {
 mod tests {
     use super::*;
 
-    fn parse(value: &str) -> QualifiedLocator {
+    fn parse(value: &str) -> Locator {
         value.parse().unwrap()
+    }
+
+    #[test]
+    fn a_key_sigil_is_the_only_way_to_denote_a_citation_key() {
+        assert_eq!(
+            parse("k:Aad:2012tfa"),
+            Locator::Key(CitationKey::new("Aad:2012tfa").unwrap())
+        );
+        // Case-insensitive, matching `arxiv:`/`doi:`.
+        assert_eq!(
+            parse("K:Aad:2012tfa"),
+            Locator::Key(CitationKey::new("Aad:2012tfa").unwrap())
+        );
+    }
+
+    #[test]
+    fn a_string_shaped_like_an_identifier_is_never_ambiguous() {
+        // Without the sigil, a key-shaped arXiv id is always read as an arXiv
+        // id: the two can no longer both be true of one string.
+        assert_eq!(
+            parse("2401.00001"),
+            Locator::Arxiv(ArxivId::new("2401.00001").unwrap())
+        );
+        assert_eq!(
+            parse("k:2401.00001"),
+            Locator::Key(CitationKey::new("2401.00001").unwrap())
+        );
     }
 
     #[test]
     fn explicit_prefixes_normalize_their_identifiers() {
         assert_eq!(
-            parse("arxiv:1207.7214v3").locator,
+            parse("arxiv:1207.7214v3"),
             Locator::Arxiv(ArxivId::new("1207.7214").unwrap())
         );
         assert_eq!(
-            parse("DOI:10.1000/ABC").locator,
+            parse("DOI:10.1000/ABC"),
             Locator::Doi(Doi::new("10.1000/abc").unwrap())
         );
-        assert!(parse("arxiv:1207.7214").provider.is_none());
     }
 
     #[test]
     fn bare_identifiers_are_recognized_without_a_prefix() {
         assert_eq!(
-            parse("hep-th/9901001").locator,
+            parse("hep-th/9901001"),
             Locator::Arxiv(ArxivId::new("hep-th/9901001").unwrap())
         );
         assert_eq!(
-            parse("10.1016/j.physletb.2012.08.020").locator,
+            parse("10.1016/j.physletb.2012.08.020"),
             Locator::Doi(Doi::new("10.1016/j.physletb.2012.08.020").unwrap())
         );
     }
 
     #[test]
     fn a_provider_qualifier_carries_the_rest_verbatim() {
-        let qualified = parse("inspire:1124337");
-        assert_eq!(qualified.provider, Some(Provider::Inspire));
-        assert_eq!(qualified.locator, Locator::ProviderId("1124337".into()));
-        assert!(!qualified.needs_provider_recognition());
+        assert_eq!(
+            parse("inspire:1124337"),
+            Locator::ProviderIdentity(Provider::Inspire, ProviderId::new("1124337").unwrap())
+        );
         // A name outside the installed set does not qualify: it falls through
         // whole, for the selected provider to interpret in its own syntax.
-        let unqualified = parse("ads:2024ApJ...900..1X");
-        assert_eq!(unqualified.provider, None);
         assert_eq!(
-            unqualified.locator,
-            Locator::ProviderId("ads:2024ApJ...900..1X".into())
+            parse("ads:2024ApJ...900..1X"),
+            Locator::Opaque("ads:2024ApJ...900..1X".into())
         );
     }
 
     #[test]
     fn a_bare_value_defers_to_the_selected_provider() {
-        let bare = parse("1124337");
-        assert!(bare.provider.is_none());
-        assert_eq!(bare.locator, Locator::ProviderId("1124337".into()));
-        assert!(bare.needs_provider_recognition());
+        assert_eq!(parse("1124337"), Locator::Opaque("1124337".into()));
         // A provider's own URL is that provider's syntax, so it arrives intact.
-        let url = parse("https://inspirehep.net/literature/1124337");
-        assert!(url.needs_provider_recognition());
+        assert_eq!(
+            parse("https://inspirehep.net/literature/1124337"),
+            Locator::Opaque("https://inspirehep.net/literature/1124337".into())
+        );
     }
 
     #[test]
@@ -245,17 +252,17 @@ mod tests {
             "https://arxiv.org/pdf/2506.14764?download=1#page=2",
         ] {
             assert_eq!(
-                parse(value).locator,
+                parse(value),
                 Locator::Arxiv(ArxivId::new("2506.14764").unwrap()),
                 "{value}"
             );
         }
         assert_eq!(
-            parse("  https://arxiv.org/abs/hep-th%2F9901001/  ").locator,
+            parse("  https://arxiv.org/abs/hep-th%2F9901001/  "),
             Locator::Arxiv(ArxivId::new("hep-th/9901001").unwrap())
         );
         assert_eq!(
-            parse("https://doi.org/10.1000%2FABC%2FDef?utm_source=x").locator,
+            parse("https://doi.org/10.1000%2FABC%2FDef?utm_source=x"),
             Locator::Doi(Doi::new("10.1000/abc/def").unwrap())
         );
     }
@@ -271,19 +278,38 @@ mod tests {
             "https://dx.doi.org/10.1000/example",
         ] {
             assert!(
-                matches!(parse(value).locator, Locator::ProviderId(_)),
+                matches!(parse(value), Locator::Opaque(_)),
                 "{value} was read as an identifier"
             );
         }
     }
 
     #[test]
-    fn a_malformed_explicit_identifier_is_an_error_not_a_provider_id() {
+    fn a_malformed_explicit_identifier_is_an_error_not_opaque() {
         // The prefix is a claim about the kind, so a bad value must not fall
-        // through and become some provider's opaque id.
-        assert!("arxiv:nope".parse::<QualifiedLocator>().is_err());
-        assert!("doi:nope".parse::<QualifiedLocator>().is_err());
-        assert!("".parse::<QualifiedLocator>().is_err());
-        assert!("   ".parse::<QualifiedLocator>().is_err());
+        // through and become an opaque value.
+        assert!("arxiv:nope".parse::<Locator>().is_err());
+        assert!("doi:nope".parse::<Locator>().is_err());
+        assert!("".parse::<Locator>().is_err());
+        assert!("   ".parse::<Locator>().is_err());
+    }
+
+    #[test]
+    fn a_malformed_key_is_an_error_not_opaque() {
+        assert!("k:has spaces".parse::<Locator>().is_err());
+        assert!("k:".parse::<Locator>().is_err());
+    }
+
+    #[test]
+    fn display_round_trips_through_parse() {
+        for value in [
+            "k:Aad:2012tfa",
+            "inspire:1124337",
+            "doi:10.1000/abc",
+            "arxiv:1207.7214",
+            "some-opaque-value",
+        ] {
+            assert_eq!(parse(value).to_string(), value, "{value}");
+        }
     }
 }

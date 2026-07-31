@@ -1,7 +1,7 @@
 //! Acquiring records' documents.
 
 use crate::{Progress, error::Error, services::Services};
-use bibi_core::{ArxivId, Selector};
+use bibi_core::{ArxivId, Locator};
 use bibi_documents::{ArtifactKind, default_filename};
 use bibi_manifest::ManifestStore;
 use std::{
@@ -166,7 +166,7 @@ where
     let mut planned = Vec::with_capacity(request.selectors.len());
 
     for selector in &request.selectors {
-        let record = match Selector::parse(selector)
+        let record = match Locator::parse(selector)
             .map_err(Error::from)
             .and_then(|parsed| Ok(manifest.resolve(&parsed)?))
         {
