@@ -1,28 +1,18 @@
-//! Constructing the concrete services a command runs against.
+//! Construct concrete services and explicit project targets.
 
 use anyhow::{Context, Result};
-use bibi_application::domain::ManifestStore;
-use bibi_application::{Services, TargetResolver};
-use bibi_documents::ArtifactClient;
+use bibi_application::{Services, TargetResolver, domain::BibliographyStore};
 use bibi_provider::Providers;
 use std::{path::Path, sync::Arc};
 
-/// A test-only override for INSPIRE's base URL.
-///
-/// The CLI suite drives the binary against a local listener through this, so
-/// that command-level tests stay hermetic. It is not a configuration surface:
-/// v1 ships no configuration file, and nothing about ordinary use reads it.
 pub const INSPIRE_BASE_URL_ENV: &str = "BIBI_INSPIRE_BASE_URL";
 
 pub fn providers() -> Result<Providers> {
     let mut builder = Providers::builder();
-    if let Some(base_url) = std::env::var_os(INSPIRE_BASE_URL_ENV).filter(|value| !value.is_empty())
-    {
-        builder = builder.inspire_base_url(base_url.to_string_lossy().into_owned());
+    if let Some(value) = std::env::var_os(INSPIRE_BASE_URL_ENV).filter(|value| !value.is_empty()) {
+        builder = builder.inspire_base_url(value.to_string_lossy().into_owned());
     }
     builder
-        // Retries are reported as they happen: a command that pauses for five
-        // seconds should say why rather than appear to hang.
         .on_retry(|event| {
             crate::output::warn(format!(
                 "rate limited; retrying in {}s ({}/{}): {}",
@@ -33,43 +23,19 @@ pub fn providers() -> Result<Providers> {
             ));
         })
         .build()
-        .context("building the provider facade")
+        .context("building provider")
 }
 
-/// A test-only override for arXiv's base URL.
-///
-/// The counterpart to [`INSPIRE_BASE_URL_ENV`], and read the same way: the CLI
-/// suite drives a real download against a local listener through it, so that
-/// `fetch` is covered end to end without touching arxiv.org. It is not a
-/// configuration surface.
-pub const ARXIV_BASE_URL_ENV: &str = "BIBI_ARXIV_BASE_URL";
-
-/// Assemble the injected services.
 pub fn services() -> Result<Services> {
-    let services = Services::new(Arc::new(providers()?));
-    // Only the override is applied here. Without one, the client stays unbuilt
-    // until something actually downloads, which is what keeps every offline
-    // command offline by construction.
-    match std::env::var_os(ARXIV_BASE_URL_ENV).filter(|value| !value.is_empty()) {
-        None => Ok(services),
-        Some(base_url) => {
-            let client = ArtifactClient::builder()
-                .base_url(base_url.to_string_lossy().into_owned())
-                .build()
-                .context("building the arXiv client")?;
-            Ok(services.with_documents(client))
-        }
-    }
+    Ok(Services::new(Arc::new(providers()?)))
 }
 
-/// Resolve the manifest a command acts on.
-pub fn store(path: Option<&Path>) -> Result<ManifestStore> {
+pub fn store(path: Option<&Path>) -> Result<BibliographyStore> {
     Ok(resolver()?.resolve(path))
 }
 
-/// Build a resolver, for commands that also resolve input paths.
 pub fn resolver() -> Result<TargetResolver> {
-    let working_directory =
-        std::env::current_dir().context("reading the current working directory")?;
-    Ok(TargetResolver::new(working_directory))
+    Ok(TargetResolver::new(
+        std::env::current_dir().context("reading working directory")?,
+    ))
 }

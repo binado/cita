@@ -1,4 +1,4 @@
-//! Citation keys and validated standalone entries.
+//! Validated standalone entries with exact bytes and a derived texkey.
 
 use crate::{
     adapter::{self, RawEntry, RawField},
@@ -6,56 +6,6 @@ use crate::{
     local_metadata::{self, LocalMetadata},
     scanner,
 };
-use std::{fmt, ops::Range, str::FromStr};
-
-/// A citation key in the safe grammar `[A-Za-z0-9._:+-]+`.
-///
-/// The grammar is deliberately narrower than BibTeX's, so that a key can always
-/// be written back into an entry by replacing its token and nothing else.
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct CitationKey(String);
-
-impl CitationKey {
-    /// Validate and construct a citation key.
-    pub fn new(value: impl Into<String>) -> Result<Self, Error> {
-        let value = value.into();
-        if scanner::is_safe_key(&value) {
-            Ok(Self(value))
-        } else {
-            Err(Error::InvalidKey { key: value })
-        }
-    }
-
-    /// Borrow the key text.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Consume the key, returning its text.
-    pub fn into_string(self) -> String {
-        self.0
-    }
-}
-
-impl fmt::Display for CitationKey {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl AsRef<str> for CitationKey {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl FromStr for CitationKey {
-    type Err = Error;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::new(value)
-    }
-}
 
 /// Identifiers read syntactically out of an entry's fields.
 ///
@@ -81,8 +31,7 @@ pub struct IdentifierCandidates {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BibtexEntry {
     source: String,
-    source_key: CitationKey,
-    key_span: Range<usize>,
+    texkey: String,
     /// Field spans relative to `source`, in source order.
     fields: Vec<RawField>,
 }
@@ -111,11 +60,10 @@ impl BibtexEntry {
             })
             .collect();
         let source = source[raw.entry].to_owned();
-        let source_key = CitationKey(source[key_span.clone()].to_owned());
+        let texkey = source[key_span].to_owned();
         Self {
             source,
-            source_key,
-            key_span,
+            texkey,
             fields,
         }
     }
@@ -125,40 +73,9 @@ impl BibtexEntry {
         &self.source
     }
 
-    /// The citation key as the source wrote it.
-    pub fn source_key(&self) -> &CitationKey {
-        &self.source_key
-    }
-
-    /// Render this entry with `key` in place of its source key.
-    ///
-    /// Only the key token changes. The result is re-scanned and compared with
-    /// the original outside the key span, so a re-key that would have disturbed
-    /// any other byte is refused rather than published.
-    pub fn rekey(&self, key: &CitationKey) -> Result<String, Error> {
-        let mut rekeyed = String::with_capacity(self.source.len() + key.as_str().len());
-        rekeyed.push_str(&self.source[..self.key_span.start]);
-        rekeyed.push_str(key.as_str());
-        rekeyed.push_str(&self.source[self.key_span.end..]);
-        let scanned = Self::parse_one(rekeyed.clone()).map_err(|error| Error::UnsafeRekey {
-            key: key.as_str().to_owned(),
-            reason: error.to_string(),
-        })?;
-        let unsafe_rekey = |reason: &str| Error::UnsafeRekey {
-            key: key.as_str().to_owned(),
-            reason: reason.to_owned(),
-        };
-        if scanned.source_key != *key {
-            return Err(unsafe_rekey(
-                "the written key is not the key that was read back",
-            ));
-        }
-        if self.source[..self.key_span.start] != scanned.source[..scanned.key_span.start]
-            || self.source[self.key_span.end..] != scanned.source[scanned.key_span.end..]
-        {
-            return Err(unsafe_rekey("bytes outside the citation key would change"));
-        }
-        Ok(rekeyed)
+    /// The texkey embedded in the exact source.
+    pub fn texkey(&self) -> &str {
+        &self.texkey
     }
 
     /// Read the DOI and arXiv identifiers this entry declares, if any.
@@ -187,11 +104,7 @@ impl BibtexEntry {
     /// provider: where the user supplied the BibTeX, deriving metadata from it
     /// interprets nothing that a structured record would have said better.
     pub fn local_metadata(&self) -> Result<LocalMetadata, Error> {
-        local_metadata::project(
-            &self.source,
-            self.source_key.as_str(),
-            self.identifier_candidates(),
-        )
+        local_metadata::project(&self.source, &self.texkey, self.identifier_candidates())
     }
 }
 
@@ -245,29 +158,15 @@ fn is_concatenated(value: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn key(value: &str) -> CitationKey {
-        CitationKey::new(value).unwrap()
-    }
-
     fn entry(source: &str) -> BibtexEntry {
         BibtexEntry::parse_one(source.to_owned()).unwrap()
-    }
-
-    #[test]
-    fn citation_keys_accept_only_the_safe_grammar() {
-        for value in ["Aad:2012tfa", "a", "A.b_c:d+e-f", "2012"] {
-            assert!(CitationKey::new(value).is_ok(), "{value}");
-        }
-        for value in ["", "a b", "a{b", "a/b", "café"] {
-            assert!(CitationKey::new(value).is_err(), "{value}");
-        }
     }
 
     #[test]
     fn parse_one_keeps_the_entry_span_and_drops_surrounding_whitespace() {
         let entry = entry("\n  @misc{A, title = {T} }\n\n");
         assert_eq!(entry.source(), "@misc{A, title = {T} }");
-        assert_eq!(entry.source_key().as_str(), "A");
+        assert_eq!(entry.texkey(), "A");
     }
 
     #[test]
@@ -283,17 +182,8 @@ mod tests {
     }
 
     #[test]
-    fn rekey_changes_only_the_key_token() {
-        let original = entry("@misc{Old, title = {Old is not a key} }");
-        assert_eq!(
-            original.rekey(&key("New")).unwrap(),
-            "@misc{New, title = {Old is not a key} }"
-        );
-        // Re-keying is a pure function of the stored entry, so it is repeatable.
-        assert_eq!(
-            original.rekey(&key("Old")).unwrap(),
-            original.source().to_owned()
-        );
+    fn adopts_keys_that_need_never_be_rewritten() {
+        assert_eq!(entry("@misc{a/b,title={T}}").texkey(), "a/b");
     }
 
     #[test]
@@ -350,12 +240,12 @@ mod tests {
     }
 
     #[test]
-    fn field_spans_survive_a_rekey() {
+    fn field_spans_and_texkey_are_derived_together() {
         let original = entry("@misc{Old, doi = {10.1/x}, eprint = {1207.7214}}");
-        let rekeyed = BibtexEntry::parse_one(original.rekey(&key("Longer")).unwrap()).unwrap();
+        assert_eq!(original.texkey(), "Old");
         assert_eq!(
-            rekeyed.identifier_candidates(),
-            original.identifier_candidates()
+            original.identifier_candidates().doi.as_deref(),
+            Some("10.1/x")
         );
     }
 }

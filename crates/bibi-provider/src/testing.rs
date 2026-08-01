@@ -1,25 +1,28 @@
-//! Narrow scripted construction for facade and application tests.
+//! Scripted facade construction for application tests.
 
 use crate::Providers;
+use bibi_bibtex::BibtexEntry;
+use bibi_core::{Description, Identifiers, ProviderId, ProviderName, RecordState, Source};
 use std::sync::Arc;
 
-pub use bibi_core::remote::{
-    PayloadItem, PayloadRequest, ProviderMetadata, RefreshItem, RefreshRequest, RefreshState,
-    Resolution,
-    testing::{
-        FakeProvider, ProviderCall, payload, provider_metadata, provider_record, verify_contract,
-    },
-};
+pub use bibi_core::remote::testing::{FakeProvider, ProviderCall, verify_contract};
 
-/// Construct a facade whose INSPIRE arm is scripted.
-///
-/// This is not a registration API: there remains exactly one remote dispatch
-/// slot, and its fake must use the installed `inspire` provenance name.
+/// Construct a facade whose INSPIRE slot is scripted.
 pub fn providers(remote: Arc<FakeProvider>) -> Providers {
-    assert_eq!(
-        bibi_core::remote::RemoteProvider::name(remote.as_ref()).as_str(),
-        "inspire",
-        "the scripted facade replaces only the INSPIRE implementation"
-    );
     Providers::scripted(remote)
+}
+
+/// Construct a complete managed test state.
+pub fn provider_record(provider_id: &str, texkey: &str, title: &str) -> RecordState {
+    RecordState::new(
+        Source::managed(
+            ProviderName::Inspire,
+            ProviderId::new(provider_id).expect("provider id"),
+        ),
+        Identifiers::default(),
+        Description::new(title, Vec::new(), Vec::new(), None),
+        BibtexEntry::parse_one(format!("@misc{{{texkey},title={{{title}}}}}"))
+            .expect("test BibTeX"),
+    )
+    .expect("test state")
 }

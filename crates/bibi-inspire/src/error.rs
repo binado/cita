@@ -1,12 +1,12 @@
 //! Failures, stamped with the provider that produced them.
 
 use bibi_core::{
-    Provider,
+    ProviderName,
     remote::{MappingError, RetrievalError},
 };
 
-pub(crate) fn provider() -> Provider {
-    Provider::Inspire
+pub(crate) fn provider() -> ProviderName {
+    ProviderName::Inspire
 }
 
 pub(crate) fn transport(message: impl std::fmt::Display) -> RetrievalError {

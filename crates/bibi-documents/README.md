@@ -1,6 +1,7 @@
 # bibi-documents
 
-The global arXiv PDF and source cache for bibi.
+Stateless arXiv PDF and source retrieval. This is a dormant, independently
+buildable workspace crate and is not linked into the bibi CLI.
 
 Part of the [bibi](https://github.com/binado/bibi) workspace.
 

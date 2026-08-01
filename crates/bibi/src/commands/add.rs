@@ -1,98 +1,79 @@
-//! `bibi add`.
+//! `bibi add` and `bibi import`.
 
-use crate::{cli::AddArgs, output};
-use anyhow::{Result, bail};
-use bibi_application::domain::CitationKey;
+use crate::{
+    cli::{AddArgs, ImportArgs},
+    output,
+};
+use anyhow::{Context, Result};
 use bibi_application::{
-    AddFileRequest, AddKind, AddReport, AddRequest, InputSource, Services, add_file, add_locators,
+    AddRequest, Admission, AdmissionKind, ImportRequest, MutationReport, Services, add, import,
 };
 use std::path::Path;
 
-pub async fn run(services: &Services, target: Option<&Path>, args: AddArgs) -> Result<bool> {
+pub async fn run_add(services: &Services, target: Option<&Path>, args: AddArgs) -> Result<bool> {
     let store = crate::bootstrap::store(target)?;
-    let provider = args
-        .provider
-        .as_deref()
-        .map(crate::commands::provider::installed)
-        .transpose()?;
-
-    let report = match &args.file {
-        Some(path) => {
-            if !args.locators.is_empty() {
-                bail!("`add -f` reads entries from a file, so it takes no locators");
-            }
-            let source = if path == Path::new("-") {
-                InputSource::Stdin
-            } else {
-                InputSource::Path(crate::bootstrap::resolver()?.input(path))
-            };
-            add_file(
-                services,
-                &store,
-                &AddFileRequest {
-                    source,
-                    provider: provider.unwrap_or_default(),
-                    overwrite: args.overwrite,
-                    dry_run: args.dry_run,
-                },
-            )
-            .await?
-        }
-        None => {
-            if args.locators.is_empty() {
-                bail!("give at least one locator, or `-f <file>` to read entries from a file");
-            }
-            add_locators(
-                services,
-                &store,
-                &args.locators,
-                &AddRequest {
-                    key: args.key.as_deref().map(CitationKey::new).transpose()?,
-                    provider,
-                    overwrite: args.overwrite,
-                    dry_run: args.dry_run,
-                },
-            )
-            .await?
-        }
-    };
-    present(&report, args.dry_run)
+    let report = add(
+        services,
+        &store,
+        &args.locators,
+        &AddRequest {
+            provider: args
+                .provider
+                .as_deref()
+                .map(crate::commands::provider::installed)
+                .transpose()?,
+            overwrite: args.overwrite,
+            dry_run: args.dry_run,
+        },
+    )
+    .await?;
+    present(&report, args.dry_run)?;
+    Ok(false)
 }
 
-/// Write the local keys to stdout and the explanations to stderr.
-///
-/// Every item bibi was asked about produces a line on stdout — added,
-/// overwritten, or skipped — so the output is the complete set of keys the
-/// command concerns, usable as input to something else.
-fn present(report: &AddReport, dry_run: bool) -> Result<bool> {
-    let mut keys = Vec::new();
-    for record in &report.items.successes {
-        keys.push(record.key.to_string());
-    }
-    for skipped in &report.items.skipped {
-        if let Some(key) = &skipped.key {
-            keys.push(key.to_string());
+pub fn run_import(target: Option<&Path>, args: ImportArgs) -> Result<bool> {
+    let store = crate::bootstrap::store(target)?;
+    let source = match args.file {
+        Some(path) => {
+            let path = crate::bootstrap::resolver()?.input(&path);
+            std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?
         }
-    }
-    if !keys.is_empty() {
-        output::emit(&(keys.join("\n") + "\n"))?;
-    }
-    output::report(&report.items);
+        None => args.stdin.expect("stdin was resolved before dispatch"),
+    };
+    let report = import(
+        &store,
+        &source,
+        &ImportRequest {
+            overwrite: args.overwrite,
+            dry_run: args.dry_run,
+        },
+    )?;
+    present(&report, args.dry_run)?;
+    Ok(false)
+}
 
-    let added = report
-        .items
-        .successes
-        .iter()
-        .filter(|record| record.kind == AddKind::Added)
-        .count();
-    let overwritten = report.items.successes.len() - added;
-    if dry_run {
-        output::note(format!(
-            "dry run: would add {added}, overwrite {overwritten}, skip {}",
-            report.items.skipped.len()
-        ));
-    } else if report.committed {
-        output::note(format!("added {added}, overwrote {overwritten}"));
+fn present(report: &MutationReport<Admission>, dry_run: bool) -> Result<()> {
+    if !report.results.is_empty() {
+        output::emit(
+            &(report
+                .results
+                .iter()
+                .map(|result| result.texkey.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n"),
+        )?;
     }
-    Ok(report.items.has_failures())
+    let added = report
+        .results
+        .iter()
+        .filter(|result| result.kind == AdmissionKind::Added)
+        .count();
+    let overwritten = report.results.len() - added;
+    output::note(if dry_run {
+        format!("dry run: would add {added}, overwrite {overwritten}")
+    } else {
+        format!("added {added}, overwrote {overwritten}")
+    });
+    Ok(())
 }

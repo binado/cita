@@ -1,7 +1,7 @@
 # bibi-core
 
-Provider-neutral domain values plus the statically dispatched
-`RemoteProvider` contract, outcomes, errors, fake, and conformance suite.
+The `RecordState`/`Record`/`Bibliography` domain aggregate, locators, sources,
+stable UUID identity, and the strict batched `Provider` contract.
 
 Part of the [bibi](https://github.com/binado/bibi) workspace.
 

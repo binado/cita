@@ -1,57 +1,29 @@
-//! Command use cases over injected services.
-//!
-//! This is the only crate that coordinates provider results with manifest
-//! candidate mutations. Every use case returns a typed report rather than
-//! printing; the binary decides presentation.
-//!
-//! **Bulk operations are partial; writes are not.** A command resolves
-//! everything it was asked to, reports each failure, and then commits the
-//! successes in a single atomic write. Resolving fifty of two hundred entries
-//! and then hitting a network error must not discard the forty-nine that
-//! worked, and must not leave half a manifest behind either.
-//!
-//! **Offline paths stay offline.** Listing, showing, renaming, removing,
-//! rendering, and checking never construct a network client at all.
+//! Strict command use cases over complete bibliography values.
 #![warn(missing_docs)]
 
 mod add;
 mod check;
-mod documents;
 mod error;
 mod list;
-mod progress;
 mod records;
 mod render;
-mod reports;
 mod services;
 mod sync;
 mod target;
 
-/// The domain types a command-line adapter has to name.
-///
-/// The binary depends on this crate and the closed provider facade, not on a
-/// concrete network provider or the domain and persistence crates beneath
-/// them. Re-exporting the handful of types an argument parser must construct
-/// keeps that boundary honest: whatever is not here is not the CLI's business.
+/// Domain types needed by the command-line adapter.
 pub mod domain {
-    pub use bibi_bibtex::CitationKey;
-    pub use bibi_core::{Locator, Record, RecordFilter};
-    pub use bibi_documents::ArtifactClient;
-    pub use bibi_manifest::{Manifest, ManifestStore};
+    pub use bibi_core::{Bibliography, Locator, ProviderName, Record, RecordFilter, Source};
+    pub use bibi_manifest::BibliographyStore;
 }
 
-pub use add::{
-    AddFileRequest, AddKind, AddReport, AddRequest, AddedRecord, InputSource, add_file,
-    add_locators,
-};
+pub use add::{AddRequest, ImportRequest, MutationReport, add, import};
+pub use bibi_core::{Admission, AdmissionKind};
 pub use check::{CheckOutcome, check};
-pub use documents::{FetchOutcome, FetchReport, FetchRequest, FetchTarget, fetch};
 pub use error::Error;
 pub use list::{ListJsonRecord, ListRequest, list, to_json};
-pub use progress::{Progress, ProgressEvent, ProgressSink};
-pub use records::{RemoveReport, RemovedRecord, init, remove, rename, show};
-pub use render::{RenderOptions, render_manifest, render_records};
-pub use reports::{BatchReport, ItemFailure, SkipReason, SkippedItem};
+pub use records::{RemovedRecord, init, remove, show};
+pub use render::{RenderOptions, render_bibliography, render_records};
 pub use services::Services;
-pub use sync::{RefreshedRecord, SyncAbsence, SyncAbsenceReason, SyncReport, SyncRequest, sync};
+pub use sync::{SyncReport, SyncRequest, sync};
 pub use target::{MANIFEST_NAME, TargetResolver};

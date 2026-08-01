@@ -8,7 +8,7 @@
 //! `@comment` directive, which `biblatex` parses as something other than an
 //! entry — becomes this one entry's failure, never the whole file's.
 
-use crate::{error::Error, scanner};
+use crate::error::Error;
 use biblatex::RawBibliography;
 use std::ops::Range;
 
@@ -47,12 +47,6 @@ pub(crate) fn parse_entry(source: &str, span: Range<usize>) -> Result<RawEntry, 
         })?;
     let raw = entry.v;
     let key = rebase(span.start, raw.key.span);
-    let key_text = &source[key.clone()];
-    if !scanner::is_safe_key(key_text) {
-        return Err(Error::InvalidKey {
-            key: key_text.to_owned(),
-        });
-    }
     let fields = raw
         .fields
         .into_iter()
@@ -89,6 +83,7 @@ fn trim_trailing_ws(source: &str, span: Range<usize>) -> Range<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scanner;
 
     fn entry(source: &str) -> RawEntry {
         let span = scanner::split(source).into_iter().next().unwrap();
@@ -109,17 +104,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_keys_outside_the_safe_grammar() {
-        // These reach `is_safe_key`: `biblatex`'s own key grammar accepts an
-        // empty key and a key with an internal `/`, so bibi's narrower check
-        // is what actually refuses them.
-        for source in ["@misc{,title={T}}", "@misc{a/b,}"] {
-            let span = scanner::split(source).into_iter().next().unwrap();
-            assert!(
-                matches!(parse_entry(source, span), Err(Error::InvalidKey { .. })),
-                "{source}"
-            );
-        }
+    fn adopts_biblatex_key_grammar_without_a_rekeying_subset() {
+        let source = "@misc{a/b,title={T}}";
+        assert_eq!(&source[entry(source).key], "a/b");
     }
 
     #[test]

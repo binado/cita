@@ -2,10 +2,8 @@ schema = 1
 
 [[records]]
 id = "7641d991-6a03-4795-b302-82b2c0cb3adc"
-key = "Ghoderao:2026lvz"
-provider = "inspire"
+source = "inspire"
 provider_id = "3183710"
-revision = "2026-07-29T08:20:02.402901+00:00"
 arxiv = "2607.24734"
 title = "Gravitational waves from super-Hubble bubbles"
 authors = [
@@ -13,7 +11,6 @@ authors = [
     "Rajantie, Arttu",
     "Steer, Danièle",
 ]
-collaborations = []
 year = 2026
 bibtex = '''
 @article{Ghoderao:2026lvz,
@@ -29,15 +26,12 @@ bibtex = '''
 
 [[records]]
 id = "b83971c3-9e01-4a7d-b796-9989b025f451"
-key = "Imamura:1999xm"
-provider = "inspire"
+source = "inspire"
 provider_id = "493636"
-revision = "2023-03-06T13:45:23.559858+00:00"
 doi = "10.1143/ptp.101.1155"
 arxiv = "hep-th/9901001"
 title = "String junctions and their duals in heterotic string theory"
 authors = ["Imamura, Yosuke"]
-collaborations = []
 year = 1999
 bibtex = """
 @article{Imamura:1999xm,
@@ -55,10 +49,8 @@ bibtex = """
 
 [[records]]
 id = "ebc658bb-cb56-48ea-8f1c-3cb2416efe70"
-key = "MartinBarandiaran:2026lnb"
-provider = "inspire"
+source = "inspire"
 provider_id = "3184038"
-revision = "2026-07-29T04:22:21.964756+00:00"
 arxiv = "2607.26021"
 title = "Weighted Webs: Morphology-Informed Marked Fields"
 authors = [
@@ -68,7 +60,6 @@ authors = [
     "Carrón Duque, Javier",
     "García-Bellido, Juan",
 ]
-collaborations = []
 year = 2026
 bibtex = '''
 @article{MartinBarandiaran:2026lnb,
@@ -84,10 +75,8 @@ bibtex = '''
 
 [[records]]
 id = "02079f57-3c76-471a-89db-bcb9dbc5bec4"
-key = "Schulz:2026tob"
-provider = "inspire"
+source = "inspire"
 provider_id = "3184316"
-revision = "2026-07-30T09:19:03.457590+00:00"
 arxiv = "2607.26193"
 title = "Cosmology beyond standard sirens: cross-correlation of gravitational waves and neutral hydrogen intensity mapping"
 authors = [
@@ -103,7 +92,6 @@ authors = [
     "de la Haye, Erik",
     "Keil, Felicitas",
 ]
-collaborations = []
 year = 2026
 bibtex = """
 @article{Schulz:2026tob,

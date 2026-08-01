@@ -2,7 +2,6 @@
 
 use crate::{
     cli::{FilterArgs, ListArgs, ListFormat},
-    commands::provider,
     output,
 };
 use anyhow::Result;
@@ -10,18 +9,12 @@ use bibi_application::domain::RecordFilter;
 use bibi_application::{ListRequest, list, render_records, to_json};
 use std::path::Path;
 
-/// Turn filter flags into a complete `RecordFilter`.
-///
-/// `--provider` is checked against the providers this build carries, so a name
-/// nothing knows is reported rather than silently matching no records.
-/// `--local` is structural: records without a provider handle are local
-/// regardless of their stored provenance.
 pub fn filter(args: &FilterArgs) -> Result<RecordFilter> {
     Ok(RecordFilter {
         provider: args
             .provider
             .as_deref()
-            .map(provider::installed)
+            .map(crate::commands::provider::installed)
             .transpose()?,
         local: args.local,
         author: args.author.clone(),
@@ -32,29 +25,23 @@ pub fn filter(args: &FilterArgs) -> Result<RecordFilter> {
 
 pub fn run(target: Option<&Path>, args: ListArgs) -> Result<bool> {
     let store = crate::bootstrap::store(target)?;
-    let manifest = store.load()?.manifest;
+    let bibliography = store.load()?.bibliography;
     let records = list(
-        &manifest,
+        &bibliography,
         &ListRequest {
             filter: filter(&args.filter)?,
         },
     );
     let rendered = if args.fields.is_empty() {
         match args.format {
-            ListFormat::Table => output::table(
-                &records,
-                output::terminal_width(),
-                output::color_enabled(&std::io::stdout()),
-            ),
-            ListFormat::Bibtex => render_records(&records)?,
+            ListFormat::Table => output::table(&records),
+            ListFormat::Bibtex => render_records(&records),
             ListFormat::Json => to_json(&records)?,
         }
     } else {
-        output::fields(&records, &args.fields)?
+        output::fields(&records, &args.fields)
     };
     output::emit(&rendered)?;
-    // Only the table says so. Empty `--fields` output is exactly what a
-    // pipeline over an empty selection should look like.
     if records.is_empty() && args.fields.is_empty() && args.format == ListFormat::Table {
         output::note("no records match");
     }

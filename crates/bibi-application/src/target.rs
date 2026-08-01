@@ -1,6 +1,6 @@
 //! Choosing which manifest a command acts on.
 
-use bibi_manifest::ManifestStore;
+use bibi_manifest::BibliographyStore;
 use std::path::{Path, PathBuf};
 
 /// The manifest name bibi looks for in the working directory.
@@ -30,10 +30,10 @@ impl TargetResolver {
     ///
     /// Either way the parent directory must already exist, so a typo produces a
     /// diagnostic rather than a directory tree.
-    pub fn resolve(&self, path: Option<&Path>) -> ManifestStore {
+    pub fn resolve(&self, path: Option<&Path>) -> BibliographyStore {
         match path {
-            Some(path) => ManifestStore::new(self.absolute(path)),
-            None => ManifestStore::new(self.working_directory.join(MANIFEST_NAME)),
+            Some(path) => BibliographyStore::new(self.absolute(path)),
+            None => BibliographyStore::new(self.working_directory.join(MANIFEST_NAME)),
         }
     }
 

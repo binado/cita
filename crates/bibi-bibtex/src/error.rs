@@ -7,14 +7,6 @@ use thiserror::Error as ThisError;
 /// never exposed.
 #[derive(Clone, Debug, Eq, PartialEq, ThisError)]
 pub enum Error {
-    /// A citation key is empty or contains characters outside the safe grammar.
-    #[error(
-        "unsafe citation key `{key}`; allowed characters are A-Z, a-z, 0-9, `.`, `_`, `:`, `+`, and `-`"
-    )]
-    InvalidKey {
-        /// The rejected key.
-        key: String,
-    },
     /// An entry's structure is broken at a known offset.
     #[error("malformed BibTeX entry at byte {offset}: {reason}")]
     MalformedEntry {
@@ -56,13 +48,5 @@ pub enum Error {
     SemanticParse {
         /// The underlying parser's description of the problem.
         message: String,
-    },
-    /// Re-keying would have changed bytes outside the citation-key span.
-    #[error("re-keying `{key}` is unsafe: {reason}")]
-    UnsafeRekey {
-        /// The key that was being written.
-        key: String,
-        /// Why the result was refused.
-        reason: String,
     },
 }

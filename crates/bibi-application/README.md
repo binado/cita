@@ -1,7 +1,7 @@
 # bibi-application
 
-Command use cases for bibi over injected manifest stores, the closed provider
-facade, and stateless document retrieval.
+Strict all-or-nothing command use cases over injected bibliography stores and
+the closed provider facade.
 
 Part of the [bibi](https://github.com/binado/bibi) workspace.
 

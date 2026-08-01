@@ -1,6 +1,6 @@
 [package]
 name = "bibi-bibtex"
-description = "Strict, byte-preserving BibTeX scanning, re-keying, and rendering for bibi."
+description = "Strict, byte-preserving BibTeX scanning and rendering for bibi."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

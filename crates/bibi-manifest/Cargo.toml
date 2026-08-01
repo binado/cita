@@ -1,6 +1,6 @@
 [package]
 name = "bibi-manifest"
-description = "Schema-1 bibi.toml: candidate validation, indexes, optimistic concurrency, and atomic writes."
+description = "Schema-1 bibi.toml persistence with optimistic concurrency and atomic writes."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,251 +1,90 @@
-//! Conditional refresh.
-//!
-//! Sync fetches a narrowed structured record for everything it manages,
-//! compares each provider's opaque revision token, and fetches BibTeX only for
-//! what changed. A typical refresh therefore transfers no BibTeX at all, which
-//! is what makes it cheap enough to run often.
+//! Unconditional strict synchronization.
 
-use crate::{error::Error, reports::ItemFailure, services::Services};
-use bibi_bibtex::CitationKey;
-use bibi_core::{BibiId, Description, ProviderId, Record, Revision};
-use bibi_manifest::{ManifestCandidate, ManifestStore};
-use bibi_provider::{Provider, RefreshOptions, RefreshOutcome, RefreshTarget};
+use crate::{Error, Services};
+use bibi_core::{Locator, ProviderName, RecordId, Replacement, Source};
+use bibi_manifest::BibliographyStore;
 use std::collections::BTreeMap;
 
-/// Options for `sync`.
+/// Sync options.
 #[derive(Clone, Debug, Default)]
 pub struct SyncRequest {
-    /// Refresh only records owned by this provider.
-    pub provider: Option<Provider>,
-    /// Refetch every refreshable record, whatever its revision says.
-    pub force: bool,
-    /// Do the work and report it, but write nothing.
+    /// Restrict to one provider.
+    pub provider: Option<ProviderName>,
+    /// Fully plan without publishing.
     pub dry_run: bool,
 }
 
-/// One record a sync updated.
-#[derive(Clone, Debug)]
-pub struct RefreshedRecord {
-    /// Its local key, which a refresh never changes.
-    pub key: CitationKey,
-    /// Its new BibTeX, under that key.
-    pub bibtex: String,
-}
-
-/// A record sync left alone with a warning (not a failure).
-#[derive(Clone, Debug)]
-pub struct SyncAbsence {
-    /// The record that was left unchanged.
-    pub key: CitationKey,
-    /// Why nothing was written.
-    pub reason: SyncAbsenceReason,
-}
-
-/// Why a sync left a record unchanged.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SyncAbsenceReason {
-    /// The provider answered [`RefreshOutcome::Missing`].
-    ProviderGone,
-    /// Metadata indicated a change, but no BibTeX payload arrived.
-    PayloadAbsent,
-}
-
-impl std::fmt::Display for SyncAbsenceReason {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ProviderGone => write!(
-                formatter,
-                "its provider no longer holds this record; it was left unchanged"
-            ),
-            Self::PayloadAbsent => write!(
-                formatter,
-                "provider metadata changed but no BibTeX arrived; it was left unchanged"
-            ),
-        }
-    }
-}
-
-/// What a sync did.
-#[derive(Debug, Default)]
+/// Successful sync summary.
+#[derive(Debug)]
 pub struct SyncReport {
-    /// How many records were considered.
-    pub examined: usize,
-    /// How many were already current.
-    pub unchanged: usize,
-    /// The records that were updated.
-    pub refreshed: Vec<RefreshedRecord>,
-    /// How many updates changed a title, author list, or year.
-    pub description_changes: usize,
-    /// Records left unchanged with a warning.
-    pub absences: Vec<SyncAbsence>,
-    /// Records no provider will ever refresh.
-    pub unrefreshable: usize,
-    /// Records that could not be refreshed.
-    pub failures: Vec<ItemFailure>,
-    /// Whether the manifest was written.
+    /// Ordered replacement results.
+    pub results: Vec<Replacement>,
+    /// Local records ignored.
+    pub local: usize,
+    /// Whether the successor was published.
     pub committed: bool,
 }
 
-impl SyncReport {
-    /// True when any record failed, which is what makes the exit nonzero.
-    pub fn has_failures(&self) -> bool {
-        !self.failures.is_empty()
-    }
-}
-
-/// Refresh managed records, conditionally unless forced.
+/// Resolve complete state for every selected managed record or change nothing.
 pub async fn sync(
     services: &Services,
-    store: &ManifestStore,
+    store: &BibliographyStore,
     request: &SyncRequest,
 ) -> Result<SyncReport, Error> {
-    let (manifest, generation) = store.load()?.into_parts();
-    let mut candidate = manifest.to_candidate();
-    let mut report = SyncReport::default();
-
-    let mut groups: BTreeMap<Provider, Vec<Managed>> = BTreeMap::new();
-    for record in manifest.records() {
-        if request
-            .provider
-            .is_some_and(|provider| record.provenance.provider != provider)
-        {
-            continue;
-        }
-        report.examined += 1;
-        match &record.provenance.provider_id {
-            // A record with no handle cannot be asked about: there is nothing
-            // to send. This is a property of the record, not a test for any
-            // particular provider's name.
-            None => report.unrefreshable += 1,
-            Some(provider_id) => {
+    let (bibliography, generation) = store.load()?.into_parts();
+    let mut groups: BTreeMap<ProviderName, Vec<(RecordId, bibi_core::ProviderId)>> =
+        BTreeMap::new();
+    let mut local = 0;
+    for record in bibliography.records() {
+        match record.state().source() {
+            Source::Local => local += 1,
+            Source::Managed { provider, id }
+                if request
+                    .provider
+                    .is_none_or(|selected| selected == *provider) =>
+            {
                 groups
-                    .entry(record.provenance.provider)
+                    .entry(*provider)
                     .or_default()
-                    .push(Managed {
-                        id: record.id,
-                        key: record.key.clone(),
-                        provider_id: provider_id.clone(),
-                        revision: record.provenance.revision.clone(),
-                        description: record.description.clone(),
-                    })
+                    .push((record.id(), id.clone()));
             }
+            Source::Managed { .. } => {}
         }
     }
 
-    for (owner, records) in groups {
-        if !owner.is_remote() {
-            report.unrefreshable += records.len();
-            continue;
-        }
-        refresh_group(
-            owner,
-            services,
-            &records,
-            request,
-            &mut candidate,
-            &mut report,
-        )
-        .await;
-    }
-
-    report.committed = !request.dry_run && !report.refreshed.is_empty();
-    if report.committed {
-        store.commit(&generation, candidate)?;
-    }
-    Ok(report)
-}
-
-/// One record as sync sees it before asking its provider.
-struct Managed {
-    id: BibiId,
-    key: CitationKey,
-    provider_id: ProviderId,
-    revision: Option<Revision>,
-    description: Description,
-}
-
-/// Refresh every record owned by one provider.
-async fn refresh_group(
-    owner: Provider,
-    services: &Services,
-    records: &[Managed],
-    request: &SyncRequest,
-    candidate: &mut ManifestCandidate,
-    report: &mut SyncReport,
-) {
-    let targets = records
-        .iter()
-        .map(|record| RefreshTarget {
-            bibi_id: record.id,
-            provider_id: record.provider_id.clone(),
-            stored_revision: record.revision.clone(),
-        })
-        .collect::<Vec<_>>();
-    let items = match services
-        .providers
-        .refresh(
-            owner,
-            &targets,
-            RefreshOptions {
-                force: request.force,
-            },
-        )
-        .await
-    {
-        Ok(items) => items,
-        Err(error) => {
-            for record in records {
-                report
-                    .failures
-                    .push(ItemFailure::new(record.key.to_string(), error.to_string()));
+    let mut replacements = Vec::new();
+    for (provider, records) in groups {
+        let locators = records
+            .iter()
+            .map(|(_, id)| Locator::ProviderIdentity(provider, id.clone()))
+            .collect::<Vec<_>>();
+        let states = services
+            .providers
+            .resolve(Some(provider), &locators)
+            .await?;
+        for ((record_id, requested_id), state) in records.into_iter().zip(states) {
+            if state.source().managed_identity() != Some((provider, &requested_id)) {
+                return Err(bibi_provider::Error::Provider(
+                    bibi_provider::ProviderError::contract(
+                        provider,
+                        format!(
+                            "returned source {:?} for requested identity {provider}:{requested_id}",
+                            state.source()
+                        ),
+                    ),
+                )
+                .into());
             }
-            return;
-        }
-    };
-
-    let by_id = records
-        .iter()
-        .map(|record| (record.id, record))
-        .collect::<BTreeMap<_, _>>();
-    for item in items {
-        let Some(record) = by_id.get(&item.bibi_id) else {
-            continue;
-        };
-        match item.result {
-            Err(error) => report
-                .failures
-                .push(ItemFailure::new(record.key.to_string(), error.to_string())),
-            Ok(RefreshOutcome::Unchanged) => report.unchanged += 1,
-            Ok(RefreshOutcome::Missing) => report.absences.push(SyncAbsence {
-                key: record.key.clone(),
-                reason: SyncAbsenceReason::ProviderGone,
-            }),
-            Ok(RefreshOutcome::PayloadMissing) => report.absences.push(SyncAbsence {
-                key: record.key.clone(),
-                reason: SyncAbsenceReason::PayloadAbsent,
-            }),
-            Ok(RefreshOutcome::Updated(owned)) => {
-                let description_changed = owned.description != record.description;
-                if let Err(error) = candidate.replace(&record.id, *owned) {
-                    report
-                        .failures
-                        .push(ItemFailure::new(record.key.to_string(), error.to_string()));
-                    continue;
-                }
-                if description_changed {
-                    report.description_changes += 1;
-                }
-                match candidate.get(&record.id).map(Record::rendered).transpose() {
-                    Ok(Some(bibtex)) => report.refreshed.push(RefreshedRecord {
-                        key: record.key.clone(),
-                        bibtex,
-                    }),
-                    Ok(None) | Err(_) => report.failures.push(ItemFailure::new(
-                        record.key.to_string(),
-                        "the refreshed record could not be rendered under its local key",
-                    )),
-                }
-            }
+            replacements.push((record_id, state));
         }
     }
+    let (successor, results) = bibliography.replace(replacements)?;
+    if !request.dry_run {
+        store.commit(&generation, &successor)?;
+    }
+    Ok(SyncReport {
+        results,
+        local,
+        committed: !request.dry_run,
+    })
 }

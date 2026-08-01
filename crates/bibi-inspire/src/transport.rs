@@ -52,9 +52,8 @@ impl RawBibtex {
 
 /// The INSPIRE fields bibi maps.
 ///
-/// Requesting only these is most of the reason a refresh is cheap: the response
-/// carries what the record model uses and nothing else. A diagnostic that wants
-/// the full record makes its own unnarrowed request rather than widening this.
+/// Requests carry what the record model and verified BibTeX join use, and
+/// nothing else. Diagnostics that need full records make unnarrowed requests.
 pub const RECORD_FIELDS: &[&str] = &[
     "control_number",
     "texkeys",
@@ -66,9 +65,6 @@ pub const RECORD_FIELDS: &[&str] = &[
     "arxiv_eprints",
     "dois",
 ];
-
-/// The fields the payload join needs, and no more.
-pub const JOIN_FIELDS: &[&str] = &["control_number", "texkeys"];
 
 /// INSPIRE retrieval.
 #[derive(Clone)]

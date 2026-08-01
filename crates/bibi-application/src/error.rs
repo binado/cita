@@ -1,57 +1,49 @@
 use std::path::PathBuf;
 use thiserror::Error as ThisError;
 
-/// Every failure a use case can return.
-///
-/// A partial batch is not one of them. Resolving fifty of two hundred entries
-/// and then hitting a network error returns a successful report carrying typed
-/// failures, so the forty-nine that worked are committed and each failure keeps
-/// its own diagnostic.
+/// Every failure a strict use case can return.
 #[derive(Debug, ThisError)]
 pub enum Error {
-    /// The manifest could not be read, validated, or written.
+    /// Persistence failed.
     #[error(transparent)]
-    Manifest(#[from] bibi_manifest::Error),
-    /// A domain value was rejected.
+    Persistence(#[from] bibi_manifest::Error),
+    /// Domain validation failed.
     #[error(transparent)]
     Domain(#[from] bibi_core::Error),
-    /// BibTeX could not be parsed or rendered.
+    /// BibTeX parsing failed.
     #[error(transparent)]
     Bibtex(#[from] bibi_bibtex::Error),
-    /// Provider selection, construction, or qualifier validation failed.
+    /// Provider selection or resolution failed.
     #[error(transparent)]
     Provider(#[from] bibi_provider::Error),
-    /// A file could not be read or written.
+    /// File I/O failed.
     #[error("{path}: {source}")]
     Io {
-        /// The file involved.
+        /// File involved.
         path: PathBuf,
-        /// The underlying failure.
+        /// Underlying error.
         #[source]
         source: std::io::Error,
     },
-    /// An artifact could not be retrieved.
-    #[error(transparent)]
-    Documents(#[from] bibi_documents::Error),
-    /// JSON output could not be produced.
+    /// JSON projection failed.
     #[error("could not render JSON: {0}")]
     Json(#[from] serde_json::Error),
-    /// The request itself is invalid, independently of any stored state.
+    /// Request is invalid independently of stored state.
     #[error("{0}")]
     Usage(String),
 }
 
 impl Error {
-    /// Wrap an I/O failure with the path it concerns.
-    pub(crate) fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
+    /// Wrap file I/O.
+    pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
         Self::Io {
             path: path.into(),
             source,
         }
     }
 
-    /// A usage error, phrased for the person who typed the command.
-    pub(crate) fn usage(message: impl Into<String>) -> Self {
+    /// Construct a usage failure.
+    pub fn usage(message: impl Into<String>) -> Self {
         Self::Usage(message.into())
     }
 }

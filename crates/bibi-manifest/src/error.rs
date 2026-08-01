@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use thiserror::Error as ThisError;
 
-/// Every failure this crate can produce.
+/// Every persistence failure.
 #[derive(Debug, ThisError)]
 pub enum Error {
     /// A manifest file could not be read or written.
@@ -14,16 +14,16 @@ pub enum Error {
         source: std::io::Error,
     },
     /// The manifest is not valid TOML, or a value has the wrong type.
-    #[error("{path} is not a valid manifest: {source}")]
+    #[error("{path} is not a valid bibliography: {source}")]
     Decode {
         /// The file involved.
         path: PathBuf,
-        /// The underlying failure.
+        /// The TOML failure.
         #[source]
         source: toml::de::Error,
     },
-    /// A candidate could not be serialized.
-    #[error("could not serialize the manifest: {0}")]
+    /// A bibliography could not be serialized.
+    #[error("could not serialize the bibliography: {0}")]
     Encode(#[from] toml::ser::Error),
     /// The manifest states no schema version.
     #[error("{path} states no `schema` version; it was not written by bibi")]
@@ -32,110 +32,67 @@ pub enum Error {
         path: PathBuf,
     },
     /// The manifest states a schema this build does not implement.
-    #[error(
-        "{path} uses manifest schema {found}, but this bibi implements schema {supported}; upgrade bibi to read it"
-    )]
+    #[error("{path} uses schema {found}, but this bibi implements schema {supported}")]
     UnsupportedSchema {
         /// The file involved.
         path: PathBuf,
-        /// The schema the file states.
+        /// The schema found.
         found: u64,
-        /// The schema this build implements.
+        /// The supported schema.
         supported: u64,
     },
-    /// Two records claim one identity.
-    #[error("two records share the same {kind} `{value}`: `{first}` and `{second}`")]
-    Duplicate {
-        /// Which index rejected them.
-        kind: &'static str,
-        /// The shared value.
-        value: String,
-        /// The local key of the first record.
-        first: String,
-        /// The local key of the second record.
-        second: String,
-    },
-    /// A record failed domain validation.
-    #[error(transparent)]
-    Record(#[from] bibi_core::Error),
-    /// A stored value is not a valid domain value.
-    #[error("record `{key}` has an invalid `{field}` field: {source}")]
+    /// A stored field is not a valid domain value.
+    #[error("record `{record}` has an invalid `{field}` field: {source}")]
     InvalidField {
-        /// The record's local key.
-        key: String,
-        /// Which field was rejected.
+        /// Record label used for the diagnostic.
+        record: String,
+        /// Rejected field.
         field: &'static str,
-        /// The underlying failure.
+        /// Domain validation failure.
         #[source]
         source: bibi_core::Error,
     },
-    /// A record's `key` field is not a safe citation key.
-    #[error("record `{id}` has an invalid `key` field: {source}")]
-    InvalidKey {
-        /// The record's id, since its key is the invalid value.
-        id: String,
-        /// The underlying failure.
-        #[source]
-        source: bibi_bibtex::Error,
+    /// Source and provider id do not form a legal source.
+    #[error("record `{record}` has an invalid source: {message}")]
+    InvalidSource {
+        /// Record label used for the diagnostic.
+        record: String,
+        /// Shape problem.
+        message: &'static str,
     },
-    /// A stored payload is not one valid standalone entry.
-    #[error("record `{key}` has an invalid payload: {source}")]
+    /// Stored BibTeX is not one valid entry.
+    #[error("record `{record}` has invalid BibTeX: {source}")]
     InvalidPayload {
-        /// The record's local key.
-        key: String,
-        /// The underlying failure.
+        /// Record label used for the diagnostic.
+        record: String,
+        /// BibTeX parse failure.
         #[source]
         source: bibi_bibtex::Error,
     },
-    /// The manifest changed on disk after it was read.
+    /// The complete restored bibliography violates a domain invariant.
+    #[error(transparent)]
+    Bibliography(#[from] bibi_core::Error),
+    /// The manifest changed after it was read.
     #[error("{path} changed since it was read; re-run the command")]
-    StaleManifest {
+    StaleBibliography {
         /// The file involved.
         path: PathBuf,
     },
-    /// A manifest was required but does not exist.
-    #[error("no manifest at {path}")]
-    NoManifest {
+    /// A bibliography was required but does not exist.
+    #[error("no bibliography at {path}")]
+    NoBibliography {
         /// Where one was expected.
         path: PathBuf,
     },
-    /// A manifest already exists where one was to be created.
+    /// A bibliography already exists where one was to be created.
     #[error("{path} already exists")]
     AlreadyExists {
         /// The file involved.
         path: PathBuf,
     },
-    /// A mutation named a record the candidate does not hold.
-    #[error("no record with id `{id}`")]
-    UnknownRecord {
-        /// The requested id.
-        id: String,
-    },
-    /// A citation key is already taken by a different record.
-    #[error("citation key `{key}` already belongs to another record")]
-    KeyInUse {
-        /// The requested key.
-        key: String,
-    },
-    /// A selector matched no record.
-    #[error("no record matches `{selector}`")]
-    NoMatch {
-        /// The selector as written.
-        selector: String,
-    },
-    /// A locator has no recognized local-lookup shape.
-    #[error(
-        "`{value}` is not a citation key, DOI, arXiv id, or provider identity; \
-         citation keys need an explicit `k:` prefix for a local lookup, e.g. `k:{value}`"
-    )]
-    UnrecognizedLocator {
-        /// The rejected value.
-        value: String,
-    },
 }
 
 impl Error {
-    /// Wrap an I/O failure with the path it concerns.
     pub(crate) fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
         Self::Io {
             path: path.into(),

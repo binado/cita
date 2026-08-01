@@ -2,10 +2,8 @@ schema = 1
 
 [[records]]
 id = "d760f219-9098-4b49-9f62-10cbbcc22b11"
-key = "Aad:2012tfa"
-provider = "inspire"
+source = "inspire"
 provider_id = "1124337"
-revision = "2026-07-27T12:34:56+00:00"
 doi = "10.1016/j.physletb.2012.08.020"
 arxiv = "1207.7214"
 title = "Observation of a new particle"
@@ -15,26 +13,10 @@ authors = [
 ]
 collaborations = ["ATLAS"]
 year = 2012
-bibtex = """
-@article{Aad:2012tfa,
-  author = {Aad, Georges and others},
-  collaboration = {ATLAS},
-  title = {{Observation of a new particle}},
-  eprint = {1207.7214},
-  doi = {10.1016/j.physletb.2012.08.020},
-  year = {2012}
-}"""
+bibtex = "@misc{Aad:2012tfa, title={Observation of a new particle}}"
 
 [[records]]
 id = "8f14e45f-ceea-467a-9f38-a2f2b1a1f1c9"
-key = "Zenodo:2024"
-provider = "local"
+source = "local"
 title = "A tool"
-authors = []
-collaborations = []
-bibtex = """
-@software{upstream-key,
-  title = {A tool},
-  author = {Roe, Richard},
-  year = 2024
-}"""
+bibtex = "@misc{Zenodo:2024, title={A tool}}"

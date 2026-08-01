@@ -14,8 +14,9 @@ use crate::{
     transport::{RawBibtex, RawJson},
     wire::{LiteratureRecord, SearchResponse},
 };
-use bibi_core::remote::{BibtexEntry, MappingError, parse_file};
-use bibi_core::{ArxivId, Description, Doi, Identifiers, ProviderId, Revision};
+use bibi_bibtex::{BibtexEntry, parse_file};
+use bibi_core::remote::MappingError;
+use bibi_core::{ArxivId, Description, Doi, Identifiers, ProviderId};
 
 /// One INSPIRE record, mapped.
 ///
@@ -26,8 +27,6 @@ use bibi_core::{ArxivId, Description, Doi, Identifiers, ProviderId, Revision};
 pub struct MappedRecord {
     /// The record id, rendered as decimal.
     pub provider_id: ProviderId,
-    /// INSPIRE's `updated` timestamp, used as the change token.
-    pub revision: Option<Revision>,
     /// Canonical normalized identifiers.
     pub identifiers: Identifiers,
     /// Advisory display data.
@@ -76,38 +75,28 @@ pub(crate) fn map_record(record: &LiteratureRecord) -> Result<MappedRecord, Mapp
     Ok(MappedRecord {
         provider_id: ProviderId::new(id.to_string())
             .map_err(|_| error::invalid_value("record id", id.to_string()))?,
-        // A provider that cannot supply a token leaves it absent, and its
-        // records are then treated as changed on every sync rather than
-        // wrongly assumed current.
-        revision: record
-            .updated
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| Revision::new(value).map_err(|_| error::invalid_value("revision", value)))
-            .transpose()?,
-        identifiers: Identifiers {
+        identifiers: Identifiers::new(
             // The first valid value wins, and an unparseable one is skipped
             // rather than failing the record: an identifier bibi cannot
             // normalize is one it could not have used anyway.
-            doi: metadata
+            metadata
                 .dois
                 .iter()
                 .find_map(|doi| Doi::new(&doi.value).ok()),
-            arxiv: metadata
+            metadata
                 .arxiv_eprints
                 .iter()
                 .find_map(|eprint| ArxivId::new(&eprint.value).ok()),
-        },
-        description: Description {
+        ),
+        description: Description::new(
             title,
-            authors: metadata
+            metadata
                 .authors
                 .iter()
                 .map(|author| author.full_name.trim().to_owned())
                 .filter(|author| !author.is_empty())
                 .collect(),
-            collaborations: metadata
+            metadata
                 .collaborations
                 .iter()
                 .map(|collaboration| collaboration.value.trim().to_owned())
@@ -116,7 +105,7 @@ pub(crate) fn map_record(record: &LiteratureRecord) -> Result<MappedRecord, Mapp
             // Publication year first, then the preprint date's year. Choosing
             // is the provider's policy precisely because the BibTeX would
             // otherwise decide it implicitly, differently, per renderer.
-            year: metadata
+            metadata
                 .publication_info
                 .iter()
                 .find_map(|info| info.year)
@@ -127,7 +116,7 @@ pub(crate) fn map_record(record: &LiteratureRecord) -> Result<MappedRecord, Mapp
                         .and_then(|date| date.get(..4))
                         .and_then(|year| year.parse().ok())
                 }),
-        },
+        ),
         texkeys: metadata
             .texkeys
             .iter()
@@ -175,13 +164,10 @@ pub fn map_declared_keys(raw: &RawJson) -> Result<Vec<DeclaredKeys>, MappingErro
 /// Split a BibTeX response into validated standalone entries.
 ///
 /// This is structural validation, not verification of INSPIRE's claims: the
-/// entry will be re-keyed and rendered deterministically, so it has to be one
-/// well-formed entry with a readable key. Rejecting a malformed response is
-/// input validation; rejecting a well-formed one because a parse of it
-/// disagreed with the structured record is the cross-check this design drops.
+/// Every returned entry must be well formed with a readable texkey so the
+/// verified join can pair its exact bytes to a provider identity.
 pub fn split_entries(raw: &RawBibtex) -> Result<Vec<BibtexEntry>, MappingError> {
-    let entries = parse_file(raw.as_str()).map_err(error::invalid_payload)?;
-    Ok(entries.into_iter().map(|entry| entry.payload).collect())
+    parse_file(raw.as_str()).map_err(error::invalid_payload)
 }
 
 #[cfg(test)]
@@ -217,17 +203,13 @@ mod tests {
             }
         }));
         assert_eq!(record.provider_id.as_str(), "1124337");
+        assert_eq!(record.description.title(), "Observation of a new particle");
+        assert_eq!(record.description.authors(), ["Aad, G.", "Abajyan, T."]);
+        assert_eq!(record.description.collaborations(), ["ATLAS"]);
+        assert_eq!(record.description.year(), Some(2012));
+        assert_eq!(record.identifiers.arxiv().unwrap().as_str(), "1207.7214");
         assert_eq!(
-            record.revision.as_ref().unwrap().as_str(),
-            "2026-07-27T12:34:56+00:00"
-        );
-        assert_eq!(record.description.title, "Observation of a new particle");
-        assert_eq!(record.description.authors, ["Aad, G.", "Abajyan, T."]);
-        assert_eq!(record.description.collaborations, ["ATLAS"]);
-        assert_eq!(record.description.year, Some(2012));
-        assert_eq!(record.identifiers.arxiv.unwrap().as_str(), "1207.7214");
-        assert_eq!(
-            record.identifiers.doi.unwrap().as_str(),
+            record.identifiers.doi().unwrap().as_str(),
             "10.1016/j.physletb.2012.08.020"
         );
         assert_eq!(record.texkeys, ["Aad:2012tfa", "ATLAS:2012yve"]);
@@ -242,7 +224,7 @@ mod tests {
                 "preprint_date": "1998-03-01"
             }
         }));
-        assert_eq!(record.description.year, Some(1998));
+        assert_eq!(record.description.year(), Some(1998));
     }
 
     #[test]
@@ -268,7 +250,7 @@ mod tests {
             "id": 1,
             "metadata": {"titles": [{"title": "   "}, {"title": " Second "}]}
         }));
-        assert_eq!(record.description.title, "Second");
+        assert_eq!(record.description.title(), "Second");
 
         let untitled = map_search(&json(serde_json::json!({
             "hits": {"hits": [{"id": 1, "metadata": {"titles": []}}]}
@@ -292,18 +274,17 @@ mod tests {
                 "dois": [{"value": "nonsense"}, {"value": "10.1/ok"}]
             }
         }));
-        assert_eq!(record.identifiers.arxiv.unwrap().as_str(), "2401.00001");
-        assert_eq!(record.identifiers.doi.unwrap().as_str(), "10.1/ok");
+        assert_eq!(record.identifiers.arxiv().unwrap().as_str(), "2401.00001");
+        assert_eq!(record.identifiers.doi().unwrap().as_str(), "10.1/ok");
     }
 
     #[test]
-    fn a_record_without_an_update_timestamp_has_no_revision() {
-        let record = one(serde_json::json!({
+    fn an_update_timestamp_is_irrelevant_to_mapping() {
+        one(serde_json::json!({
             "id": 1,
             "updated": "  ",
             "metadata": {"titles": [{"title": "T"}]}
         }));
-        assert!(record.revision.is_none());
     }
 
     #[test]
@@ -323,7 +304,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].source_key().as_str(), "A");
+        assert_eq!(entries[0].texkey(), "A");
         // An entry with no title is structurally fine: bibi maps description
         // from the structured record, not from this.
         assert!(split_entries(&RawBibtex::new("@article{A,doi={10.1/x}}")).is_ok());

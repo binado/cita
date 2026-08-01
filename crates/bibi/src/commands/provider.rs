@@ -1,18 +1,7 @@
-//! Turning a `--provider` value into a [`Provider`], or saying what would work.
-//!
-//! The provider set is closed and fixed at compile time, so there is exactly
-//! one notion of "valid" here — installed — used identically whether the value
-//! came from `add`, `sync`, or a `list`/`check` filter.
-
 use anyhow::Result;
-use bibi_provider::{Provider, Providers};
+use bibi_application::domain::ProviderName;
+use bibi_provider::Providers;
 
-/// Parse a provider this build carries.
-pub fn installed(value: &str) -> Result<Provider> {
-    Providers::installed(value).map_err(|_| {
-        anyhow::anyhow!(
-            "provider `{value}` not found. Installed providers: {}",
-            Provider::installed_list()
-        )
-    })
+pub fn installed(value: &str) -> Result<ProviderName> {
+    Providers::installed(value).map_err(Into::into)
 }

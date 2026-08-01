@@ -7,10 +7,10 @@ use std::path::Path;
 
 pub fn run(target: Option<&Path>, args: CheckArgs) -> Result<bool> {
     let store = crate::bootstrap::store(target)?;
-    let manifest = store.load()?.manifest;
+    let bibliography = store.load()?.bibliography;
     let path = crate::bootstrap::resolver()?.input(&args.bibfile);
     let outcome = check(
-        &manifest,
+        &bibliography,
         &path,
         &RenderOptions {
             filter: crate::commands::list::filter(&args.filter)?,
@@ -18,10 +18,13 @@ pub fn run(target: Option<&Path>, args: CheckArgs) -> Result<bool> {
     )?;
     match &outcome {
         CheckOutcome::Match { path } => {
-            output::note(format!("{} matches the manifest", path.display()));
+            output::note(format!("{} matches the bibliography", path.display()));
         }
         CheckOutcome::Drift { path, summary } => {
-            output::note(format!("{} has drifted from the manifest", path.display()));
+            output::note(format!(
+                "{} has drifted from the bibliography",
+                path.display()
+            ));
             if args.diff {
                 output::note(summary);
             }

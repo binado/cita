@@ -2,7 +2,7 @@
 //!
 //! Unknown fields are tolerated in this direction — the opposite of the
 //! manifest's policy — because bibi consumes a foreign, evolving schema and
-//! wants a subset of it. A field INSPIRE adds must never break a refresh.
+//! wants a subset of it. A field INSPIRE adds must never break resolution.
 
 use serde::{Deserialize, Deserializer};
 
@@ -23,9 +23,6 @@ pub(crate) struct LiteratureRecord {
     /// INSPIRE serializes this as a number or a string depending on the route.
     #[serde(default, deserialize_with = "flexible_id")]
     pub(crate) id: Option<u64>,
-    /// The change token bibi stores as a revision.
-    #[serde(default)]
-    pub(crate) updated: Option<String>,
     #[serde(default)]
     pub(crate) metadata: Metadata,
 }

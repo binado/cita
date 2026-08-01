@@ -1,14 +1,10 @@
-//! The byte-level splitter that owns entry boundaries, plus the safe
-//! citation-key grammar.
+//! The byte-level splitter that owns entry boundaries.
 //!
 //! Key and field grammar are no longer bibi's to define: [`crate::adapter`]
 //! hands each located slice to `biblatex`'s raw parser and adopts its
 //! decisions. What stays here is the one thing a per-entry parser cannot do
 //! for itself — finding where one entry ends and the next begins in a file
-//! that may hold several — plus [`is_safe_key`], which is not a grammar
-//! opinion but a write-then-read invariant: a key that cannot be written back
-//! into an entry by replacing its token and nothing else must never reach the
-//! manifest (see [`crate::entry::CitationKey`] and `rekey`).
+//! that may hold several.
 //!
 //! Scanning walks bytes rather than characters. Every delimiter it cares
 //! about is ASCII, and a UTF-8 continuation byte is never an ASCII byte, so a
@@ -16,14 +12,6 @@
 //! recorded offset lands on a character boundary.
 
 use std::ops::Range;
-
-/// Return true when `key` matches the safe citation-key grammar.
-pub(crate) fn is_safe_key(key: &str) -> bool {
-    !key.is_empty()
-        && key.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'+' | b'-')
-        })
-}
 
 /// Byte ranges of top-level entries, each starting at `@`.
 ///
@@ -219,15 +207,5 @@ mod tests {
     fn keeps_offsets_on_character_boundaries_with_multibyte_content() {
         let source = "@misc{A,\n  title = {Schrödinger — “quoted”},\n  note = {é}\n}";
         assert_eq!(spans(source), [source]);
-    }
-
-    #[test]
-    fn is_safe_key_accepts_only_the_narrow_grammar() {
-        for value in ["Aad:2012tfa", "a", "A.b_c:d+e-f", "2012"] {
-            assert!(is_safe_key(value), "{value}");
-        }
-        for value in ["", "a b", "a{b", "a/b", "café"] {
-            assert!(!is_safe_key(value), "{value}");
-        }
     }
 }

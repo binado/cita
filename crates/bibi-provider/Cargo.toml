@@ -1,6 +1,6 @@
 [package]
 name = "bibi-provider"
-description = "Closed provider selection, construction, local ingestion, and conditional refresh for bibi."
+description = "Closed provider selection, construction, and strict batched resolution for bibi."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

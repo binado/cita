@@ -1,56 +1,40 @@
-//! `bibi show`, `bibi remove`, and `bibi rename`.
+//! `bibi show` and `bibi remove`.
 
 use crate::{
-    cli::{RemoveArgs, RenameArgs, ShowArgs},
+    cli::{RemoveArgs, ShowArgs},
     output,
 };
 use anyhow::Result;
-use bibi_application::domain::CitationKey;
-use bibi_application::{remove, rename, show};
+use bibi_application::{remove, show};
 use std::path::Path;
 
 pub fn run_show(target: Option<&Path>, args: ShowArgs) -> Result<bool> {
     let store = crate::bootstrap::store(target)?;
-    let selector = args
-        .selector
-        .expect("optional show input was resolved before command dispatch");
-    output::emit(&show(&store, &selector)?)?;
+    output::emit(&show(
+        &store,
+        args.selector.as_deref().expect("stdin resolved"),
+    )?)?;
     Ok(false)
 }
 
 pub fn run_remove(target: Option<&Path>, args: RemoveArgs) -> Result<bool> {
     let store = crate::bootstrap::store(target)?;
     let report = remove(&store, &args.selectors, args.dry_run)?;
-    // What was removed goes to stdout as one local key per line, so it can be
-    // piped into other commands such as `fetch` or `list --selectors`.
-    let keys = report
-        .items
-        .successes
-        .iter()
-        .map(|removed| removed.key.to_string())
-        .collect::<Vec<_>>();
-    if !keys.is_empty() {
-        output::emit(&(keys.join("\n") + "\n"))?;
+    if !report.results.is_empty() {
+        output::emit(
+            &(report
+                .results
+                .iter()
+                .map(|result| result.texkey.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n"),
+        )?;
     }
-    output::report(&report.items);
-    if args.dry_run {
-        output::note(format!(
-            "dry run: would remove {}",
-            report.items.successes.len()
-        ));
-    } else if report.committed {
-        output::note(format!("removed {}", report.items.successes.len()));
-    }
-    Ok(report.items.has_failures())
-}
-
-pub fn run_rename(target: Option<&Path>, args: RenameArgs) -> Result<bool> {
-    let store = crate::bootstrap::store(target)?;
-    let renamed = rename(&store, &args.selector, &CitationKey::new(args.key)?)?;
-    output::emit(&(renamed.rendered()? + "\n"))?;
-    output::note(format!(
-        "renamed to `{}`; update any `\\cite{{}}` uses yourself",
-        renamed.key
-    ));
+    output::note(if args.dry_run {
+        format!("dry run: would remove {}", report.results.len())
+    } else {
+        format!("removed {}", report.results.len())
+    });
     Ok(false)
 }

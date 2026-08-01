@@ -1,69 +1,78 @@
-use crate::provenance::Provider;
+use crate::{ProviderName, RecordId};
 use thiserror::Error as ThisError;
 
-/// Every failure this crate can produce.
+/// Domain and bibliography failures.
 #[derive(Clone, Debug, Eq, PartialEq, ThisError)]
+#[allow(missing_docs)]
 pub enum Error {
     /// A record id is not a canonical UUID.
-    #[error("invalid bibi record id `{value}`; expected a canonical UUID")]
-    InvalidBibiId {
-        /// The rejected value.
-        value: String,
-    },
-    /// A provider name is not one this build carries.
+    #[error("invalid record id `{value}`; expected a canonical UUID")]
+    InvalidRecordId { value: String },
+    /// A provider name is not installed.
     #[error(
         "unknown provider `{value}`; installed providers: {}",
-        Provider::installed_list()
+        ProviderName::installed_list()
     )]
-    UnknownProvider {
-        /// The rejected value.
-        value: String,
-    },
-    /// A provider id or revision is empty.
-    #[error("a provider {what} must not be empty")]
-    EmptyOpaqueValue {
-        /// Which opaque value was empty.
-        what: &'static str,
-    },
-    /// A DOI is not a syntactically valid DOI.
+    UnknownProvider { value: String },
+    /// A provider handle is empty.
+    #[error("a provider id must not be empty")]
+    EmptyProviderId,
+    /// A DOI is invalid.
     #[error("invalid DOI `{value}`; expected `10.<registrant>/<suffix>`")]
-    InvalidDoi {
-        /// The rejected value.
-        value: String,
-    },
-    /// An arXiv identifier is neither a modern nor a legacy identifier.
+    InvalidDoi { value: String },
+    /// An arXiv identifier is invalid.
     #[error("invalid arXiv identifier `{value}`; expected `2401.00001` or `hep-th/9901001`")]
-    InvalidArxivId {
-        /// The rejected value.
-        value: String,
-    },
-    /// A locator string is not a supported locator.
-    #[error(
-        "invalid locator `{value}`; expected a citation key with `k:`, an arXiv id, a DOI, an explicit `arxiv:`, `doi:`, or `<provider>:` locator, or a canonical URL"
-    )]
-    InvalidLocator {
-        /// The rejected value.
-        value: String,
-    },
-    /// A record was constructed without a title.
-    #[error("record `{key}` has no title")]
-    MissingTitle {
-        /// The record's local key.
-        key: String,
-    },
-    /// A record carries a revision but no provider id to refresh with.
-    #[error("record `{key}` carries a revision without a provider id")]
-    RevisionWithoutProviderId {
-        /// The record's local key.
-        key: String,
-    },
-    /// A record's payload cannot carry its local key.
-    #[error("record `{key}` cannot be re-keyed: {source}")]
-    Payload {
-        /// The record's local key.
-        key: String,
-        /// The underlying BibTeX failure.
+    InvalidArxivId { value: String },
+    /// A locator is empty or explicitly malformed.
+    #[error("invalid locator `{value}`")]
+    InvalidLocator { value: String },
+    /// Complete state requires a display title.
+    #[error("record `{texkey}` has no title")]
+    MissingTitle { texkey: String },
+    /// Local BibTeX could not be projected to complete state.
+    #[error("could not import `{texkey}`: {source}")]
+    LocalMetadata {
+        texkey: String,
         #[source]
         source: bibi_bibtex::Error,
     },
+    /// A stable identity already belongs to a record.
+    #[error("record already exists as `{id}` (matched by {matched_by})")]
+    ExistingRecord { id: RecordId, matched_by: String },
+    /// Stable claims point to several resident records.
+    #[error("record identities diverge across resident records: {ids}")]
+    DivergentIdentity { ids: String },
+    /// The final bibliography contains a repeated texkey.
+    #[error("texkey `{texkey}` belongs to both `{first}` and `{second}`")]
+    TexkeyInUse {
+        texkey: String,
+        first: RecordId,
+        second: RecordId,
+    },
+    /// A final identity index is repeated.
+    #[error("{kind} `{value}` belongs to both `{first}` and `{second}`")]
+    DuplicateIdentity {
+        kind: &'static str,
+        value: String,
+        first: RecordId,
+        second: RecordId,
+    },
+    /// A record id is repeated.
+    #[error("record id `{id}` appears more than once")]
+    DuplicateRecordId { id: RecordId },
+    /// A requested resident record does not exist.
+    #[error("record `{id}` does not exist")]
+    UnknownRecord { id: RecordId },
+    /// One batch attempts several changes to one record.
+    #[error("record `{id}` is targeted more than once in one mutation")]
+    ConflictingChanges { id: RecordId },
+    /// Two selectors in one removal resolve to one record.
+    #[error("record `{id}` is selected more than once")]
+    DuplicateRemoval { id: RecordId },
+    /// An opaque locator cannot search a bibliography.
+    #[error("`{value}` is meaningful only to a provider")]
+    UnrecognizedLocator { value: String },
+    /// A locator matched no resident record.
+    #[error("no record matches `{locator}`")]
+    NoMatch { locator: String },
 }

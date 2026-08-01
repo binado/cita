@@ -1,226 +1,114 @@
-//! Provider-neutral remote-provider contract and result values.
-//!
-//! Concrete provider crates implement [`RemoteProvider`]. Selection,
-//! construction, and conditional-refresh policy live above this module.
+//! Provider interface and typed external failures.
 
-use crate::{
-    BibiId, Description, Identifiers, Locator, Provider, ProviderId, ProviderOwned, Revision,
-};
-pub use bibi_bibtex::{BibtexEntry, parse_file};
+use crate::{Locator, ProviderName, RecordState};
 use std::future::Future;
 use thiserror::Error as ThisError;
 
-/// A remote metadata and BibTeX provider.
-///
-/// Every operation is plural because only the implementation knows its API's
-/// batching limits. The returned futures are statically dispatched and
-/// `Send`; the contract is deliberately not object-safe.
-pub trait RemoteProvider: Send + Sync {
-    /// The stable name written into record provenance.
-    fn name(&self) -> Provider;
+/// Resolve complete current record state through one external provider.
+pub trait Provider: Send + Sync {
+    /// Stable provider name.
+    fn name(&self) -> ProviderName;
 
-    /// Resolve locators, returning exactly one positional result per locator.
+    /// Resolve exactly one complete positional state per locator.
     fn resolve(
         &self,
         locators: &[Locator],
-    ) -> impl Future<Output = Result<Vec<Resolution>, ProviderError>> + Send;
-
-    /// Fetch complete current metadata for managed records, omitting only
-    /// fields that are genuinely absent at the provider.
-    fn refresh_metadata(
-        &self,
-        requests: &[RefreshRequest],
-    ) -> impl Future<Output = Vec<RefreshItem>> + Send;
-
-    /// Fetch BibTeX for records whose metadata requires it.
-    fn fetch_payloads(
-        &self,
-        requests: &[PayloadRequest],
-    ) -> impl Future<Output = Result<Vec<PayloadItem>, ProviderError>> + Send;
+    ) -> impl Future<Output = Result<Vec<RecordState>, ProviderError>> + Send;
 }
 
-/// One record a refresh should examine.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RefreshRequest {
-    /// Which record this is, so results can be matched back exactly.
-    pub bibi_id: BibiId,
-    /// The provider's stable handle.
-    pub provider_id: ProviderId,
-    /// The token stored at the last refresh, if any.
-    pub stored_revision: Option<Revision>,
-}
-
-/// The provider's complete current metadata: everything but the payload.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProviderMetadata {
-    /// The provider's handle, as reported now.
-    pub provider_id: ProviderId,
-    /// The provider's current opaque revision.
-    pub revision: Option<Revision>,
-    /// Canonical normalized identifiers.
-    pub identifiers: Identifiers,
-    /// Advisory display data.
-    pub description: Description,
-    /// Ephemeral provider-private hints for the matching payload request.
-    pub join_tokens: Vec<String>,
-}
-
-/// One record whose BibTeX should be fetched.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PayloadRequest {
-    /// The provider's stable handle.
-    pub provider_id: ProviderId,
-    /// Join hints echoed from the matching metadata.
-    pub join_tokens: Vec<String>,
-}
-
-/// What resolving one locator produced.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Resolution {
-    /// A complete mapped record.
-    Found(Box<ProviderOwned>),
-    /// The provider understands the locator and holds no record for it.
-    NotFound,
-    /// The provider cannot resolve that locator.
-    UnsupportedLocator,
-}
-
-/// What examining one managed record produced.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RefreshState {
-    /// The record's complete current provider metadata.
-    Metadata(Box<ProviderMetadata>),
-    /// The provider no longer holds this record.
-    Missing,
-}
-
-/// One record's metadata outcome, correlated by bibi id.
-#[derive(Debug)]
-pub struct RefreshItem {
-    /// Which record this answers for.
-    pub bibi_id: BibiId,
-    /// The outcome, or why it could not be produced.
-    pub result: Result<RefreshState, ProviderError>,
-}
-
-/// One record's BibTeX, or its unambiguous absence.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PayloadItem {
-    /// Which provider record this answers for.
-    pub provider_id: ProviderId,
-    /// The entry, when one arrived.
-    pub payload: Option<BibtexEntry>,
-}
-
-/// A provider failed to produce a result.
+/// A provider failed to produce a complete strict batch.
 #[derive(Debug, ThisError)]
+#[allow(missing_docs)]
 pub enum ProviderError {
-    /// The response could not be obtained. Retrying may help.
+    /// A locator kind is unsupported.
+    #[error("{provider}: unsupported locator `{locator}`")]
+    Unsupported {
+        provider: ProviderName,
+        locator: String,
+    },
+    /// No record exists for a locator.
+    #[error("{provider}: no record found for `{locator}`")]
+    NotFound {
+        provider: ProviderName,
+        locator: String,
+    },
+    /// Retrieval failed.
     #[error(transparent)]
     Retrieval(#[from] RetrievalError),
-    /// The response could not be mapped. Retrying the same content cannot help.
+    /// Mapping failed.
     #[error(transparent)]
     Mapping(#[from] MappingError),
 }
 
 /// Why a provider response could not be obtained.
-#[derive(Debug, ThisError)]
+#[derive(Clone, Debug, Eq, PartialEq, ThisError)]
+#[allow(missing_docs)]
 pub enum RetrievalError {
-    /// The request did not complete.
     #[error("{provider}: request failed: {message}")]
     Transport {
-        /// The provider that failed.
-        provider: Provider,
-        /// What went wrong.
+        provider: ProviderName,
         message: String,
     },
-    /// The provider returned an unsuccessful status.
     #[error("{provider}: returned HTTP {status}: {body}")]
     Status {
-        /// The provider that failed.
-        provider: Provider,
-        /// HTTP status code.
+        provider: ProviderName,
         status: u16,
-        /// Response body retained for diagnostics.
         body: String,
     },
-    /// The provider rejected or requires credentials.
     #[error("{provider}: authentication failed: {message}")]
     Authentication {
-        /// The provider that failed.
-        provider: Provider,
-        /// What went wrong.
+        provider: ProviderName,
         message: String,
     },
-    /// Retries were exhausted against a rate limit.
     #[error("{provider}: rate limit not cleared after {attempts} retries")]
     RateLimited {
-        /// The provider that failed.
-        provider: Provider,
-        /// Number of retries attempted.
+        provider: ProviderName,
         attempts: usize,
     },
-    /// The provider is misconfigured.
     #[error("{provider}: {message}")]
     Configuration {
-        /// The provider that failed.
-        provider: Provider,
-        /// What is missing or wrong.
+        provider: ProviderName,
         message: String,
     },
 }
 
-/// Why a response could not be turned into record fields.
-#[derive(Debug, ThisError)]
+/// Why external data could not become complete state.
+#[derive(Clone, Debug, Eq, PartialEq, ThisError)]
+#[allow(missing_docs)]
 pub enum MappingError {
-    /// A required field is absent.
     #[error("{provider}: response is missing `{field}`")]
     MissingField {
-        /// The provider that failed.
-        provider: Provider,
-        /// The absent field.
+        provider: ProviderName,
         field: &'static str,
     },
-    /// A field is not a valid identifier.
     #[error("{provider}: `{value}` is not a valid {kind}")]
     InvalidValue {
-        /// The provider that failed.
-        provider: Provider,
-        /// What the value should have been.
+        provider: ProviderName,
         kind: &'static str,
-        /// The offending value.
         value: String,
     },
-    /// Returned BibTeX is unusable.
     #[error("{provider}: returned unusable BibTeX: {message}")]
     InvalidPayload {
-        /// The provider that failed.
-        provider: Provider,
-        /// What was wrong.
+        provider: ProviderName,
         message: String,
     },
-    /// A response cannot be paired with its request.
-    #[error("{provider}: could not pair the response with the request: {message}")]
+    #[error("{provider}: could not pair response with request: {message}")]
     AmbiguousJoin {
-        /// The provider that failed.
-        provider: Provider,
-        /// What could not be paired.
+        provider: ProviderName,
         message: String,
     },
-    /// The implementation broke the neutral contract.
     #[error("{provider}: violated the provider contract: {message}")]
     ContractViolation {
-        /// The provider that failed.
-        provider: Provider,
-        /// Which promise was broken.
+        provider: ProviderName,
         message: String,
     },
 }
 
 impl ProviderError {
-    /// The provider that produced this failure.
-    pub fn provider(&self) -> Provider {
+    /// Provider attributed to the error.
+    pub fn provider(&self) -> ProviderName {
         match self {
+            Self::Unsupported { provider, .. } | Self::NotFound { provider, .. } => *provider,
             Self::Retrieval(error) => match error {
                 RetrievalError::Transport { provider, .. }
                 | RetrievalError::Status { provider, .. }
@@ -238,8 +126,8 @@ impl ProviderError {
         }
     }
 
-    /// Construct a contract violation attributed to `provider`.
-    pub fn contract(provider: Provider, message: impl Into<String>) -> Self {
+    /// Construct a contract failure.
+    pub fn contract(provider: ProviderName, message: impl Into<String>) -> Self {
         Self::Mapping(MappingError::ContractViolation {
             provider,
             message: message.into(),
@@ -247,5 +135,5 @@ impl ProviderError {
     }
 }
 
-/// Generic fakes and contract verification for provider crates.
+/// Provider test support.
 pub mod testing;

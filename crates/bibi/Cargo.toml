@@ -9,22 +9,12 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-anstyle = { workspace = true }
 anyhow = { workspace = true }
 bibi-application = { workspace = true }
-bibi-documents = { workspace = true }
 bibi-provider = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
-terminal_size = { workspace = true }
 tokio = { workspace = true }
-unicode-width = { workspace = true }
 
 [dev-dependencies]
-# Test-only: the table's unit tests build `Record` values, and `Record::new`
-# needs domain types `bibi_application::domain` deliberately does not re-export.
-# The shipped dependency graph is unchanged.
-bibi-core = { workspace = true }
-libc = { workspace = true }
-serde_json = { workspace = true }
 tempfile = { workspace = true }

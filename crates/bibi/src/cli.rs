@@ -1,14 +1,10 @@
-//! Argument definitions.
-//!
-//! Scope is an argument, not a command level: `-p/--path` is a global flag, so
-//! there is no parallel command tree to keep in step and new commands are
-//! scope-aware by construction.
+//! Command-line argument definitions.
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
-/// A bibliography CLI that keeps provider-owned references in a manifest.
+/// Maintain one project's bibliography aggregate.
 #[derive(Debug, Parser)]
 #[command(name = "bibi", version, about, long_about = None)]
 pub struct Cli {
@@ -18,33 +14,30 @@ pub struct Cli {
     pub command: Command,
 }
 
-/// Which manifest to act on.
 #[derive(Args, Debug)]
 pub struct TargetArgs {
-    /// Act on this manifest instead of `./bibi.toml`
+    /// Act on this bibi.toml instead of ./bibi.toml
     #[arg(short = 'p', long = "path", global = true, value_name = "FILE")]
     pub path: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Resolve references and store them
+    /// Resolve references through a provider and store them
     Add(AddArgs),
-    /// Delete records, emitting their local keys
+    /// Import exact local BibTeX from a file or redirected stdin
+    Import(ImportArgs),
+    /// Delete records
     Remove(RemoveArgs),
-    /// Change a record's local citation key
-    Rename(RenameArgs),
     /// List stored records
     List(ListArgs),
-    /// Emit one stored record as BibTeX
+    /// Emit exactly one stored record as BibTeX
     Show(ShowArgs),
-    /// Refresh managed records from their providers
+    /// Unconditionally resolve current state for managed records
     Sync(SyncArgs),
-    /// Verify a rendered bibliography against the manifest
+    /// Verify a rendered bibliography
     Check(CheckArgs),
-    /// Download records' PDFs or source archives
-    Fetch(FetchArgs),
-    /// Create an empty manifest
+    /// Create an empty bibi.toml
     Init,
     /// Print a shell completion script
     Completions(CompletionsArgs),
@@ -52,195 +45,133 @@ pub enum Command {
 
 #[derive(Args, Debug)]
 pub struct AddArgs {
-    /// arXiv ids, DOIs, `<provider>:<id>`, or a citation key with `k:`, e.g.
-    /// `k:Aad:2012tfa`; omit to read stdin
+    /// arXiv ids, DOIs, provider identities, or k:TEXKEY; omit to read lines from stdin
     #[arg(value_name = "LOCATOR")]
     pub locators: Vec<String>,
-    /// Read entries from a BibTeX file, or `-` for standard input
-    #[arg(short = 'f', long = "file", value_name = "FILE")]
-    pub file: Option<PathBuf>,
-    /// Store the record under this citation key
-    #[arg(long, value_name = "KEY", conflicts_with = "file")]
-    pub key: Option<String>,
-    /// Resolve only through this provider
+    /// Resolve through this provider
     #[arg(long, value_name = "NAME")]
     pub provider: Option<String>,
-    /// Replace a matching record instead of skipping it
+    /// Replace one unambiguous stable-identity match
     #[arg(long)]
     pub overwrite: bool,
-    /// Report what would happen without writing
+    /// Fully plan without writing
     #[arg(long = "dry-run")]
     pub dry_run: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ImportArgs {
+    /// BibTeX file; omit to read the complete redirected stdin stream
+    #[arg(value_name = "FILE")]
+    pub file: Option<PathBuf>,
+    /// Replace one unambiguous stable-identity match
+    #[arg(long)]
+    pub overwrite: bool,
+    /// Fully plan without writing
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
+    #[arg(skip)]
+    pub stdin: Option<String>,
 }
 
 #[derive(Args, Debug)]
 pub struct RemoveArgs {
-    /// A citation key with `k:` (e.g. `k:Aad:2012tfa`), an arXiv id, a DOI, or
-    /// `<provider>:<id>`; omit to read stdin
-    #[arg(value_name = "SELECTOR")]
+    /// Locators to remove; omit to read lines from stdin
+    #[arg(value_name = "LOCATOR")]
     pub selectors: Vec<String>,
-    /// Report what would happen without writing
+    /// Fully plan without writing
     #[arg(long = "dry-run")]
     pub dry_run: bool,
 }
 
 #[derive(Args, Debug)]
-pub struct RenameArgs {
-    /// The record to rename; a citation key needs `k:`, e.g. `k:Aad:2012tfa`
-    /// (also an arXiv id, a DOI, or `<provider>:<id>`)
-    #[arg(value_name = "SELECTOR")]
-    pub selector: String,
-    /// Its new citation key
-    #[arg(value_name = "KEY")]
-    pub key: String,
+pub struct ShowArgs {
+    /// One locator; omit to read exactly one line from stdin
+    #[arg(value_name = "LOCATOR")]
+    pub selector: Option<String>,
 }
 
 #[derive(Args, Debug)]
 pub struct ListArgs {
-    /// How to present the listing
+    /// Listing encoding
     #[arg(long, value_enum, default_value_t = ListFormat::Table)]
     pub format: ListFormat,
-    /// Emit these fields as tab-separated columns
-    #[arg(
-        long,
-        value_enum,
-        value_delimiter = ',',
-        value_name = "FIELD",
-        conflicts_with = "format"
-    )]
+    /// Tab-separated fields
+    #[arg(long, value_enum, value_delimiter = ',', conflicts_with = "format")]
     pub fields: Vec<Field>,
     #[command(flatten)]
     pub filter: FilterArgs,
 }
 
-/// The filters that select records, shared by `list` and `check`.
-///
-/// One set, `--provider` included. The two were split while `export` existed,
-/// because there `--provider` named the provider to *sync* first and could not
-/// also mean a filter. Nothing names a provider to sync any more.
 #[derive(Args, Debug, Default)]
 pub struct FilterArgs {
-    /// Only records owned by this provider
+    /// Only records from this provider
     #[arg(long, value_name = "NAME")]
     pub provider: Option<String>,
-    /// Only records with this substring in an author or collaboration
-    #[arg(long, value_name = "TEXT")]
+    /// Author or collaboration substring
+    #[arg(long)]
     pub author: Option<String>,
-    /// Only records with this substring in the title
-    #[arg(long, value_name = "TEXT")]
+    /// Title substring
+    #[arg(long)]
     pub title: Option<String>,
-    /// Only records from this year
-    #[arg(long, value_name = "YEAR")]
+    /// Exact year
+    #[arg(long)]
     pub year: Option<i32>,
-    /// Only records no provider refreshes
+    /// Only locally imported records
     #[arg(long)]
     pub local: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum ListFormat {
-    /// A human-readable table
     Table,
-    /// The stored entries, as a bibliography
     Bibtex,
-    /// The schema-1 metadata projection
     Json,
 }
 
-/// One column of a `--fields` listing.
-///
-/// A format says how to encode a listing; a field says what to put in it. They
-/// are different questions, which is why one citation key per line is
-/// `--fields key` rather than a fourth member of [`ListFormat`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum Field {
-    /// The local citation key
     Key,
-    /// The title
     Title,
-    /// The publication year
     Year,
-    /// The owning provider
-    Provider,
-    /// The DOI
+    Source,
     Doi,
-    /// The arXiv identifier
     Arxiv,
-    /// The public arXiv PDF URL, as `fetch --url` would print it
     ArxivUrl,
 }
 
 #[derive(Args, Debug)]
-pub struct FetchArgs {
-    /// Records to fetch for; a citation key needs `k:`, e.g. `k:Aad:2012tfa`
-    /// (also an arXiv id, a DOI, or `<provider>:<id>`); omit to read selectors
-    /// from stdin
-    #[arg(value_name = "SELECTOR")]
-    pub selectors: Vec<String>,
-    /// Fetch the original source archive instead of the PDF
-    #[arg(long)]
-    pub source: bool,
-    /// Print the public URL instead of downloading
-    #[arg(long)]
-    pub url: bool,
-    /// Download to this file, or put one or more downloads in this directory
-    #[arg(short = 'o', long, value_name = "PATH", conflicts_with = "url")]
-    pub output: Option<PathBuf>,
-    /// Overwrite the destination if it already exists
-    #[arg(short = 'f', long, conflicts_with = "url")]
-    pub force: bool,
-    /// Suppress the download progress bar even on a terminal
-    #[arg(long = "no-progress")]
-    pub no_progress: bool,
-}
-
-#[derive(Args, Debug)]
 pub struct SyncArgs {
-    /// Refresh only records owned by this provider
+    /// Refresh only this provider
     #[arg(long, value_name = "NAME")]
     pub provider: Option<String>,
-    /// Refetch every refreshable record, whatever its revision says
-    #[arg(long)]
-    pub force: bool,
-    /// Do the work and report it, but write nothing
+    /// Fully plan without writing
     #[arg(long = "dry-run")]
     pub dry_run: bool,
 }
 
 #[derive(Args, Debug)]
 pub struct CheckArgs {
-    /// The bibliography to verify
+    /// Bibliography file to verify
     #[arg(value_name = "BIBFILE", default_value = "references.bib")]
     pub bibfile: PathBuf,
-    /// Describe the first difference on drift
+    /// Describe drift
     #[arg(long)]
     pub diff: bool,
-    /// The same filters `list` selects with, so a filtered view can be verified
     #[command(flatten)]
     pub filter: FilterArgs,
 }
 
 #[derive(Args, Debug)]
 pub struct CompletionsArgs {
-    /// The shell to generate for
     #[arg(value_name = "SHELL")]
     pub shell: Shell,
 }
 
-#[derive(Args, Debug)]
-pub struct ShowArgs {
-    /// The record to emit; a citation key needs `k:`, e.g. `k:Aad:2012tfa`
-    /// (also an arXiv id, a DOI, or `<provider>:<id>`); omit to read exactly
-    /// one selector from stdin
-    #[arg(value_name = "SELECTOR")]
-    pub selector: Option<String>,
-}
-
-/// Write a completion script for `shell` to stdout.
 pub fn completions(shell: Shell) -> String {
     let mut command = Cli::command();
     let name = command.get_name().to_owned();
-    let mut rendered = Vec::new();
-    clap_complete::generate(shell, &mut command, name, &mut rendered);
-    String::from_utf8(rendered).expect("completion scripts are UTF-8")
+    let mut bytes = Vec::new();
+    clap_complete::generate(shell, &mut command, name, &mut bytes);
+    String::from_utf8(bytes).expect("completion scripts are UTF-8")
 }
