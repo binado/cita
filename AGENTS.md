@@ -82,9 +82,10 @@ bibi-provider ────────────────────┤
                                 bibi
 ```
 
-- `bibi-bibtex`: the whole boundary around BibTeX syntax — scanning entry and
-  key spans, structural validation, re-keying, identifier candidates, local
-  metadata projection, deterministic rendering.
+- `bibi-bibtex`: the whole boundary around BibTeX syntax — splitting entry
+  spans, adopting `biblatex`'s raw parser for key and field grammar within
+  each span, re-keying, identifier candidates, local metadata projection,
+  deterministic rendering.
 - `bibi-core`: provider-neutral domain values and the statically dispatched
   `RemoteProvider` contract — `BibiId`, the closed `Provider` enum, `ProviderId`,
   `Revision`, `Doi`, `ArxivId`, `Record`, locators, selection, filtering,
@@ -136,13 +137,46 @@ fallback after absence or failure. Local ingestion is explicit through
 ### Byte-preserved payloads
 
 Stored BibTeX is byte-identical to what it was given (I2). The only permitted
-transformation is rewriting the citation-key token, through the scanner's key
+transformation is rewriting the citation-key token, through the located key
 span. Do not add a handwritten BibTeX writer or round-trip an entry through a
 formatter.
+
+Entry boundaries are bibi's own: `scanner::split` walks brace depth, quote
+state, and `%`-to-newline comments to find where one entry ends and the next
+begins, tracking parenthesis-delimited entries only far enough to bound them
+correctly. Key and field grammar within one located span are `biblatex`'s:
+its raw parser is the sole authority on what counts as a citation key or a
+field, so bibi no longer encodes that grammar itself. The one grammar rule
+bibi still enforces after `biblatex` is `is_safe_key` — not a diagnostic
+preference but a write-then-read invariant: a key that `rekey` could not
+write back into an entry by replacing its token and nothing else must never
+reach the manifest.
+
+`biblatex`'s grammar is narrower than bibi's former scanner in ways that now
+surface as ordinary parse failures rather than a bespoke diagnostic: a
+citation key must be followed directly by a comma (`@misc{A}` with no fields
+and no trailing comma fails), parenthesis-delimited entries are not accepted
+by its raw parser at all, and a key containing whitespace fails at the
+grammar stage instead of bibi's own `InvalidKey`. An `@string`, `@preamble`,
+or `@comment` block parses as something other than an entry, so it fails
+too, just not under a dedicated directive error.
 
 `parse_one` and `parse_file` are purely syntactic and require no title;
 `identifier_candidates` and `local_metadata` are separate operations, because
 import must be able to resolve an entry that carries a DOI and nothing else.
+`parse_file` is strict — one malformed entry fails the whole file, which is
+what INSPIRE's bulk BibTeX join wants. `parse_file_partial` instead resolves
+every entry it can and reports the rest as per-entry failures, which is what
+`add -f` wants against a colleague's `.bib`: one entry `biblatex` cannot
+place, or a duplicate source key, costs only itself.
+
+**Known limitation:** `@string` macros are never resolved. bibi stores and
+re-emits bytes verbatim, so a value like `journal = prd` referencing an
+undefined-in-output abbreviation is stored and rendered as written; BibTeX
+renders it empty. This is a deliberate consequence of deferring grammar to a
+byte-preserving crate rather than resolving macros bibi would then have to
+track. Reversible in one line if it proves costly, since
+`RawBibliography::abbreviations` is a public field.
 
 ### Keys and identity
 

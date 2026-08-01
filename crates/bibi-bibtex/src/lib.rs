@@ -19,6 +19,7 @@
 //! BibTeX is the original rather than a rendering of a structured record.
 #![warn(missing_docs)]
 
+mod adapter;
 mod entry;
 mod error;
 mod file;
@@ -28,6 +29,6 @@ mod scanner;
 
 pub use entry::{BibtexEntry, CitationKey, IdentifierCandidates};
 pub use error::Error;
-pub use file::{ImportedEntry, parse_file};
+pub use file::{EntryFailure, ImportedEntry, parse_file, parse_file_partial};
 pub use local_metadata::LocalMetadata;
 pub use render::render;

@@ -9,7 +9,7 @@ use crate::{
     reports::{BatchReport, ItemFailure, SkipReason, SkippedItem},
     services::Services,
 };
-use bibi_bibtex::{CitationKey, parse_file};
+use bibi_bibtex::{CitationKey, parse_file_partial};
 use bibi_core::{BibiId, Locator, ProviderOwned, Record};
 use bibi_manifest::{ManifestCandidate, ManifestStore};
 use bibi_provider::{Provider, ResolveItem};
@@ -154,10 +154,18 @@ pub async fn add_file(
     request: &AddFileRequest,
 ) -> Result<AddReport, Error> {
     let source = read(&request.source)?;
-    // Parsing everything first means a malformed file costs no requests.
-    let entries = parse_file(&source)?;
+    // Parsing everything first means a malformed file costs no requests. An
+    // entry `biblatex` cannot place (an `@string` macro, a duplicate key, an
+    // unsafe key) fails on its own rather than sinking a colleague's whole file.
+    let (entries, parse_failures) = parse_file_partial(&source);
     let (mut candidate, generation) = store.load_or_empty()?.into_candidate();
     let mut items = BatchReport::new();
+    for failure in parse_failures {
+        items.failures.push(ItemFailure::new(
+            source[failure.span].trim(),
+            failure.error.to_string(),
+        ));
+    }
 
     // One entry can offer two locators — a DOI and an arXiv id for one paper is
     // ordinary in an imported file — so the batch is flattened and each entry

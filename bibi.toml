@@ -26,3 +26,92 @@ bibtex = '''
     month = "7",
     year = "2026"
 }'''
+
+[[records]]
+id = "b83971c3-9e01-4a7d-b796-9989b025f451"
+key = "Imamura:1999xm"
+provider = "inspire"
+provider_id = "493636"
+revision = "2023-03-06T13:45:23.559858+00:00"
+doi = "10.1143/ptp.101.1155"
+arxiv = "hep-th/9901001"
+title = "String junctions and their duals in heterotic string theory"
+authors = ["Imamura, Yosuke"]
+collaborations = []
+year = 1999
+bibtex = """
+@article{Imamura:1999xm,
+    author = "Imamura, Yosuke",
+    title = "{String junctions and their duals in heterotic string theory}",
+    eprint = "hep-th/9901001",
+    archivePrefix = "arXiv",
+    reportNumber = "YITP-99-1",
+    doi = "10.1143/PTP.101.1155",
+    journal = "Prog. Theor. Phys.",
+    volume = "101",
+    pages = "1155--1164",
+    year = "1999"
+}"""
+
+[[records]]
+id = "ebc658bb-cb56-48ea-8f1c-3cb2416efe70"
+key = "MartinBarandiaran:2026lnb"
+provider = "inspire"
+provider_id = "3184038"
+revision = "2026-07-29T04:22:21.964756+00:00"
+arxiv = "2607.26021"
+title = "Weighted Webs: Morphology-Informed Marked Fields"
+authors = [
+    "Martin Barandiaran, Mikel",
+    "Cowell, Jessica A.",
+    "Alonso, David",
+    "Carrón Duque, Javier",
+    "García-Bellido, Juan",
+]
+collaborations = []
+year = 2026
+bibtex = '''
+@article{MartinBarandiaran:2026lnb,
+    author = "Martin Barandiaran, Mikel and Cowell, Jessica A. and Alonso, David and Carr{\'o}n Duque, Javier and Garc{\'\i}a-Bellido, Juan",
+    title = "{Weighted Webs: Morphology-Informed Marked Fields}",
+    eprint = "2607.26021",
+    archivePrefix = "arXiv",
+    primaryClass = "astro-ph.CO",
+    reportNumber = "IFT-UAM/CSIC-26-100",
+    month = "7",
+    year = "2026"
+}'''
+
+[[records]]
+id = "02079f57-3c76-471a-89db-bcb9dbc5bec4"
+key = "Schulz:2026tob"
+provider = "inspire"
+provider_id = "3184316"
+revision = "2026-07-30T09:19:03.457590+00:00"
+arxiv = "2607.26193"
+title = "Cosmology beyond standard sirens: cross-correlation of gravitational waves and neutral hydrogen intensity mapping"
+authors = [
+    "Schulz, Matteo",
+    "Dupletsa, Ulyana",
+    "Cozzumbo, Andrea",
+    "Sala, Giona",
+    "Ronconi, Tommaso",
+    "Spinelli, Marta",
+    "Murgia, Riccardo",
+    "Mastrogiovanni, Simone",
+    "Harms, Jan",
+    "de la Haye, Erik",
+    "Keil, Felicitas",
+]
+collaborations = []
+year = 2026
+bibtex = """
+@article{Schulz:2026tob,
+    author = "Schulz, Matteo and others",
+    title = "{Cosmology beyond standard sirens: cross-correlation of gravitational waves and neutral hydrogen intensity mapping}",
+    eprint = "2607.26193",
+    archivePrefix = "arXiv",
+    primaryClass = "astro-ph.CO",
+    month = "7",
+    year = "2026"
+}"""

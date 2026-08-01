@@ -19,7 +19,7 @@ fn key(value: &str) -> CitationKey {
 #[test]
 fn every_entry_span_is_a_verbatim_slice_of_the_file() {
     let entries = parse_file(CORPUS).unwrap();
-    assert_eq!(entries.len(), 6, "fixture corpus size");
+    assert_eq!(entries.len(), 5, "fixture corpus size");
     // Walking the file entry by entry must account for every byte: each span
     // occurs verbatim and in order, and only whitespace lies between them.
     let mut cursor = 0;

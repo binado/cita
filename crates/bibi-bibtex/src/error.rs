@@ -23,21 +23,15 @@ pub enum Error {
         /// What the scanner expected instead.
         reason: String,
     },
-    /// Something other than an entry or whitespace appears in the source.
-    #[error(
-        "unsupported content at byte {offset}: only complete entries and whitespace are allowed"
-    )]
-    UnexpectedContent {
-        /// Byte offset of the first unsupported byte.
+    /// `biblatex`'s raw parser rejected this entry, or the slice did not
+    /// resolve to exactly one entry (for example an `@string`, `@preamble`,
+    /// or `@comment` directive, which `biblatex` parses as something else).
+    #[error("invalid BibTeX at byte {offset}: {message}")]
+    InvalidGrammar {
+        /// Byte offset `biblatex` reported the problem at.
         offset: usize,
-    },
-    /// The source contains a `@string`, `@preamble`, or `@comment` directive.
-    #[error("unsupported directive `@{directive}` at byte {offset}")]
-    UnsupportedDirective {
-        /// The directive name, as written.
-        directive: String,
-        /// Byte offset of the `@`.
-        offset: usize,
+        /// `biblatex`'s description of the problem.
+        message: String,
     },
     /// One source contains the same citation key more than once.
     #[error("citation key conflict: `{key}` appears more than once")]

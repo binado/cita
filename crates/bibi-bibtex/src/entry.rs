@@ -1,9 +1,10 @@
 //! Citation keys and validated standalone entries.
 
 use crate::{
+    adapter::{self, RawEntry, RawField},
     error::Error,
     local_metadata::{self, LocalMetadata},
-    scanner::{self, RawEntry, RawField},
+    scanner,
 };
 use std::{fmt, ops::Range, str::FromStr};
 
@@ -89,13 +90,12 @@ pub struct BibtexEntry {
 impl BibtexEntry {
     /// Validate one standalone entry, which may be surrounded by whitespace.
     pub fn parse_one(source: String) -> Result<Self, Error> {
-        let mut entries = scanner::scan(&source)?;
-        if entries.len() != 1 {
-            return Err(Error::NotStandalone {
-                found: entries.len(),
-            });
+        let mut spans = scanner::split(&source);
+        if spans.len() != 1 {
+            return Err(Error::NotStandalone { found: spans.len() });
         }
-        Ok(Self::from_raw(&source, entries.remove(0)))
+        let raw = adapter::parse_entry(&source, spans.remove(0))?;
+        Ok(Self::from_raw(&source, raw))
     }
 
     /// Build an entry from a located span of a larger source.
@@ -311,7 +311,7 @@ mod tests {
         assert_eq!(entry.identifier_candidates().doi.as_deref(), Some("10.1/x"));
         assert_eq!(entry.identifier_candidates().arxiv, None);
         assert_eq!(
-            self::entry("@misc{A}").identifier_candidates(),
+            self::entry("@misc{A,}").identifier_candidates(),
             IdentifierCandidates::default()
         );
     }
