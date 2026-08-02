@@ -9,7 +9,6 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-bibi-bibtex = { workspace = true }
 percent-encoding = { workspace = true }
 thiserror = { workspace = true }
 url = { workspace = true }

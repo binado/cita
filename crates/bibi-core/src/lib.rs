@@ -2,6 +2,7 @@
 #![warn(missing_docs)]
 
 mod bibliography;
+mod bibtex;
 mod error;
 mod filter;
 mod identifiers;
@@ -13,6 +14,7 @@ mod source;
 pub mod remote;
 
 pub use bibliography::{Admission, AdmissionKind, Bibliography, CollisionPolicy, Replacement};
+pub use bibtex::Bibtex;
 pub use error::Error;
 pub use filter::RecordFilter;
 pub use identifiers::{ArxivId, Doi};

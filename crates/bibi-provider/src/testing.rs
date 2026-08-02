@@ -1,8 +1,7 @@
 //! Scripted facade construction for application tests.
 
 use crate::Providers;
-use bibi_bibtex::BibtexEntry;
-use bibi_core::{Description, Identifiers, ProviderId, ProviderName, RecordState, Source};
+use bibi_core::{Bibtex, Description, Identifiers, ProviderId, ProviderName, RecordState, Source};
 use std::sync::Arc;
 
 pub use bibi_core::remote::testing::{FakeProvider, ProviderCall, verify_contract};
@@ -21,8 +20,7 @@ pub fn provider_record(provider_id: &str, texkey: &str, title: &str) -> RecordSt
         ),
         Identifiers::default(),
         Description::new(title, Vec::new(), Vec::new(), None),
-        BibtexEntry::parse_one(format!("@misc{{{texkey},title={{{title}}}}}"))
-            .expect("test BibTeX"),
+        Bibtex::new(format!("@misc{{{texkey},title={{{title}}}}}"), texkey),
     )
     .expect("test state")
 }

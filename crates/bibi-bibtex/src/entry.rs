@@ -14,7 +14,7 @@ use crate::{
 /// cannot fail, because import must be able to resolve an entry that carries a
 /// DOI and nothing else.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct IdentifierCandidates {
+pub(crate) struct IdentifierCandidates {
     /// The `doi` field, if present.
     pub doi: Option<String>,
     /// The `eprint` field, if present and not disclaimed by an archive prefix
@@ -29,7 +29,7 @@ pub struct IdentifierCandidates {
 /// response or file that contained the entry, not to the entry; every byte
 /// inside it, including internal comments and formatting, is preserved.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BibtexEntry {
+pub(crate) struct BibtexEntry {
     source: String,
     texkey: String,
     /// Field spans relative to `source`, in source order.
@@ -37,8 +37,13 @@ pub struct BibtexEntry {
 }
 
 impl BibtexEntry {
+    /// Convert the validated entry into the parser-agnostic core payload.
+    pub(crate) fn into_core(self) -> bibi_core::Bibtex {
+        bibi_core::Bibtex::new(self.source, self.texkey)
+    }
+
     /// Validate one standalone entry, which may be surrounded by whitespace.
-    pub fn parse_one(source: String) -> Result<Self, Error> {
+    pub(crate) fn parse_one(source: String) -> Result<Self, Error> {
         let mut spans = scanner::split(&source);
         if spans.len() != 1 {
             return Err(Error::NotStandalone { found: spans.len() });
@@ -69,17 +74,19 @@ impl BibtexEntry {
     }
 
     /// The exact entry bytes, without surrounding whitespace.
-    pub fn source(&self) -> &str {
+    #[allow(dead_code)]
+    pub(crate) fn source(&self) -> &str {
         &self.source
     }
 
     /// The texkey embedded in the exact source.
-    pub fn texkey(&self) -> &str {
+    #[allow(dead_code)]
+    pub(crate) fn texkey(&self) -> &str {
         &self.texkey
     }
 
     /// Read the DOI and arXiv identifiers this entry declares, if any.
-    pub fn identifier_candidates(&self) -> IdentifierCandidates {
+    pub(crate) fn identifier_candidates(&self) -> IdentifierCandidates {
         let field = |name: &str| {
             self.fields
                 .iter()
@@ -103,7 +110,7 @@ impl BibtexEntry {
     /// This is the only semantic read in the crate, and it exists for the local
     /// provider: where the user supplied the BibTeX, deriving metadata from it
     /// interprets nothing that a structured record would have said better.
-    pub fn local_metadata(&self) -> Result<LocalMetadata, Error> {
+    pub(crate) fn local_metadata(&self) -> Result<LocalMetadata, Error> {
         local_metadata::project(&self.source, &self.texkey, self.identifier_candidates())
     }
 }

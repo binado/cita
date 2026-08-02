@@ -121,9 +121,9 @@ fn year(entry: &SemanticEntry) -> Option<i32> {
 
 #[cfg(test)]
 mod tests {
-    use crate::BibtexEntry;
+    use crate::{entry::BibtexEntry, local_metadata::LocalMetadata};
 
-    fn metadata(source: &str) -> crate::LocalMetadata {
+    fn metadata(source: &str) -> LocalMetadata {
         BibtexEntry::parse_one(source.to_owned())
             .unwrap()
             .local_metadata()

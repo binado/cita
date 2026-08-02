@@ -7,9 +7,8 @@ use crate::{
     transport::{RECORD_FIELDS, Transport},
     wire::LiteratureRecord,
 };
-use bibi_bibtex::BibtexEntry;
 use bibi_core::{
-    ArxivId, Doi, Locator, ProviderId, ProviderName, RecordState, Source,
+    ArxivId, Bibtex, Doi, Locator, ProviderId, ProviderName, RecordState, Source,
     remote::{Provider, ProviderError, RetrievalError},
 };
 use std::collections::HashMap;
@@ -51,7 +50,7 @@ impl InspireProvider {
     async fn payloads(
         &self,
         records: &[MappedRecord],
-    ) -> Result<HashMap<ProviderId, BibtexEntry>, ProviderError> {
+    ) -> Result<HashMap<ProviderId, Bibtex>, ProviderError> {
         let mut paired = HashMap::new();
         for batch in batching::batch_ids(
             &records
@@ -139,7 +138,8 @@ impl Provider for InspireProvider {
                                 self.name(),
                                 format!("record {} lost its paired BibTeX", complete.provider_id),
                             )
-                        })?,
+                        })?
+                        .clone(),
                 )
                 .map_err(|error| ProviderError::contract(self.name(), error.to_string()))
             })

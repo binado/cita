@@ -60,15 +60,6 @@ pub enum Error {
         /// Shape problem.
         message: &'static str,
     },
-    /// Stored BibTeX is not one valid entry.
-    #[error("record `{record}` has invalid BibTeX: {source}")]
-    InvalidPayload {
-        /// Record label used for the diagnostic.
-        record: String,
-        /// BibTeX parse failure.
-        #[source]
-        source: bibi_bibtex::Error,
-    },
     /// The complete restored bibliography violates a domain invariant.
     #[error(transparent)]
     Bibliography(#[from] bibi_core::Error),

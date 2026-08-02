@@ -29,13 +29,6 @@ pub enum Error {
     /// Complete state requires a display title.
     #[error("record `{texkey}` has no title")]
     MissingTitle { texkey: String },
-    /// Local BibTeX could not be projected to complete state.
-    #[error("could not import `{texkey}`: {source}")]
-    LocalMetadata {
-        texkey: String,
-        #[source]
-        source: bibi_bibtex::Error,
-    },
     /// A stable identity already belongs to a record.
     #[error("record already exists as `{id}` (matched by {matched_by})")]
     ExistingRecord { id: RecordId, matched_by: String },

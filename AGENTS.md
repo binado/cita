@@ -118,10 +118,10 @@ injected clock.
 ## Persistence
 
 Schema remains `1` and has no compatibility layer. Wire records contain `id`,
-`source`, managed-only `provider_id`, identifiers, description, and exact
-`bibtex`; never add `key` or `revision` back. Reject unknown fields and unknown
-provider names. Local `provider_id` is forbidden; managed `provider_id` is
-required.
+`source`, managed-only `provider_id`, identifiers, description, derived
+`texkey`, and exact `bibtex`; never add `revision` back. Reject unknown fields
+and unknown provider names. Local `provider_id` is forbidden; managed
+`provider_id` is required.
 
 Loading converts wire records to `(RecordId, RecordState)` and calls
 `Bibliography::restore`. Commit accepts a complete `Bibliography`, compares the

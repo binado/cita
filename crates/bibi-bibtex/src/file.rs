@@ -1,6 +1,7 @@
 //! Parsing a file of standalone entries.
 
-use crate::{adapter, entry::BibtexEntry, error::Error, scanner};
+use crate::{adapter, error::Error, scanner};
+use bibi_core::Bibtex;
 use std::collections::BTreeSet;
 
 /// Parse a file containing only entries and whitespace, in source order.
@@ -10,12 +11,12 @@ use std::collections::BTreeSet;
 /// rejected: the file is ambiguous about which entry a key names, and bibi
 /// would have to choose. One malformed entry fails the whole file; callers
 /// One malformed entry or repeated texkey rejects the complete input.
-pub fn parse_file(source: &str) -> Result<Vec<BibtexEntry>, Error> {
+pub fn parse_file(source: &str) -> Result<Vec<Bibtex>, Error> {
     let mut keys = BTreeSet::new();
     let mut entries = Vec::new();
     for span in scanner::split(source) {
         let raw = adapter::parse_entry(source, span)?;
-        let payload = BibtexEntry::from_raw(source, raw);
+        let payload = crate::entry::BibtexEntry::from_raw(source, raw).into_core();
         let key = payload.texkey().to_owned();
         if !keys.insert(key.clone()) {
             return Err(Error::DuplicateKey { key });
@@ -36,7 +37,7 @@ mod tests {
         let source = format!(" \n{first}\n\t\n{second}\n ");
         let entries = parse_file(&source).unwrap();
         assert_eq!(
-            entries.iter().map(BibtexEntry::texkey).collect::<Vec<_>>(),
+            entries.iter().map(Bibtex::texkey).collect::<Vec<_>>(),
             ["Zed", "Alpha"]
         );
         assert_eq!(entries[0].source(), first);
@@ -46,10 +47,7 @@ mod tests {
     #[test]
     fn accepts_an_untitled_entry_that_carries_an_identifier() {
         let entries = parse_file("@article{A, doi = {10.1/x}}").unwrap();
-        assert_eq!(
-            entries[0].identifier_candidates().doi.as_deref(),
-            Some("10.1/x")
-        );
+        assert_eq!(entries[0].texkey(), "A");
     }
 
     #[test]

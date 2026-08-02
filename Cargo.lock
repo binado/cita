@@ -102,6 +102,7 @@ dependencies = [
 name = "bibi-bibtex"
 version = "0.1.0"
 dependencies = [
+ "bibi-core",
  "biblatex",
  "thiserror",
 ]
@@ -110,7 +111,6 @@ dependencies = [
 name = "bibi-core"
 version = "0.1.0"
 dependencies = [
- "bibi-bibtex",
  "percent-encoding",
  "thiserror",
  "url",
@@ -148,7 +148,6 @@ dependencies = [
 name = "bibi-manifest"
 version = "0.1.0"
 dependencies = [
- "bibi-bibtex",
  "bibi-core",
  "serde",
  "tempfile",

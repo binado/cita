@@ -58,11 +58,15 @@ pub fn import(
     source: &str,
     request: &ImportRequest,
 ) -> Result<MutationReport<Admission>, Error> {
-    let states = parse_file(source)
-        .map_err(Error::from)?
-        .into_iter()
-        .map(RecordState::local)
-        .collect::<Result<Vec<_>, _>>()?;
+    let entries = parse_file(source).map_err(Error::from)?;
+    let states = entries
+        .iter()
+        .map(|entry| {
+            let (bibtex, identifiers, description) =
+                bibi_bibtex::project_local(entry.source()).map_err(Error::Bibtex)?;
+            Ok(RecordState::local(bibtex, identifiers, description)?)
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
     admit(store, states, request.overwrite, request.dry_run)
 }
 

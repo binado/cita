@@ -14,9 +14,9 @@ use crate::{
     transport::{RawBibtex, RawJson},
     wire::{LiteratureRecord, SearchResponse},
 };
-use bibi_bibtex::{BibtexEntry, parse_file};
+use bibi_bibtex::parse_file;
 use bibi_core::remote::MappingError;
-use bibi_core::{ArxivId, Description, Doi, Identifiers, ProviderId};
+use bibi_core::{ArxivId, Bibtex, Description, Doi, Identifiers, ProviderId};
 
 /// One INSPIRE record, mapped.
 ///
@@ -166,7 +166,7 @@ pub fn map_declared_keys(raw: &RawJson) -> Result<Vec<DeclaredKeys>, MappingErro
 /// This is structural validation, not verification of INSPIRE's claims: the
 /// Every returned entry must be well formed with a readable texkey so the
 /// verified join can pair its exact bytes to a provider identity.
-pub fn split_entries(raw: &RawBibtex) -> Result<Vec<BibtexEntry>, MappingError> {
+pub fn split_entries(raw: &RawBibtex) -> Result<Vec<Bibtex>, MappingError> {
     parse_file(raw.as_str()).map_err(error::invalid_payload)
 }
 

@@ -10,4 +10,5 @@ authors.workspace = true
 
 [dependencies]
 biblatex = { workspace = true }
+bibi-core = { workspace = true }
 thiserror = { workspace = true }

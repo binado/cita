@@ -1,9 +1,8 @@
 //! Strict schema-1 conversion.
 
 use crate::Error;
-use bibi_bibtex::BibtexEntry;
 use bibi_core::{
-    ArxivId, Bibliography, Description, Doi, Identifiers, ProviderId, ProviderName, Record,
+    ArxivId, Bibliography, Bibtex, Description, Doi, Identifiers, ProviderId, ProviderName, Record,
     RecordId, RecordState, Source,
 };
 use serde::{Deserialize, Serialize};
@@ -44,6 +43,7 @@ struct RecordWire {
     collaborations: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     year: Option<i32>,
+    texkey: String,
     bibtex: String,
 }
 
@@ -82,6 +82,7 @@ impl RecordWire {
             authors: state.description().authors().to_vec(),
             collaborations: state.description().collaborations().to_vec(),
             year: state.description().year(),
+            texkey: state.texkey().to_owned(),
             bibtex: state.bibtex().source().to_owned(),
         }
     }
@@ -123,11 +124,7 @@ impl RecordWire {
                 .transpose()
                 .map_err(field("arxiv"))?,
         );
-        let bibtex =
-            BibtexEntry::parse_one(self.bibtex).map_err(|source| Error::InvalidPayload {
-                record: self.id.clone(),
-                source,
-            })?;
+        let bibtex = Bibtex::new(self.bibtex, self.texkey);
         let state = RecordState::new(
             source,
             identifiers,

@@ -1,9 +1,8 @@
 //! Schema determinism, exact payload round trips, and store semantics.
 
-use bibi_bibtex::BibtexEntry;
 use bibi_core::{
-    ArxivId, Bibliography, Description, Doi, Identifiers, ProviderId, ProviderName, RecordId,
-    RecordState, Source,
+    ArxivId, Bibliography, Bibtex, Description, Doi, Identifiers, ProviderId, ProviderName,
+    RecordId, RecordState, Source,
 };
 use bibi_manifest::{BibliographyStore, Error};
 
@@ -30,7 +29,7 @@ fn state(source: Source, texkey: &str, title: &str) -> RecordState {
             },
             (texkey == "Aad:2012tfa").then_some(2012),
         ),
-        BibtexEntry::parse_one(format!("@misc{{{texkey}, title={{{title}}}}}")).unwrap(),
+        Bibtex::new(format!("@misc{{{texkey}, title={{{title}}}}}"), texkey),
     )
     .unwrap()
 }
@@ -93,7 +92,7 @@ fn bibtex_bytes_survive_toml_round_trips() {
             Source::Local,
             Identifiers::default(),
             Description::new("Exact", Vec::new(), Vec::new(), None),
-            BibtexEntry::parse_one(payload.to_owned()).unwrap(),
+            Bibtex::new(payload, "Exact"),
         )
         .unwrap(),
     )])

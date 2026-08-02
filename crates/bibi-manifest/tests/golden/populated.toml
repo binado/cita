@@ -13,10 +13,12 @@ authors = [
 ]
 collaborations = ["ATLAS"]
 year = 2012
+texkey = "Aad:2012tfa"
 bibtex = "@misc{Aad:2012tfa, title={Observation of a new particle}}"
 
 [[records]]
 id = "8f14e45f-ceea-467a-9f38-a2f2b1a1f1c9"
 source = "local"
 title = "A tool"
+texkey = "Zenodo:2024"
 bibtex = "@misc{Zenodo:2024, title={A tool}}"

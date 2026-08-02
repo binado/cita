@@ -1,8 +1,7 @@
 //! Verified pairing of flat INSPIRE BibTeX responses to requested records.
 
 use crate::error;
-use bibi_bibtex::BibtexEntry;
-use bibi_core::{ProviderId, remote::MappingError};
+use bibi_core::{Bibtex, ProviderId, remote::MappingError};
 use std::collections::HashMap;
 
 /// Texkeys INSPIRE declares for one stable record id.
@@ -20,14 +19,14 @@ pub struct JoinedEntry {
     /// Stable INSPIRE id.
     pub provider_id: ProviderId,
     /// Exact returned BibTeX.
-    pub bibtex: BibtexEntry,
+    pub bibtex: Bibtex,
 }
 
 /// Pair a complete batch or reject it whole.
 pub fn join(
     requested: &[ProviderId],
     declared: &[DeclaredKeys],
-    entries: Vec<BibtexEntry>,
+    entries: Vec<Bibtex>,
 ) -> Result<Vec<JoinedEntry>, MappingError> {
     let mut owners: HashMap<&str, &ProviderId> = HashMap::new();
     for record in declared {
@@ -82,8 +81,8 @@ mod tests {
         ProviderId::new(value).unwrap()
     }
 
-    fn entry(texkey: &str) -> BibtexEntry {
-        BibtexEntry::parse_one(format!("@misc{{{texkey},title={{T}}}}")).unwrap()
+    fn entry(texkey: &str) -> Bibtex {
+        Bibtex::new(format!("@misc{{{texkey},title={{T}}}}"), texkey)
     }
 
     #[test]

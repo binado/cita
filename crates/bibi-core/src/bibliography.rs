@@ -380,15 +380,14 @@ fn join_ids(ids: &[RecordId]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Description, Identifiers, Source};
-    use bibi_bibtex::BibtexEntry;
+    use crate::{Bibtex, Description, Identifiers, Source};
 
     fn state(key: &str, provider_id: &str) -> RecordState {
         RecordState::new(
             Source::managed(ProviderName::Inspire, ProviderId::new(provider_id).unwrap()),
             Identifiers::default(),
             Description::new(key, Vec::new(), Vec::new(), None),
-            BibtexEntry::parse_one(format!("@misc{{{key},title={{{key}}}}}")).unwrap(),
+            Bibtex::new(format!("@misc{{{key},title={{{key}}}}}"), key),
         )
         .unwrap()
     }

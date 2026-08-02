@@ -18,7 +18,7 @@ pub fn render_bibliography(bibliography: &Bibliography, options: &RenderOptions)
 pub fn render_records<'a>(records: impl IntoIterator<Item = &'a Record>) -> String {
     let entries = records
         .into_iter()
-        .map(|record| record.state().bibtex())
+        .map(|record| record.state().bibtex().source())
         .collect::<Vec<_>>();
     bibi_bibtex::render(entries)
 }

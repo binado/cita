@@ -1,7 +1,6 @@
 //! Stable records around complete replaceable state.
 
-use crate::{ArxivId, Doi, Error, RecordId, Source};
-use bibi_bibtex::BibtexEntry;
+use crate::{ArxivId, Bibtex, Doi, Error, RecordId, Source};
 
 /// Canonical provider-neutral identifiers.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -79,7 +78,7 @@ pub struct RecordState {
     source: Source,
     identifiers: Identifiers,
     description: Description,
-    bibtex: BibtexEntry,
+    bibtex: Bibtex,
 }
 
 impl RecordState {
@@ -88,7 +87,7 @@ impl RecordState {
         source: Source,
         identifiers: Identifiers,
         description: Description,
-        bibtex: BibtexEntry,
+        bibtex: Bibtex,
     ) -> Result<Self, Error> {
         let state = Self {
             source,
@@ -100,33 +99,13 @@ impl RecordState {
         Ok(state)
     }
 
-    /// Construct local state from user-supplied BibTeX.
-    pub fn local(bibtex: BibtexEntry) -> Result<Self, Error> {
-        let texkey = bibtex.texkey().to_owned();
-        let metadata = bibtex
-            .local_metadata()
-            .map_err(|source| Error::LocalMetadata { texkey, source })?;
-        let identifiers = Identifiers::new(
-            metadata
-                .doi
-                .as_deref()
-                .and_then(|value| Doi::new(value).ok()),
-            metadata
-                .arxiv
-                .as_deref()
-                .and_then(|value| ArxivId::new(value).ok()),
-        );
-        Self::new(
-            Source::Local,
-            identifiers,
-            Description::new(
-                metadata.title,
-                metadata.authors,
-                metadata.collaborations,
-                metadata.year,
-            ),
-            bibtex,
-        )
+    /// Construct local state from parser-projected user input.
+    pub fn local(
+        bibtex: Bibtex,
+        identifiers: Identifiers,
+        description: Description,
+    ) -> Result<Self, Error> {
+        Self::new(Source::Local, identifiers, description, bibtex)
     }
 
     /// Re-check state invariants.
@@ -155,11 +134,11 @@ impl RecordState {
     }
 
     /// Exact BibTeX.
-    pub fn bibtex(&self) -> &BibtexEntry {
+    pub fn bibtex(&self) -> &Bibtex {
         &self.bibtex
     }
 
-    /// Texkey derived from exact BibTeX.
+    /// Stored texkey derived from the exact BibTeX at the parser boundary.
     pub fn texkey(&self) -> &str {
         self.bibtex.texkey()
     }
@@ -187,7 +166,7 @@ impl Record {
         &self.state
     }
 
-    /// Derived texkey.
+    /// Stored texkey.
     pub fn texkey(&self) -> &str {
         self.state.texkey()
     }
