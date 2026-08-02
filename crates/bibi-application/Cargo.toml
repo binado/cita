@@ -1,0 +1,21 @@
+[package]
+name = "bibi-application"
+description = "Strict command use cases over bibliography persistence and providers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+[dependencies]
+bibi-bibtex = { workspace = true }
+bibi-core = { workspace = true }
+bibi-manifest = { workspace = true }
+bibi-provider = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+[dev-dependencies]
+bibi-provider = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }

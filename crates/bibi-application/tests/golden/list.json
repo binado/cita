@@ -1,0 +1,33 @@
+[
+  {
+    "id": "<minted>",
+    "key": "alpha:2024",
+    "provider": "local",
+    "provider_id": null,
+    "revision": null,
+    "doi": "10.5281/zenodo.1",
+    "arxiv": null,
+    "title": "A tool",
+    "authors": [
+      "Doe, Jane",
+      "Roe, Richard"
+    ],
+    "collaborations": [],
+    "year": 2024
+  },
+  {
+    "id": "<minted>",
+    "key": "zed:2026",
+    "provider": "local",
+    "provider_id": null,
+    "revision": null,
+    "doi": null,
+    "arxiv": null,
+    "title": "Notes on nothing",
+    "authors": [
+      "Roe, Richard"
+    ],
+    "collaborations": [],
+    "year": 2026
+  }
+]

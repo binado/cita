@@ -1,0 +1,18 @@
+[package]
+name = "bibi-provider"
+description = "Closed provider selection, construction, and strict batched resolution for bibi."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+bibi-bibtex = { workspace = true }
+bibi-core = { workspace = true }
+bibi-inspire = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

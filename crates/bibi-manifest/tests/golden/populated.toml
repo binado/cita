@@ -1,0 +1,24 @@
+schema = 1
+
+[[records]]
+id = "d760f219-9098-4b49-9f62-10cbbcc22b11"
+source = "inspire"
+provider_id = "1124337"
+doi = "10.1016/j.physletb.2012.08.020"
+arxiv = "1207.7214"
+title = "Observation of a new particle"
+authors = [
+    "Aad, G.",
+    "Abajyan, T.",
+]
+collaborations = ["ATLAS"]
+year = 2012
+texkey = "Aad:2012tfa"
+bibtex = "@misc{Aad:2012tfa, title={Observation of a new particle}}"
+
+[[records]]
+id = "8f14e45f-ceea-467a-9f38-a2f2b1a1f1c9"
+source = "local"
+title = "A tool"
+texkey = "Zenodo:2024"
+bibtex = "@misc{Zenodo:2024, title={A tool}}"

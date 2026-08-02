@@ -49,9 +49,9 @@ jobs:
             grep -Fxq README.md <<<"$listing"
           done
       - name: Verify local CLI installation
-        run: cargo install --path crates/cita --locked
+        run: cargo install --path crates/bibi --locked
 
-  # Exercises the real INSPIRE API (crates/cita/tests/e2e.rs) instead of the
+  # Exercises the real INSPIRE API (crates/bibi-inspire/tests/e2e.rs) instead of the
   # hermetic local-TcpListener suites above. Runs on the same triggers as
   # `test`, plus manual dispatch and a weekly schedule as a standalone
   # liveness check on main.
@@ -60,4 +60,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --test e2e -- --ignored
+      - run: cargo test -p bibi-inspire --test e2e -- --ignored

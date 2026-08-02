@@ -1,7 +1,9 @@
 /target
 *.bib
 !references.bib
+# Checked-in byte fixtures: the ignore above is for generated bibliographies.
+!crates/*/tests/**/*.bib
 .DS_Store
 
-# Cita document cache
-/.cita/files/
+# Local bibi state written by manual smoke tests
+/.bibi/

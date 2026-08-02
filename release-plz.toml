@@ -1,30 +1,38 @@
 [workspace]
 # release-plz reads Conventional Commits for version bumps and writes per-crate
-# CHANGELOGs. All six crates share `version_group = "cita"` so they stay in
-# lockstep on a single version, matching the manual "all crates share one
-# version" contract. Default per-crate git tags ({{ package }}-v{{ version }})
-# and changelog updates are kept.
+# CHANGELOGs. All eight crates share `version_group = "bibi"` so they stay in
+# lockstep on a single version, matching the "all crates share one version"
+# contract. Default per-crate git tags ({{ package }}-v{{ version }}) and
+# changelog updates are kept.
 
 [[package]]
-name = "cita-core"
-version_group = "cita"
+name = "bibi-bibtex"
+version_group = "bibi"
 
 [[package]]
-name = "cita-bibliography"
-version_group = "cita"
+name = "bibi-core"
+version_group = "bibi"
 
 [[package]]
-name = "cita-documents"
-version_group = "cita"
+name = "bibi-provider"
+version_group = "bibi"
 
 [[package]]
-name = "cita-inspire-client"
-version_group = "cita"
+name = "bibi-inspire"
+version_group = "bibi"
 
 [[package]]
-name = "cita-manifest"
-version_group = "cita"
+name = "bibi-manifest"
+version_group = "bibi"
 
 [[package]]
-name = "cita"
-version_group = "cita"
+name = "bibi-documents"
+version_group = "bibi"
+
+[[package]]
+name = "bibi-application"
+version_group = "bibi"
+
+[[package]]
+name = "bibi"
+version_group = "bibi"
