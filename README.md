@@ -125,7 +125,7 @@ schema = 2
 [references.Higgs2012]
 type = "article"
 title = "Observation of a new particle in the search for the SM Higgs boson"
-authors = ["Georges Aad", "others"]
+authors = ["Georges Aad", "Brad Abbott", "Dale Charles Abbott"]
 collaborations = ["ATLAS"]
 year = 2012
 doi = "10.1016/j.physletb.2012.08.020"
@@ -138,6 +138,7 @@ notes = ["Superseded for the mass measurement by 1503.07589."]
 bibtex = """
 @article{ATLAS:2012yve,
     title = "{Observation of a new particle}",
+    author = "Aad, Georges and others",
     eprint = "1207.7214"
 }"""
 
@@ -158,6 +159,14 @@ is added or imported, and are never re-derived afterwards. `tags` and `notes` ar
 yours: no command rewrites them. `bibtex` is the exact entry a provider or an
 import supplied — immutable, never generated from the fields above it, and
 absent entirely for a reference no provider knows about.
+
+For a managed entry, `type`, `authors`, `collaborations`, and `year` come
+straight from INSPIRE's curated JSON record, not from `bibtex` — note above how
+`type` is `"article"` (INSPIRE's `document_type`) while the stored `bibtex`
+starts `@article{...}` only by coincidence, and how `authors` lists real names
+(capped at 10) rather than the BibTeX rendering's `"Aad, Georges and others"`.
+An imported entry has no such record to draw on, so its `type` and `authors`
+come from the BibTeX file itself.
 
 An entry with an `inspire` sub-table is *managed*: `cita sync` refreshes its
 bibliographic fields by stable record ID. An entry without one is unmanaged and

@@ -104,13 +104,13 @@ fn server(responses: Vec<(&'static str, String)>) -> (String, thread::JoinHandle
 
 fn json_record(id: u64, key: &str, title: &str, arxiv: &str) -> String {
     format!(
-        r#"{{"id":"{id}","updated":"2026-01-01T00:00:00Z","metadata":{{"titles":[{{"title":"{title}"}}],"authors":[{{"full_name":"Doe, Jane"}}],"texkeys":["{key}"],"arxiv_eprints":[{{"value":"{arxiv}","categories":["hep-th"]}}],"document_type":["article"]}}}}"#
+        r#"{{"id":"{id}","updated":"2026-01-01T00:00:00Z","metadata":{{"titles":[{{"title":"{title}"}}],"authors":[{{"full_name":"Doe, Jane"}}],"collaborations":[{{"value":"ATLAS"}}],"publication_info":[{{"year":2012}}],"texkeys":["{key}"],"arxiv_eprints":[{{"value":"{arxiv}","categories":["hep-th"]}}],"document_type":["article"]}}}}"#
     )
 }
 
 fn json_record_with_doi(id: u64, key: &str, title: &str, arxiv: &str, doi: &str) -> String {
     format!(
-        r#"{{"id":"{id}","updated":"2026-01-01T00:00:00Z","metadata":{{"titles":[{{"title":"{title}"}}],"authors":[{{"full_name":"Doe, Jane"}}],"texkeys":["{key}"],"arxiv_eprints":[{{"value":"{arxiv}","categories":["hep-th"]}}],"dois":[{{"value":"{doi}"}}],"document_type":["article"]}}}}"#
+        r#"{{"id":"{id}","updated":"2026-01-01T00:00:00Z","metadata":{{"titles":[{{"title":"{title}"}}],"authors":[{{"full_name":"Doe, Jane"}}],"collaborations":[{{"value":"ATLAS"}}],"publication_info":[{{"year":2012}}],"texkeys":["{key}"],"arxiv_eprints":[{{"value":"{arxiv}","categories":["hep-th"]}}],"dois":[{{"value":"{doi}"}}],"document_type":["article"]}}}}"#
     )
 }
 
@@ -840,6 +840,10 @@ fn add_accepts_an_arxiv_url_and_preserves_an_explicit_local_key() {
     let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
     assert!(manifest.contains("record_id = 42"));
     assert!(manifest.contains("Provider:42"));
+    // The mock BibTeX is `@misc{...}`, but the stored `type` follows the
+    // JSON record's `document_type` (`["article"]`), not the BibTeX entry
+    // type: INSPIRE JSON is the sole source of structured fields.
+    assert!(manifest.contains("type = \"article\""), "{manifest}");
 }
 
 #[test]

@@ -54,10 +54,11 @@ cita-bibliography ← cita-inspire-client   cita-documents
 - `cita-core`: `Reference`, provider traits, locators, and normalization.
 - `cita-bibliography`: strict standalone BibTeX snapshots, ingest-time
   projections, and raw-entry re-keying and field insertion.
-- `cita-inspire-client`: lean `InspireSnapshot`s (authoritative BibTeX plus
-  record id, timestamp, and canonical arXiv/DOI), stable-record-ID refresh
-  batches, bounded queries, and 429 retries; attaches BibTeX only after
-  cross-checking it against the slim API JSON model through `cita-bibliography`.
+- `cita-inspire-client`: lean `InspireSnapshot`s (a reference projected from the
+  API JSON record, plus its authoritative BibTeX, record id, and timestamp),
+  stable-record-ID refresh batches, bounded queries, and 429 retries; attaches
+  BibTeX only after cross-checking its identity against the JSON record through
+  `cita-bibliography`.
 - `cita-manifest`: schema-2 shelf authority (the `Entry` type and its two ingest
   constructors), library registry/path validation, identity indexes,
   deterministic TOML, generated bibliography verification, and coordinated
@@ -75,11 +76,17 @@ A schema-2 `cita.toml` entry stores structured fields (`type`, `title`,
 `authors`, `collaborations`, `year`, `doi`, `arxiv`), user-owned `tags` and
 `notes`, and an optional `bibtex` blob. The structured fields are authoritative.
 They are seeded exactly once, at ingest, by the only two projection sites in the
-codebase: `Entry::from_inspire` and `Entry::from_bibtex`. Nothing re-derives them
-from `bibtex` at read or validation time, and nothing ever writes `bibtex` from
-them, so the two lanes never need reconciling. `bibtex` is immutable opaque
-cargo, supplied verbatim by a provider or an import; a reference no provider
-knows about simply has none. Do not add a handwritten BibTeX writer.
+codebase: `Entry::from_inspire` and `Entry::from_bibtex`. The two sites read
+different sources — `from_inspire` projects the INSPIRE JSON record
+(`ApiLiteratureRecord::project` in `cita-inspire-client`), never the BibTeX that
+travels alongside it, while `from_bibtex` projects the standalone BibTeX entry
+an import supplied. Nothing re-derives structured fields from `bibtex` at read
+or validation time, and nothing ever writes `bibtex` from them, so the two lanes
+never need reconciling, and their outputs can legitimately disagree: INSPIRE's
+`document_type` and its BibTeX rendering follow different, undocumented
+vocabularies. `bibtex` is immutable opaque cargo, supplied verbatim by a
+provider or an import; a reference no provider knows about simply has none. Do
+not add a handwritten BibTeX writer.
 
 Provenance is the presence of a provider sub-table, not a tag field. An entry
 carrying `[references.<key>.inspire]` (`record_id`, `updated`) is managed and

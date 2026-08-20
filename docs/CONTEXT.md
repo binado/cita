@@ -31,7 +31,11 @@ authority for a reference.
 - **Structured fields** — `type`, `title`, `authors`, `collaborations`, `year`,
   `doi`, `arxiv` — are authoritative. They are seeded once at ingest by
   `Entry::from_inspire` or `Entry::from_bibtex`, the only two projection sites in
-  the codebase, and are read directly from then on.
+  the codebase, and are read directly from then on. The two sites disagree by
+  design on `type`: a managed entry's `type` is INSPIRE's own `document_type`
+  vocabulary (`article`, `thesis`, `conference paper`, ...), never derived from
+  its `bibtex`, while an imported entry's `type` is the BibTeX entry type
+  (`article`, `book`, ...) of the file it came from.
 - **`tags` and `notes`** are user-owned. A refresh never touches them. Tags are a
   set, so they stay sorted and deduplicated; notes are a sequence in the order
   they were written.

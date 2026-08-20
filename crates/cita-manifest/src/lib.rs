@@ -8,8 +8,10 @@ pub use library::{LIBRARY_FILE, Library, LibraryError, Shelf};
 use cita_bibliography::{
     BibtexSnapshot, parse as parse_bibtex, project_bibtex, rename_entry, validate_key,
 };
-use cita_core::{Locator, ProjectionError, Reference, normalize_arxiv, normalize_doi};
-use cita_inspire_client::{InspireSnapshot, project_inspire};
+use cita_core::{
+    Locator, ProjectionError, Reference, ReferenceSource, normalize_arxiv, normalize_doi,
+};
+use cita_inspire_client::InspireSnapshot;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -95,12 +97,7 @@ impl Entry {
     /// One of the two projection sites in the codebase. Afterwards the stored
     /// fields are authoritative and the BibTeX is never parsed to infer them.
     pub fn from_inspire(record: InspireSnapshot) -> Result<Self, Error> {
-        let reference = project_inspire(
-            &record.bibtex,
-            record.arxiv.as_deref(),
-            record.doi.as_deref(),
-            record.record_id,
-        )?;
+        let reference = record.project()?;
         Ok(Self {
             bibtex: Some(record.bibtex),
             inspire: Some(InspireProvenance {
@@ -930,6 +927,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cita_core::Identifiers;
 
     fn snapshot(key: &str, title: &str, extra: &str) -> BibtexSnapshot {
         BibtexSnapshot::new(format!("@misc{{{key},title={{{title}}},{extra}}}")).unwrap()
@@ -948,8 +946,11 @@ mod tests {
             updated: "2026-01-01".into(),
             texkey: provider_key.into(),
             bibtex: format!("@misc{{{provider_key},title={{Record {record_id}}}}}"),
-            arxiv: None,
-            doi: None,
+            reference: Reference {
+                entry_type: "misc".into(),
+                title: format!("Record {record_id}"),
+                ..Reference::default()
+            },
         }
     }
 
@@ -1459,11 +1460,11 @@ mod tests {
         )
         .unwrap();
 
-        let refreshed = InspireSnapshot {
+        let mut refreshed = InspireSnapshot {
             bibtex: "@misc{Provider:New,title={Refreshed},eprint={2401.00042}}".into(),
-            arxiv: Some("2401.00042".into()),
             ..record("Provider:New", 42)
         };
+        refreshed.reference.identifiers.arxiv = vec!["2401.00042".into()];
         let pending = PendingReference {
             key: KeyRequest::Exact("Renamed".into()),
             entry: Entry::from_inspire(refreshed).unwrap(),
@@ -1557,38 +1558,41 @@ mod tests {
     }
 
     #[test]
-    fn curated_identifiers_override_bibtex_derived_identity() {
+    fn ingest_seeds_structured_fields_from_the_projected_inspire_reference() {
+        // `bibtex` deliberately disagrees with `reference` here: INSPIRE JSON
+        // is authoritative outright, not merely a tie-breaker over BibTeX, so
+        // the entry must reflect `reference` and never fall back to parsing
+        // the stored BibTeX blob.
         let entry = Entry::from_inspire(InspireSnapshot {
             record_id: 99,
             updated: "2026-01-01".into(),
             texkey: "Curated:2026".into(),
-            bibtex: "@misc{Curated:2026,title={T},eprint={2401.00001},doi={10.1/BibtexCase}}"
-                .into(),
-            // Both curated values are un-normalized (version suffix / mixed
-            // case) so the assertions only pass if the override branch actually
-            // runs `normalize_arxiv`/`normalize_doi`, not merely whether the
-            // record happens to have the same content as BibTeX.
-            arxiv: Some("2401.00001v9".into()),
-            doi: Some("10.1/BIBTEXCASE".into()),
+            bibtex: "@misc{Curated:2026,title={Bibtex title}}".into(),
+            reference: Reference {
+                entry_type: "article".into(),
+                title: "Curated title".into(),
+                authors: vec!["Jane Doe".into()],
+                collaborations: vec!["ATLAS".into()],
+                year: Some(2024),
+                identifiers: Identifiers {
+                    dois: vec!["10.1/bibtexcase".into()],
+                    arxiv: vec!["2401.00001".into()],
+                    ..Identifiers::default()
+                },
+            },
         })
         .unwrap();
+        assert_eq!(entry.entry_type, "article");
+        assert_eq!(entry.title, "Curated title");
+        assert_eq!(entry.authors, ["Jane Doe"]);
+        assert_eq!(entry.collaborations, ["ATLAS"]);
+        assert_eq!(entry.year, Some(2024));
         assert_eq!(entry.arxiv.as_deref(), Some("2401.00001"));
         assert_eq!(entry.doi.as_deref(), Some("10.1/bibtexcase"));
-    }
-
-    #[test]
-    fn curated_identifier_partial_override_falls_through_for_the_other_field() {
-        let entry = Entry::from_inspire(InspireSnapshot {
-            record_id: 100,
-            updated: "2026-01-01".into(),
-            texkey: "Partial:2026".into(),
-            bibtex: "@misc{Partial:2026,title={T},eprint={2401.00001},doi={10.1/frombib}}".into(),
-            arxiv: Some("2401.00001v3".into()),
-            doi: None,
-        })
-        .unwrap();
-        assert_eq!(entry.arxiv.as_deref(), Some("2401.00001"));
-        assert_eq!(entry.doi.as_deref(), Some("10.1/frombib"));
+        assert_eq!(
+            entry.bibtex.as_deref(),
+            Some("@misc{Curated:2026,title={Bibtex title}}")
+        );
     }
 
     #[test]
@@ -1683,7 +1687,15 @@ mod tests {
                     updated: "2026-08-19".into(),
                     bibtex: "@article{Provider:New,title={Published version},doi={10.1/NEW}}"
                         .into(),
-                    doi: Some("10.1/new".into()),
+                    reference: Reference {
+                        entry_type: "article".into(),
+                        title: "Published version".into(),
+                        identifiers: Identifiers {
+                            dois: vec!["10.1/new".into()],
+                            ..Identifiers::default()
+                        },
+                        ..Reference::default()
+                    },
                     ..record("Provider:New", 7)
                 }])
                 .unwrap()
