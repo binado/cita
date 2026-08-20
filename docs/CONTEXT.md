@@ -18,39 +18,59 @@ transaction.
 
 ## Reference
 
-A `Reference` is Cita's provider-neutral semantic projection: title, authors,
-collaborations, display year, publication, URL, primary category, and normalized
-identifiers. Commands consume references; they do not inspect provider payloads
-or parse tracked output.
+A `Reference` is Cita's provider-neutral semantic view: entry type, title,
+authors, collaborations, display year, and normalized identifiers. It is the
+*ingest seam* only. A provider hands one over, an `Entry` is seeded from it once,
+and no command consumes a `Reference` afterwards.
 
-## Source snapshot
+## Entry
 
-A source snapshot is the authoritative provider-specific evidence stored under a
-local citation key in `cita.toml`. Every snapshot holds authoritative standalone
-BibTeX and is tagged by the source that owns its refresh lifecycle.
+An entry is what `cita.toml` stores under a local citation key. It is the sole
+authority for a reference.
 
-- An INSPIRE entry (`source = "inspire"`) contains authoritative INSPIRE BibTeX,
-  the stable record ID (its refresh key), an update timestamp, and canonical
-  normalized arXiv/DOI values selected from and cross-checked against that
-  BibTeX.
-- An import (`source = "import"`) contains one exact standalone imported entry.
+- **Structured fields** — `type`, `title`, `authors`, `collaborations`, `year`,
+  `doi`, `arxiv` — are authoritative. They are seeded once at ingest by
+  `Entry::from_inspire` or `Entry::from_bibtex`, the only two projection sites in
+  the codebase, and are read directly from then on.
+- **`tags` and `notes`** are user-owned. A refresh never touches them. Tags are a
+  set, so they stay sorted and deduplicated; notes are a sequence in the order
+  they were written.
+- **`bibtex`** is optional, immutable, opaque cargo: the exact standalone entry
+  a provider or an import supplied. It is never derived from the structured
+  fields and never parsed to infer them. A reference no provider knows about —
+  a book, a thesis, a web page — simply has none.
 
-Snapshots project to `Reference` from their BibTeX; INSPIRE entries override the
-projected arXiv/DOI with their stored identifiers and add the `inspire` provider
-id. Projections are derived and are never stored as a second authority.
+Projection runs at ingest and nowhere else. Reading, validating, selecting, and
+listing all work from stored fields, so no command parses BibTeX to answer a
+question about a reference.
+
+## Managed and unmanaged references
+
+Provenance is the presence of a provider sub-table, not a tag field. An entry
+carrying `inspire` (`record_id`, `updated`) is *managed*: `cita sync` refreshes
+every provider-owned field on it, including the BibTeX blob, by stable record ID.
+An entry without one is *unmanaged* and no provider ever touches it. Cita does
+not merge provenance or adopt one source as another.
+
+The line between provider-owned and user-owned fields is enforced in code:
+`Entry::refresh_from_inspire` carries tags and notes forward across a sync, and
+`cita edit` refuses a change to a managed entry's provider-owned fields, or to
+`bibtex` on any entry, naming the offending `key.field`.
 
 ## Local citation key
 
 The sorted key in `references` is Cita's local identity for citation and Git
-review. It may differ from a provider texkey. Refreshing a source snapshot never
-changes it; bibliography generation changes only the raw entry's key token.
+review. It may differ from a provider texkey. It is user-owned: refreshing an
+entry never changes it, and bibliography generation changes only the raw entry's
+key token.
 
 ## Provider identity
 
 An identifier names the same work independently of its local key. DOI and arXiv
 identifiers are normalized globally. Provider identities are namespaced, for
-example `inspire:1124337`. Any identity shared by different local keys is a
-conflict, including across source kinds.
+example `inspire:1124337`. They are read from the entry's own `doi`, `arxiv`, and
+`inspire.record_id` fields. Any identity shared by different local keys is a
+conflict, whether the entries are managed or not.
 
 ## Generated bibliography
 
@@ -58,6 +78,9 @@ conflict, including across source kinds.
 bytes are completely derived from the manifest: local-key order, preserved raw
 entry fields, one blank line between entries, and a final newline. Drift is an
 error; `cita generate` repairs it.
+
+It holds the entries that have BibTeX, not every reference. An entry without a
+`bibtex` blob has nothing to render, and its absence is not drift.
 
 ## Derived export
 
@@ -67,9 +90,20 @@ fields for downstream reference managers. Unlike `references.bib` it is not
 tracked, not verified, never read back, and never authoritative — it is written
 for other tools to consume and regenerated rather than edited.
 
-## Managed and imported references
+## Manifest edit
 
-INSPIRE snapshots are managed: `cita sync` refreshes them by stable record ID.
-BibTeX snapshots are imported/unmanaged and remain byte-for-byte unchanged until
-explicitly removed. Cita does not merge provenance or adopt one source as
-another.
+`cita edit` is a whole-manifest edit in an external editor, and the only way to
+create a reference no provider knows about. A rejected buffer is re-opened with
+the reasons as `# cita:` comments above the user's own bytes; saving it back
+unchanged aborts. Because the saved manifest is re-rendered from parsed data, no
+comment ever reaches `cita.toml`. Adding and deleting keys is how provider-less
+references are created and removed.
+
+## Schema break
+
+Schema 2 is a hard break from schema 1, which stored opaque BibTeX blobs and had
+no structured fields to migrate. Every command rejects a schema-1 manifest
+outright. The recovery path — `rm cita.toml && cita init` — rebuilds from
+`references.bib`, which carries no `record_id`, so every entry returns unmanaged;
+re-running `cita add` for those locators restores management. The library
+registry keeps its own schema and is unaffected.

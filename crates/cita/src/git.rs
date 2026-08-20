@@ -1,6 +1,5 @@
 use anyhow::{Context, Result, bail};
-use cita_core::ReferenceSource;
-use cita_manifest::{BIBLIOGRAPHY_FILE, Manifest, SourceSnapshot};
+use cita_manifest::{BIBLIOGRAPHY_FILE, Entry, Manifest};
 use std::{
     collections::BTreeMap,
     fs,
@@ -288,8 +287,8 @@ fn parse_committed_manifest(bytes: &[u8]) -> Result<Manifest> {
 }
 
 fn commit_message(
-    old: Option<&BTreeMap<String, SourceSnapshot>>,
-    new: &BTreeMap<String, SourceSnapshot>,
+    old: Option<&BTreeMap<String, Entry>>,
+    new: &BTreeMap<String, Entry>,
 ) -> (String, String) {
     let Some(old) = old else {
         return (
@@ -324,30 +323,25 @@ fn plural(count: usize) -> &'static str {
     }
 }
 fn body_lines<'a>(
-    removed: impl IntoIterator<Item = (&'a String, &'a SourceSnapshot)>,
-    added: impl IntoIterator<Item = (&'a String, &'a SourceSnapshot)>,
-    modified: impl IntoIterator<Item = (&'a String, &'a SourceSnapshot)>,
+    removed: impl IntoIterator<Item = (&'a String, &'a Entry)>,
+    added: impl IntoIterator<Item = (&'a String, &'a Entry)>,
+    modified: impl IntoIterator<Item = (&'a String, &'a Entry)>,
 ) -> String {
     removed
         .into_iter()
-        .map(|(key, item)| format!("- {key} — {}", title(item)))
+        .map(|(key, item)| format!("- {key} — {}", item.title))
         .chain(
             added
                 .into_iter()
-                .map(|(key, item)| format!("+ {key} — {}", title(item))),
+                .map(|(key, item)| format!("+ {key} — {}", item.title)),
         )
         .chain(
             modified
                 .into_iter()
-                .map(|(key, item)| format!("~ {key} — {}", title(item))),
+                .map(|(key, item)| format!("~ {key} — {}", item.title)),
         )
         .collect::<Vec<_>>()
         .join("\n")
-}
-fn title(item: &SourceSnapshot) -> String {
-    item.project()
-        .map(|reference| reference.title)
-        .unwrap_or_else(|error| format!("unknown title ({error})"))
 }
 fn git_output(root: &Path, args: &[&str]) -> Result<Output> {
     Command::new("git")

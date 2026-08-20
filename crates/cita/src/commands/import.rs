@@ -1,7 +1,7 @@
 use super::{find_manifest, print_add_outcomes};
 use anyhow::{Context, Result};
 use cita_bibliography::parse as parse_bibtex;
-use cita_manifest::{ConflictPolicy, KeyRequest, Manifest, PendingReference, SourceSnapshot};
+use cita_manifest::{ConflictPolicy, Entry, KeyRequest, Manifest, PendingReference};
 use std::{
     fs,
     io::{self, Read},
@@ -19,11 +19,13 @@ pub(crate) fn import(cwd: &Path, input: &str, overwrite: bool) -> Result<()> {
     }
     let pending = parse_bibtex(&source)?
         .into_iter()
-        .map(|(key, snapshot)| PendingReference {
-            key: KeyRequest::Exact(key),
-            source: SourceSnapshot::Import(snapshot),
+        .map(|(key, snapshot)| {
+            Ok(PendingReference {
+                key: KeyRequest::Exact(key),
+                entry: Entry::from_bibtex(snapshot)?,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     let policy = if overwrite {
         ConflictPolicy::Overwrite
     } else {

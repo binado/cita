@@ -1,4 +1,5 @@
 mod add;
+mod edit;
 mod export;
 mod fetch;
 mod generate;
@@ -10,6 +11,7 @@ mod remove;
 mod sync;
 
 pub(crate) use add::add;
+pub(crate) use edit::edit;
 pub(crate) use export::{export, export_outcome};
 pub(crate) use fetch::{FetchOptions, fetch};
 pub(crate) use generate::{generate, generate_outcome};

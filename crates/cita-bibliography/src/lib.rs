@@ -2,7 +2,8 @@
 #![warn(missing_docs)]
 
 use biblatex::{
-    Bibliography, ChunksExt, DateValue, Entry as BibEntry, PermissiveType, RawBibliography,
+    Bibliography, ChunksExt, DateValue, Entry as BibEntry, EntryType, PermissiveType,
+    RawBibliography,
 };
 use cita_core::{
     Identifiers, ProjectionError, Reference, ReferenceSource, normalize_arxiv, normalize_doi,
@@ -137,6 +138,7 @@ pub fn project_bibtex(source: &str) -> Result<Reference, Error> {
         .map(|value| normalize_arxiv(&value))
         .collect();
     Ok(Reference {
+        entry_type: entry_type(entry),
         title,
         authors,
         collaborations: chunks(entry, "collaboration").into_iter().collect(),
@@ -253,6 +255,19 @@ fn scan_raw_entries(source: &str) -> Result<Vec<RawEntry>, Error> {
         ));
     }
     Ok(entries)
+}
+
+/// The entry's declared type, lowercased.
+///
+/// `biblatex` maps every type it knows to an `EntryType` variant whose `Display`
+/// form is already lowercase, and parks the rest in `EntryType::Unknown`, whose
+/// `Display` form is the literal word "unknown". Reading the payload keeps a
+/// `@webpage` or `@dataset` entry describing itself accurately.
+fn entry_type(entry: &BibEntry) -> String {
+    match &entry.entry_type {
+        EntryType::Unknown(name) => name.to_lowercase(),
+        known => known.to_string().to_lowercase(),
+    }
 }
 
 fn validate_semantic(entry: &BibEntry) -> Result<(), Error> {
@@ -413,8 +428,19 @@ mod tests {
         let parsed = parse(raw).unwrap();
         assert_eq!(parsed["A"].bibtex, raw);
         let projected = parsed["A"].project().unwrap();
+        assert_eq!(projected.entry_type, "article");
         assert_eq!(projected.title, "A NASA result");
         assert_eq!(projected.identifiers.dois, ["10.1/abc"]);
+    }
+
+    #[test]
+    fn entry_types_are_lowercased_and_unknown_types_keep_their_name() {
+        let projected = |raw: &str| project_bibtex(raw).unwrap().entry_type;
+        assert_eq!(projected("@InProceedings{A,title={T}}"), "inproceedings");
+        assert_eq!(projected("@MastersThesis{A,title={T}}"), "mastersthesis");
+        // A type biblatex does not know must still describe itself, not report
+        // the name of the catch-all variant holding it.
+        assert_eq!(projected("@WebPage{A,title={T}}"), "webpage");
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use super::{find_manifest, inspire_client, print_add_outcomes};
 use anyhow::{Result, bail};
 use cita_core::{Locator, MetadataProvider};
-use cita_manifest::{ConflictPolicy, KeyRequest, Manifest, PendingReference, SourceSnapshot};
+use cita_manifest::{ConflictPolicy, Entry, KeyRequest, Manifest, PendingReference};
 use std::path::Path;
 
 pub(crate) async fn add(
@@ -27,7 +27,7 @@ pub(crate) async fn add(
         };
         pending.push(PendingReference {
             key,
-            source: SourceSnapshot::inspire(record),
+            entry: Entry::from_inspire(record)?,
         });
     }
     let policy = if overwrite {

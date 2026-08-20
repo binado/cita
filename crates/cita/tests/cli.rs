@@ -221,7 +221,7 @@ fn cached_source_for(directory: &Path, arxiv: &str, name: &str, bytes: &[u8]) {
 }
 
 #[test]
-fn init_creates_schema_one_and_imports_an_existing_bibliography() {
+fn init_creates_schema_two_and_imports_an_existing_bibliography() {
     let empty = tempfile::tempdir().unwrap();
     assert!(success(cita(empty.path(), &["init"])).contains("Initialized"));
     assert_eq!(
@@ -231,7 +231,7 @@ fn init_creates_schema_one_and_imports_an_existing_bibliography() {
     assert!(
         fs::read_to_string(empty.path().join("cita.toml"))
             .unwrap()
-            .starts_with("schema = 1")
+            .starts_with("schema = 2")
     );
     success(cita(empty.path(), &["list"]));
 
@@ -243,7 +243,13 @@ fn init_creates_schema_one_and_imports_an_existing_bibliography() {
     .unwrap();
     success(cita(imported.path(), &["init"]));
     let manifest = fs::read_to_string(imported.path().join("cita.toml")).unwrap();
-    assert!(manifest.contains("source = \"import\""), "{manifest}");
+    // Structured fields are seeded once at ingest; the exact BibTeX rides along
+    // as opaque cargo, and an import carries no provider sub-table.
+    assert!(manifest.contains("[references.A]"), "{manifest}");
+    assert!(manifest.contains("type = \"misc\""), "{manifest}");
+    assert!(manifest.contains("title = \"Alpha\""), "{manifest}");
+    assert!(manifest.contains("arxiv = \"2401.00001\""), "{manifest}");
+    assert!(!manifest.contains("inspire"), "{manifest}");
     assert!(success(cita(imported.path(), &["list"])).contains("Alpha"));
 }
 
@@ -390,7 +396,7 @@ fn shelf_scoped_commands_are_isolated_and_import_paths_use_the_caller() {
             &["sync", "-s", "two"],
             "http://127.0.0.1:1/",
         )),
-        "Already in sync: 0 managed, 1 imported\n"
+        "Already in sync: 0 managed, 1 unmanaged\n"
     );
 }
 
@@ -462,7 +468,7 @@ fn library_batches_are_ordered_continue_after_failure_and_report_once() {
     }
     fs::write(
         directory.path().join("middle/cita.toml"),
-        "schema = 1\ninvalid = true\n",
+        "schema = 2\ninvalid = true\n",
     )
     .unwrap();
     fs::write(directory.path().join("zeta/references.bib"), "drift\n").unwrap();
@@ -489,7 +495,7 @@ fn library_batches_are_ordered_continue_after_failure_and_report_once() {
         ""
     );
 
-    fs::write(directory.path().join("middle/cita.toml"), "schema = 1\n").unwrap();
+    fs::write(directory.path().join("middle/cita.toml"), "schema = 2\n").unwrap();
     let output = success(cita_with_server(
         directory.path(),
         &["sync", "--all-shelves"],
@@ -498,9 +504,9 @@ fn library_batches_are_ordered_continue_after_failure_and_report_once() {
     assert_eq!(
         output.lines().collect::<Vec<_>>(),
         [
-            "Shelf alpha: already in sync: 0 managed, 0 imported",
-            "Shelf middle: already in sync: 0 managed, 0 imported",
-            "Shelf zeta: already in sync: 0 managed, 0 imported",
+            "Shelf alpha: already in sync: 0 managed, 0 unmanaged",
+            "Shelf middle: already in sync: 0 managed, 0 unmanaged",
+            "Shelf zeta: already in sync: 0 managed, 0 unmanaged",
         ]
     );
 
@@ -551,7 +557,7 @@ fn library_rejects_unknown_shelves_and_a_root_that_is_also_a_shelf() {
     assert!(error.contains("unknown shelf `alpah`"), "{error}");
     assert!(error.contains("registered: alpha, zeta"), "{error}");
 
-    fs::write(directory.path().join("cita.toml"), "schema = 1\n").unwrap();
+    fs::write(directory.path().join("cita.toml"), "schema = 2\n").unwrap();
     fs::write(directory.path().join("references.bib"), "").unwrap();
     let error = failure(cita(directory.path(), &["library", "list"]));
     assert!(error.contains("library root cannot contain"), "{error}");
@@ -650,9 +656,11 @@ fn nested_projects_discover_the_nearest_manifest() {
 #[test]
 fn legacy_manifest_is_rejected_without_rewriting() {
     let directory = tempfile::tempdir().unwrap();
-    fs::write(directory.path().join("cita.toml"), "schema = 2\n").unwrap();
+    // Schema 1 stored opaque BibTeX blobs with no structured fields to migrate,
+    // so it is a hard break rather than an upgrade path.
+    fs::write(directory.path().join("cita.toml"), "schema = 1\n").unwrap();
     let error = failure(cita(directory.path(), &["init"]));
-    assert!(error.contains("unsupported cita.toml schema 2"), "{error}");
+    assert!(error.contains("unsupported cita.toml schema 1"), "{error}");
     assert!(!directory.path().join("references.bib").exists());
 }
 
@@ -1001,7 +1009,7 @@ fn sync_refreshes_managed_records_by_id_and_leaves_imports_unchanged() {
     let (base, handle) = server(vec![("200 OK", search_json), ("200 OK", fresh_bib)]);
     let output = success(cita_with_server(directory.path(), &["sync"], &base));
     assert!(
-        output.contains("1 managed references; left 1 imported unchanged"),
+        output.contains("1 managed references; left 1 unmanaged unchanged"),
         "{output}"
     );
     let requests = handle.join().unwrap();
@@ -1084,7 +1092,7 @@ fn imported_only_sync_performs_no_network_work() {
             &["sync"],
             "http://127.0.0.1:1/"
         )),
-        "Already in sync: 0 managed, 1 imported\n"
+        "Already in sync: 0 managed, 1 unmanaged\n"
     );
 }
 
@@ -2028,7 +2036,7 @@ fn library_export_is_ordered_continues_after_failure_and_reports_once() {
     }
     fs::write(
         directory.path().join("middle/cita.toml"),
-        "schema = 1\ninvalid = true\n",
+        "schema = 2\ninvalid = true\n",
     )
     .unwrap();
 
@@ -2053,4 +2061,398 @@ fn library_export_is_ordered_continues_after_failure_and_reports_once() {
     assert!(directory.path().join("alpha/alpha.bib").is_file());
     assert!(directory.path().join("zeta/zeta.bib").is_file());
     assert!(!directory.path().join("middle/middle.bib").exists());
+}
+
+/// Insert user-owned lines at the top of one entry's table, the way an editor
+/// session would. Tags and notes never change the stored BibTeX, so the
+/// generated bibliography stays in sync without regenerating it.
+fn annotate(directory: &Path, key: &str, lines: &str) {
+    let path = directory.join("cita.toml");
+    let manifest = fs::read_to_string(&path).unwrap();
+    let header = format!("[references.{key}]\n");
+    let at = manifest.find(&header).unwrap() + header.len();
+    let (head, tail) = manifest.split_at(at);
+    fs::write(&path, format!("{head}{lines}{tail}")).unwrap();
+}
+
+#[cfg(unix)]
+fn editor(directory: &Path, script: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = directory.join("editor.sh");
+    // `$1` is the buffer cita hands the editor.
+    fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+#[cfg(unix)]
+fn cita_with_editor(cwd: &Path, args: &[&str], editor: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_cita"))
+        .current_dir(cwd)
+        .args(args)
+        .env("NO_COLOR", "1")
+        .env_remove("VISUAL")
+        .env("EDITOR", editor)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn provider_less_references_are_listed_but_stay_out_of_the_bibliography() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    success(cita_stdin(
+        directory.path(),
+        &["import", "-"],
+        &entry("Cited", "A cited paper", "eprint={2401.00001},"),
+    ));
+    let bibliography = fs::read_to_string(directory.path().join("references.bib")).unwrap();
+    let path = directory.path().join("cita.toml");
+    let manifest = fs::read_to_string(&path).unwrap();
+    fs::write(
+        &path,
+        format!(
+            "{manifest}\n[references.Rovelli2004]\ntype = \"book\"\ntitle = \"Quantum Gravity\"\nauthors = [\"Rovelli, Carlo\"]\nyear = 2004\n"
+        ),
+    )
+    .unwrap();
+
+    // A reference no provider knows about has no BibTeX to render, so it is
+    // absent from references.bib -- and that absence is not drift.
+    let listed = success(cita(directory.path(), &["list"]));
+    assert!(listed.contains("Quantum Gravity"), "{listed}");
+    assert!(listed.contains("Rovelli, Carlo"), "{listed}");
+    assert!(listed.contains("2004"), "{listed}");
+    success(cita(directory.path(), &["generate"]));
+    assert_eq!(
+        fs::read_to_string(directory.path().join("references.bib")).unwrap(),
+        bibliography
+    );
+    // It is still a first-class reference for every other command.
+    assert!(success(cita(directory.path(), &["export"])).contains("Exported"));
+    assert!(success(cita(directory.path(), &["remove", "Rovelli2004"])).contains("Removed"));
+}
+
+#[test]
+fn list_filters_by_tag_and_shows_a_tags_column() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    let input = [
+        entry("Both", "Carries both tags", ""),
+        entry("One", "Carries one tag", ""),
+        entry("None", "Carries no tags", ""),
+    ]
+    .join("\n");
+    success(cita_stdin(directory.path(), &["import", "-"], &input));
+    annotate(directory.path(), "Both", "tags = [\"higgs\", \"qg\"]\n");
+    annotate(directory.path(), "One", "tags = [\"qg\"]\n");
+
+    let all = success(cita(directory.path(), &["list"]));
+    assert!(all.contains("Tags"), "{all}");
+    assert!(all.contains("higgs, qg"), "{all}");
+    assert!(all.contains("Carries no tags"), "{all}");
+
+    // Repeated --tag narrows: an entry has to carry every named tag.
+    let one = success(cita(directory.path(), &["list", "--tag", "qg"]));
+    assert!(one.contains("Both") && one.contains("One"), "{one}");
+    assert!(!one.contains("Carries no tags"), "{one}");
+    let both = success(cita(
+        directory.path(),
+        &["list", "--tag", "qg", "--tag", "higgs"],
+    ));
+    assert!(both.contains("Carries both tags"), "{both}");
+    assert!(!both.contains("Carries one tag"), "{both}");
+    assert_eq!(
+        success(cita(directory.path(), &["list", "--tag", "none"])),
+        ""
+    );
+}
+
+#[test]
+fn sync_leaves_user_owned_tags_and_notes_byte_identical() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    let (base, handle) = server(vec![
+        (
+            "200 OK",
+            json_record(42, "Provider:42", "Old", "2401.00042"),
+        ),
+        (
+            "200 OK",
+            entry("Provider:42", "Old", "eprint={2401.00042},"),
+        ),
+    ]);
+    success(cita_with_server(
+        directory.path(),
+        &["add", "--key", "Local", "2401.00042"],
+        &base,
+    ));
+    handle.join().unwrap();
+    annotate(
+        directory.path(),
+        "Local",
+        "tags = [\"higgs\", \"reading-list\"]\nnotes = [\"Ask about the systematics.\"]\n",
+    );
+
+    let fresh = json_record(42, "Current:42", "Fresh", "2401.00042");
+    let (base, handle) = server(vec![
+        ("200 OK", format!(r#"{{"hits":{{"hits":[{fresh}]}}}}"#)),
+        (
+            "200 OK",
+            entry("Current:42", "Fresh", "eprint={2401.00042},"),
+        ),
+    ]);
+    success(cita_with_server(directory.path(), &["sync"], &base));
+    handle.join().unwrap();
+
+    // The provider owns the bibliographic fields; the user owns the rest, and
+    // a refresh must not be able to reach across that line.
+    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
+    assert!(manifest.contains("title = \"Fresh\""), "{manifest}");
+    assert!(manifest.contains("\"higgs\""), "{manifest}");
+    assert!(manifest.contains("\"reading-list\""), "{manifest}");
+    assert!(
+        manifest.contains("Ask about the systematics."),
+        "{manifest}"
+    );
+    assert!(
+        success(cita(directory.path(), &["list", "--tag", "higgs"])).contains("Fresh"),
+        "{manifest}"
+    );
+}
+
+#[test]
+fn schema_one_manifests_are_rejected_by_every_command() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(
+        directory.path().join("cita.toml"),
+        "schema = 1\n\n[references.A]\nsource = \"import\"\nbibtex = \"@misc{A,title={A}}\"\n",
+    )
+    .unwrap();
+    fs::write(
+        directory.path().join("references.bib"),
+        "@misc{A,title={A}}\n",
+    )
+    .unwrap();
+    for args in [
+        vec!["list"],
+        vec!["generate"],
+        vec!["export"],
+        vec!["remove", "A"],
+        vec!["edit"],
+    ] {
+        let error = failure(cita(directory.path(), &args));
+        assert!(
+            error.contains("unsupported cita.toml schema 1"),
+            "{args:?}: {error}"
+        );
+    }
+    // The rejected manifest is never rewritten in place.
+    assert!(
+        fs::read_to_string(directory.path().join("cita.toml"))
+            .unwrap()
+            .starts_with("schema = 1")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn edit_writes_tags_notes_and_provider_less_references() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    success(cita_stdin(
+        directory.path(),
+        &["import", "-"],
+        &entry("Cited", "A cited paper", "eprint={2401.00001},"),
+    ));
+    let bibliography = fs::read_to_string(directory.path().join("references.bib")).unwrap();
+    let script = editor(
+        directory.path(),
+        concat!(
+            "cat >> \"$1\" <<'TOML'\n",
+            "tags = [\"higgs\"]\n",
+            "notes = [\"Read section 3.\"]\n",
+            "\n",
+            "[references.Rovelli2004]\n",
+            "type = \"book\"\n",
+            "title = \"Quantum Gravity\"\n",
+            "tags = [\"qg\"]\n",
+            "TOML",
+        ),
+    );
+
+    let output = success(cita_with_editor(directory.path(), &["edit"], &script));
+    assert!(output.contains("Updated"), "{output}");
+    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
+    assert!(manifest.contains("[references.Rovelli2004]"), "{manifest}");
+    assert!(manifest.contains("Read section 3."), "{manifest}");
+    // A hand-written reference adds nothing to the generated bibliography.
+    assert_eq!(
+        fs::read_to_string(directory.path().join("references.bib")).unwrap(),
+        bibliography
+    );
+    let listed = success(cita(directory.path(), &["list", "--tag", "qg"]));
+    assert!(listed.contains("Quantum Gravity"), "{listed}");
+    assert!(!listed.contains("A cited paper"), "{listed}");
+}
+
+#[cfg(unix)]
+#[test]
+fn edit_refuses_provider_owned_and_bibtex_changes_by_name() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    let (base, handle) = server(vec![
+        (
+            "200 OK",
+            json_record(42, "Provider:42", "Old", "2401.00042"),
+        ),
+        (
+            "200 OK",
+            entry("Provider:42", "Old", "eprint={2401.00042},"),
+        ),
+    ]);
+    success(cita_with_server(
+        directory.path(),
+        &["add", "--key", "Local", "2401.00042"],
+        &base,
+    ));
+    handle.join().unwrap();
+    // A single-line BibTeX blob, so one sed line can rewrite it whole.
+    success(cita_stdin(
+        directory.path(),
+        &["import", "-"],
+        "@misc{Solo,title={Solo}}",
+    ));
+    let before = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
+
+    // The editor makes the same edit every time, so the second pass returns the
+    // annotated buffer unchanged and cita gives up, repeating why.
+    for (change, expected) in [
+        (
+            "sed 's/^title = .*/title = \"Mine now\"/' \"$1\" > \"$1.n\" && mv \"$1.n\" \"$1\"",
+            "`Local.title` is owned by INSPIRE",
+        ),
+        (
+            "sed 's/^arxiv = .*/arxiv = \"2401.09999\"/' \"$1\" > \"$1.n\" && mv \"$1.n\" \"$1\"",
+            "`Local.arxiv` is owned by INSPIRE",
+        ),
+        (
+            "sed 's/^record_id = .*/record_id = 99/' \"$1\" > \"$1.n\" && mv \"$1.n\" \"$1\"",
+            "`Local.inspire` is owned by INSPIRE",
+        ),
+        (
+            // Immutable for an unmanaged entry too: BibTeX is opaque cargo
+            // supplied by a source, never authored.
+            "sed 's/^bibtex = \"@misc{Solo.*/bibtex = \"@misc{Solo,title={Rewritten}}\"/' \"$1\" > \"$1.n\" && mv \"$1.n\" \"$1\"",
+            "`Solo.bibtex` is immutable",
+        ),
+        (
+            concat!(
+                // Only once: an editor that changed the buffer on every pass
+                // would keep the (interactive) retry loop going forever.
+                "grep -q '^\\[references.New\\]' \"$1\" || cat >> \"$1\" <<'TOML'\n",
+                "[references.New]\n",
+                "type = \"book\"\n",
+                "title = \"Hand written\"\n",
+                "bibtex = \"@misc{N,title={T}}\"\n",
+                "TOML",
+            ),
+            "`New.bibtex` cannot be written by hand",
+        ),
+    ] {
+        let script = editor(directory.path(), change);
+        let error = failure(cita_with_editor(directory.path(), &["edit"], &script));
+        assert!(error.contains(expected), "{change}\n{error}");
+        assert_eq!(
+            fs::read_to_string(directory.path().join("cita.toml")).unwrap(),
+            before
+        );
+    }
+
+    // Tags and notes on the same managed entry are the user's to change.
+    let script = editor(
+        directory.path(),
+        "awk '{print} /^\\[references.Local\\]$/{print \"tags = [\\\"mine\\\"]\"}' \"$1\" > \"$1.n\" && mv \"$1.n\" \"$1\"",
+    );
+    assert!(success(cita_with_editor(directory.path(), &["edit"], &script)).contains("Updated"));
+    assert!(success(cita(directory.path(), &["list", "--tag", "mine"])).contains("Old"));
+}
+
+#[cfg(unix)]
+#[test]
+fn edit_reopens_a_rejected_buffer_with_diagnostics_and_preserves_the_edits() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    success(cita_stdin(
+        directory.path(),
+        &["import", "-"],
+        &entry("A", "Alpha", ""),
+    ));
+    // First pass writes invalid TOML. Second pass sees the diagnostics, checks
+    // that its own broken line survived, and repairs it into a valid tag.
+    let script = editor(
+        directory.path(),
+        concat!(
+            "if grep -q '^# cita:' \"$1\"; then\n",
+            "  grep -q '^marker-that-is-not-toml' \"$1\" || exit 3\n",
+            "  sed '/^# cita:/d; s/^marker-that-is-not-toml.*/tags = [\"repaired\"]/' \"$1\" > \"$1.new\"\n",
+            "  mv \"$1.new\" \"$1\"\n",
+            "else\n",
+            "  printf 'marker-that-is-not-toml = \\n' >> \"$1\"\n",
+            "fi",
+        ),
+    );
+
+    let output = success(cita_with_editor(directory.path(), &["edit"], &script));
+    assert!(output.contains("Updated"), "{output}");
+    let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
+    assert!(manifest.contains("\"repaired\""), "{manifest}");
+    // Diagnostics are TOML comments in a scratch buffer; the saved manifest is
+    // re-rendered from parsed data, so none of them can reach cita.toml.
+    assert!(!manifest.contains("# cita:"), "{manifest}");
+    assert!(success(cita(directory.path(), &["list", "--tag", "repaired"])).contains("Alpha"));
+}
+
+#[cfg(unix)]
+#[test]
+fn edit_without_changes_leaves_the_manifest_alone() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    success(cita_stdin(
+        directory.path(),
+        &["import", "-"],
+        &entry("A", "Alpha", ""),
+    ));
+    let before = fs::read(directory.path().join("cita.toml")).unwrap();
+    let script = editor(directory.path(), "exit 0");
+    let output = success(cita_with_editor(directory.path(), &["edit"], &script));
+    assert!(output.contains("No changes"), "{output}");
+    assert_eq!(
+        fs::read(directory.path().join("cita.toml")).unwrap(),
+        before
+    );
+
+    // A failing editor is an error, and the manifest is untouched.
+    let script = editor(directory.path(), "exit 7");
+    let error = failure(cita_with_editor(directory.path(), &["edit"], &script));
+    assert!(error.contains("exited with"), "{error}");
+    assert_eq!(
+        fs::read(directory.path().join("cita.toml")).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn edit_refuses_to_start_against_a_drifted_bibliography() {
+    let directory = tempfile::tempdir().unwrap();
+    success(cita(directory.path(), &["init"]));
+    success(cita_stdin(
+        directory.path(),
+        &["import", "-"],
+        &entry("A", "Alpha", ""),
+    ));
+    fs::write(directory.path().join("references.bib"), "drift\n").unwrap();
+    let error = failure(cita(directory.path(), &["edit"]));
+    assert!(error.contains("run `cita generate`"), "{error}");
 }

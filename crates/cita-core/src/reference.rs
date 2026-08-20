@@ -5,6 +5,8 @@ use thiserror::Error;
 /// The provider-neutral semantic view used by commands and identity checks.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Reference {
+    /// Lowercased BibTeX entry type, e.g. `article` or `book`.
+    pub entry_type: String,
     /// Display title.
     pub title: String,
     /// Individual author names in source order.

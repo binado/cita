@@ -26,6 +26,8 @@ enum Command {
     Remove(RemoveArgs),
     /// List stored references
     List(ListArgs),
+    /// Edit the whole manifest in $VISUAL, $EDITOR, or vi
+    Edit(ShelfArg),
     /// Regenerate a missing or edited references.bib
     Generate(ScopeArgs),
     /// Write a derived BibTeX export with arXiv PDF URLs, for tools like Zotero
@@ -124,6 +126,9 @@ struct ListArgs {
     /// Do not wrap long titles to the terminal width
     #[arg(long)]
     no_wrap_title: bool,
+    /// Show only references carrying this tag; repeat to require every tag
+    #[arg(long = "tag", value_name = "TAG")]
+    tags: Vec<String>,
     #[command(flatten)]
     scope: ShelfArg,
 }
@@ -274,10 +279,15 @@ async fn run() -> Result<RunOutcome> {
             sort_by,
             order,
             no_wrap_title,
+            tags,
             scope,
         })) => {
             let target = commands::resolve_target(&cwd, scope.shelf.as_deref())?;
-            commands::list(&target.directory, sort_by, order, !no_wrap_title)?
+            commands::list(&target.directory, sort_by, order, !no_wrap_title, &tags)?
+        }
+        Some(Command::Edit(scope)) => {
+            let target = commands::resolve_target(&cwd, scope.shelf.as_deref())?;
+            commands::edit(&target.directory)?
         }
         Some(Command::Generate(scope)) => {
             if scope.all_shelves {
@@ -409,6 +419,7 @@ mod tests {
             vec!["cita", "import", "-s", "paper", "-"],
             vec!["cita", "remove", "-s", "paper", "Key"],
             vec!["cita", "list", "-s", "paper"],
+            vec!["cita", "edit", "-s", "paper"],
             vec!["cita", "generate", "-s", "paper"],
             vec!["cita", "export", "-s", "paper"],
             vec!["cita", "export", "-s", "paper", "-o", "x.bib"],
@@ -436,6 +447,7 @@ mod tests {
             vec!["cita", "import", "--all-shelves", "-"],
             vec!["cita", "remove", "--all-shelves", "Key"],
             vec!["cita", "list", "--all-shelves"],
+            vec!["cita", "edit", "--all-shelves"],
             vec!["cita", "fetch", "--all-shelves", "Key"],
             // One shelf or every shelf, never both.
             vec!["cita", "sync", "-s", "paper", "--all-shelves"],
@@ -444,6 +456,34 @@ mod tests {
         ] {
             assert!(Cli::try_parse_from(args.clone()).is_err(), "{args:?}");
         }
+    }
+
+    #[test]
+    fn list_accepts_repeatable_tag_filters() {
+        for args in [
+            vec!["cita", "list", "--tag", "higgs"],
+            vec!["cita", "list", "--tag", "higgs", "--tag", "atlas"],
+            vec![
+                "cita",
+                "list",
+                "--tag",
+                "higgs",
+                "--sort-by",
+                "year",
+                "-s",
+                "paper",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args.clone()).is_ok(), "{args:?}");
+        }
+        // A tag is a value, never a bare positional or a comma-joined list.
+        assert!(Cli::try_parse_from(["cita", "list", "--tag"]).is_err());
+        assert!(Cli::try_parse_from(["cita", "list", "higgs"]).is_err());
+        let cli = Cli::try_parse_from(["cita", "list", "--tag", "a", "--tag", "b"]).unwrap();
+        let Some(Command::List(args)) = cli.command else {
+            unreachable!()
+        };
+        assert_eq!(args.tags, ["a", "b"]);
     }
 
     #[test]
