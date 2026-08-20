@@ -114,40 +114,7 @@ fn json_record_with_doi(id: u64, key: &str, title: &str, arxiv: &str, doi: &str)
     )
 }
 
-fn git(directory: &Path, args: &[&str]) -> Output {
-    Command::new("git")
-        .arg("-C")
-        .arg(directory)
-        .args(args)
-        .output()
-        .unwrap()
-}
-
-fn git_success(directory: &Path, args: &[&str]) -> String {
-    success(git(directory, args))
-}
-
-fn init_git(directory: &Path) {
-    git_success(directory, &["init", "-q"]);
-    git_success(directory, &["config", "user.email", "cita@example.test"]);
-    git_success(directory, &["config", "user.name", "cita Test"]);
-}
-
-#[cfg(unix)]
-fn install_failing_hook(directory: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    let hooks = directory.join("test-hooks");
-    fs::create_dir_all(&hooks).unwrap();
-    let hook = hooks.join("pre-commit");
-    fs::write(&hook, "#!/bin/sh\necho hook rejected commit >&2\nexit 1\n").unwrap();
-    let mut permissions = fs::metadata(&hook).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&hook, permissions).unwrap();
-    git_success(directory, &["config", "core.hooksPath", "test-hooks"]);
-}
-
-fn cita_without_git(cwd: &Path, args: &[&str]) -> Output {
+fn cita_without_path(cwd: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_cita"))
         .current_dir(cwd)
         .args(args)
@@ -256,7 +223,6 @@ fn init_creates_schema_two_and_imports_an_existing_bibliography() {
 #[test]
 fn init_defaults_to_the_current_directory_and_accepts_an_explicit_path() {
     let directory = tempfile::tempdir().unwrap();
-    init_git(directory.path());
     let nested = directory.path().join("nested/project");
     fs::create_dir_all(&nested).unwrap();
 
@@ -401,9 +367,8 @@ fn shelf_scoped_commands_are_isolated_and_import_paths_use_the_caller() {
 }
 
 #[test]
-fn shelf_scoped_add_fetch_and_commit_use_the_shelf_context() {
+fn shelf_scoped_add_sync_and_fetch_use_the_shelf_context() {
     let directory = tempfile::tempdir().unwrap();
-    init_git(directory.path());
     success(cita(directory.path(), &["library", "init"]));
     success(cita(directory.path(), &["library", "new", "paper"]));
     let json = json_record(42, "Provider:42", "Provider", "2401.00042");
@@ -448,15 +413,6 @@ fn shelf_scoped_add_fetch_and_commit_use_the_shelf_context() {
         &["fetch", "-s", "paper", "--cache-only", "Local"],
     ));
     assert!(fetched.contains("paper/.cita/files/arxiv/2401.00042.pdf"));
-
-    assert!(
-        success(cita(directory.path(), &["commit", "-s", "paper"],))
-            .contains("references: initialize cita")
-    );
-    let committed = git_success(directory.path(), &["show", "--name-only", "--format="]);
-    assert!(committed.contains("paper/cita.toml"), "{committed}");
-    assert!(committed.contains("paper/references.bib"), "{committed}");
-    assert!(!committed.contains("cita-library.toml"), "{committed}");
 }
 
 #[test]
@@ -610,29 +566,8 @@ fn shelf_scope_rejects_a_shelf_missing_cita_toml() {
 }
 
 #[test]
-fn init_ignores_a_malformed_git_directory() {
-    let directory = tempfile::tempdir().unwrap();
-    fs::create_dir(directory.path().join(".git")).unwrap();
-
-    success(cita(directory.path(), &["init"]));
-    assert!(directory.path().join("cita.toml").is_file());
-    assert!(directory.path().join("references.bib").is_file());
-}
-
-#[test]
-fn init_ignores_a_broken_git_file() {
-    let directory = tempfile::tempdir().unwrap();
-    fs::write(directory.path().join(".git"), "gitdir: missing\n").unwrap();
-
-    success(cita(directory.path(), &["init"]));
-    assert!(directory.path().join("cita.toml").is_file());
-    assert!(directory.path().join("references.bib").is_file());
-}
-
-#[test]
 fn nested_projects_discover_the_nearest_manifest() {
     let directory = tempfile::tempdir().unwrap();
-    init_git(directory.path());
     success(cita(directory.path(), &["init"]));
     let nested = directory.path().join("nested");
     fs::create_dir(&nested).unwrap();
@@ -1097,211 +1032,6 @@ fn imported_only_sync_performs_no_network_work() {
 }
 
 #[test]
-fn commit_forces_only_the_two_tracked_artifacts_and_leaves_other_staging_alone() {
-    let directory = tempfile::tempdir().unwrap();
-    init_git(directory.path());
-    fs::write(directory.path().join(".gitignore"), "*.bib\n").unwrap();
-    fs::write(directory.path().join("notes.txt"), "keep staged\n").unwrap();
-    git_success(directory.path(), &["add", "notes.txt"]);
-    success(cita(directory.path(), &["init"]));
-    success(cita_stdin(
-        directory.path(),
-        &["import", "-"],
-        &entry("A", "Alpha", ""),
-    ));
-    success(cita(directory.path(), &["commit"]));
-    let committed = git_success(
-        directory.path(),
-        &["show", "--pretty=format:", "--name-only", "HEAD"],
-    );
-    assert!(committed.contains("cita.toml"), "{committed}");
-    assert!(committed.contains("references.bib"), "{committed}");
-    assert!(!committed.contains("notes.txt"), "{committed}");
-    assert_eq!(
-        git_success(directory.path(), &["diff", "--cached", "--name-only"]),
-        "notes.txt\n"
-    );
-}
-
-#[test]
-fn commit_refuses_prestaged_managed_files_without_touching_the_index() {
-    let directory = tempfile::tempdir().unwrap();
-    init_git(directory.path());
-    success(cita(directory.path(), &["init"]));
-    success(cita(directory.path(), &["commit"]));
-    success(cita_stdin(
-        directory.path(),
-        &["import", "-"],
-        &entry("A", "Alpha", ""),
-    ));
-    git_success(directory.path(), &["add", "cita.toml"]);
-    let before = git_success(directory.path(), &["diff", "--cached"]);
-
-    let error = failure(cita(directory.path(), &["commit"]));
-    assert!(error.contains("already has staged changes"), "{error}");
-    assert!(error.contains("commit or unstage"), "{error}");
-    assert_eq!(git_success(directory.path(), &["diff", "--cached"]), before);
-}
-
-#[test]
-fn commit_help_mentions_the_managed_file_staging_guard() {
-    let directory = tempfile::tempdir().unwrap();
-    let help = success(cita(directory.path(), &["commit", "--help"]));
-    assert!(
-        help.contains("refuses to run if either managed file is already staged"),
-        "{help}"
-    );
-}
-
-#[test]
-fn commit_checks_the_index_before_reporting_a_no_op() {
-    let directory = tempfile::tempdir().unwrap();
-    init_git(directory.path());
-    success(cita(directory.path(), &["init"]));
-    success(cita(directory.path(), &["commit"]));
-    git_success(directory.path(), &["rm", "--cached", "cita.toml"]);
-    let before = git_success(directory.path(), &["diff", "--cached"]);
-
-    let error = failure(cita(directory.path(), &["commit"]));
-    assert!(error.contains("already has staged changes"), "{error}");
-    assert_eq!(git_success(directory.path(), &["diff", "--cached"]), before);
-    assert!(directory.path().join("cita.toml").is_file());
-}
-
-#[test]
-fn commit_handles_a_head_that_does_not_contain_managed_paths() {
-    let directory = tempfile::tempdir().unwrap();
-    init_git(directory.path());
-    fs::write(directory.path().join("README"), "existing history\n").unwrap();
-    git_success(directory.path(), &["add", "README"]);
-    git_success(directory.path(), &["commit", "-qm", "initial"]);
-    success(cita(directory.path(), &["init"]));
-
-    assert!(success(cita(directory.path(), &["commit"])).contains("references: initialize cita"));
-    let names = git_success(
-        directory.path(),
-        &["show", "--pretty=format:", "--name-only", "HEAD"],
-    );
-    assert!(names.contains("cita.toml"), "{names}");
-    assert!(names.contains("references.bib"), "{names}");
-}
-
-#[cfg(unix)]
-#[test]
-fn failed_initial_commit_removes_only_citas_new_index_entries() {
-    let directory = tempfile::tempdir().unwrap();
-    init_git(directory.path());
-    fs::write(directory.path().join("notes.txt"), "keep staged\n").unwrap();
-    git_success(directory.path(), &["add", "notes.txt"]);
-    success(cita(directory.path(), &["init"]));
-    success(cita_stdin(
-        directory.path(),
-        &["import", "-"],
-        &entry("A", "Alpha", ""),
-    ));
-    install_failing_hook(directory.path());
-
-    let error = failure(cita(directory.path(), &["commit"]));
-    assert!(error.contains("hook rejected commit"), "{error}");
-    assert_eq!(
-        git_success(directory.path(), &["diff", "--cached", "--name-only"]),
-        "notes.txt\n"
-    );
-    assert!(directory.path().join("cita.toml").is_file());
-    assert!(directory.path().join("references.bib").is_file());
-}
-
-#[cfg(unix)]
-#[test]
-fn failed_later_commit_resets_managed_index_entries_and_preserves_other_staging() {
-    let directory = tempfile::tempdir().unwrap();
-    init_git(directory.path());
-    success(cita(directory.path(), &["init"]));
-    success(cita(directory.path(), &["commit"]));
-    success(cita_stdin(
-        directory.path(),
-        &["import", "-"],
-        &entry("A", "Alpha", ""),
-    ));
-    fs::write(directory.path().join("notes.txt"), "keep staged\n").unwrap();
-    git_success(directory.path(), &["add", "notes.txt"]);
-    install_failing_hook(directory.path());
-
-    let error = failure(cita(directory.path(), &["commit"]));
-    assert!(error.contains("hook rejected commit"), "{error}");
-    assert_eq!(
-        git_success(directory.path(), &["diff", "--cached", "--name-only"]),
-        "notes.txt\n"
-    );
-    let unstaged = git_success(directory.path(), &["diff", "--name-only"]);
-    assert!(unstaged.contains("cita.toml"), "{unstaged}");
-    assert!(unstaged.contains("references.bib"), "{unstaged}");
-}
-
-#[cfg(unix)]
-#[test]
-fn failed_commit_restores_a_tracked_manifest_and_unstages_a_new_bibliography() {
-    assert_failed_commit_rolls_back_asymmetric_head("cita.toml", "references.bib");
-}
-
-#[cfg(unix)]
-#[test]
-fn failed_commit_restores_a_tracked_bibliography_and_unstages_a_new_manifest() {
-    assert_failed_commit_rolls_back_asymmetric_head("references.bib", "cita.toml");
-}
-
-#[cfg(unix)]
-fn assert_failed_commit_rolls_back_asymmetric_head(tracked: &str, newly_staged: &str) {
-    let directory = tempfile::tempdir().unwrap();
-    init_git(directory.path());
-    success(cita(directory.path(), &["init"]));
-    git_success(directory.path(), &["add", tracked]);
-    git_success(
-        directory.path(),
-        &["commit", "-qm", "partial managed history"],
-    );
-    let head_index_entry = git_success(directory.path(), &["ls-files", "--stage", tracked]);
-
-    success(cita_stdin(
-        directory.path(),
-        &["import", "-"],
-        &entry("A", "Alpha", ""),
-    ));
-    let manifest = fs::read(directory.path().join("cita.toml")).unwrap();
-    let bibliography = fs::read(directory.path().join("references.bib")).unwrap();
-    fs::write(directory.path().join("notes.txt"), "keep staged\n").unwrap();
-    git_success(directory.path(), &["add", "notes.txt"]);
-    install_failing_hook(directory.path());
-
-    let error = failure(cita(directory.path(), &["commit"]));
-    assert!(error.contains("hook rejected commit"), "{error}");
-    assert_eq!(
-        git_success(directory.path(), &["diff", "--cached", "--name-only"]),
-        "notes.txt\n"
-    );
-    assert_eq!(
-        git_success(directory.path(), &["ls-files", "--stage", tracked]),
-        head_index_entry
-    );
-    assert!(
-        !git(
-            directory.path(),
-            &["ls-files", "--error-unmatch", newly_staged]
-        )
-        .status
-        .success()
-    );
-    assert_eq!(
-        fs::read(directory.path().join("cita.toml")).unwrap(),
-        manifest
-    );
-    assert_eq!(
-        fs::read(directory.path().join("references.bib")).unwrap(),
-        bibliography
-    );
-}
-
-#[test]
 fn remove_is_atomic_and_resolves_identity_selectors() {
     let directory = tempfile::tempdir().unwrap();
     success(cita(directory.path(), &["init"]));
@@ -1703,64 +1433,10 @@ fn fetch_cache_only_suggests_force_for_an_invalid_cached_pdf() {
 }
 
 #[test]
-fn commit_reports_a_git_launch_failure_instead_of_guessing() {
-    let directory = tempfile::tempdir().unwrap();
-    init_git(directory.path());
-    success(cita(directory.path(), &["init"]));
-    let error = failure(cita_without_git(directory.path(), &["commit"]));
-    assert!(error.contains("could not run git"), "{error}");
-}
-
-#[test]
-fn commit_treats_a_present_but_unusable_git_marker_as_an_error() {
-    let directory = tempfile::tempdir().unwrap();
-    fs::create_dir(directory.path().join(".git")).unwrap();
-    success(cita(directory.path(), &["init"]));
-
-    let error = failure(cita(directory.path(), &["commit"]));
-    assert!(
-        error.contains("git rev-parse --show-toplevel failed"),
-        "{error}"
-    );
-    assert!(!error.contains("is not inside a Git repository"), "{error}");
-}
-
-#[test]
 fn init_does_not_require_an_available_git_executable() {
     let directory = tempfile::tempdir().unwrap();
-    success(cita_without_git(directory.path(), &["init"]));
+    success(cita_without_path(directory.path(), &["init"]));
     assert!(directory.path().join("cita.toml").is_file());
-}
-
-#[test]
-fn commit_surfaces_corrupt_history_instead_of_pretending_a_first_commit() {
-    let directory = tempfile::tempdir().unwrap();
-    init_git(directory.path());
-    success(cita(directory.path(), &["init"]));
-    success(cita(directory.path(), &["commit"]));
-    corrupt_loose_objects(directory.path());
-    success(cita_stdin(
-        directory.path(),
-        &["import", "-"],
-        &entry("A", "Alpha", ""),
-    ));
-    let error = failure(cita(directory.path(), &["commit"]));
-    assert!(error.contains("git diff --cached failed"), "{error}");
-}
-
-fn corrupt_loose_objects(directory: &Path) {
-    for shard in fs::read_dir(directory.join(".git/objects")).unwrap() {
-        let shard = shard.unwrap();
-        if !shard.file_type().unwrap().is_dir() || shard.file_name().len() != 2 {
-            continue;
-        }
-        for object in fs::read_dir(shard.path()).unwrap() {
-            // Loose objects are read-only; replace them instead of rewriting.
-            let path = object.unwrap().path();
-            fs::remove_file(&path).unwrap();
-            fs::write(&path, b"garbage").unwrap();
-        }
-    }
 }
 
 #[test]

@@ -1,5 +1,4 @@
 mod commands;
-mod git;
 
 use anyhow::{Context, Result};
 use clap::{Args, CommandFactory, Parser, Subcommand};
@@ -34,8 +33,6 @@ enum Command {
     Export(ExportArgs),
     /// Fetch or resolve a reference's arXiv PDF or source package
     Fetch(FetchArgs),
-    /// Commit the managed files; refuses to run if either managed file is already staged
-    Commit(ShelfArg),
     /// Manage a multi-project cita library
     Library {
         #[command(subcommand)]
@@ -314,10 +311,6 @@ async fn run() -> Result<RunOutcome> {
             let (selector, options) = args.into_options();
             commands::fetch(&target.directory, &selector, options).await?
         }
-        Some(Command::Commit(scope)) => {
-            let target = commands::resolve_target(&cwd, scope.shelf.as_deref())?;
-            git::commit(&commands::find_manifest(&target.directory)?)?
-        }
         Some(Command::Library { command }) => match command {
             LibraryCommand::Init(args) => commands::init_library(&cwd, args.path.as_deref())?,
             LibraryCommand::List => commands::list_shelves(&cwd)?,
@@ -405,7 +398,6 @@ mod tests {
             vec!["cita", "library", "generate"],
             vec!["cita", "library", "export"],
             vec!["cita", "library", "sync"],
-            vec!["cita", "library", "commit"],
         ] {
             assert!(Cli::try_parse_from(args).is_err());
         }
@@ -425,7 +417,6 @@ mod tests {
             vec!["cita", "export", "-s", "paper", "-o", "x.bib"],
             vec!["cita", "sync", "-s", "paper"],
             vec!["cita", "fetch", "-s", "paper", "Key"],
-            vec!["cita", "commit", "-s", "paper"],
         ] {
             assert!(Cli::try_parse_from(args.clone()).is_ok(), "{args:?}");
         }
@@ -441,8 +432,6 @@ mod tests {
             assert!(Cli::try_parse_from(args.clone()).is_ok(), "{args:?}");
         }
         for args in [
-            // A library-wide commit is deliberately absent.
-            vec!["cita", "commit", "--all-shelves"],
             vec!["cita", "add", "--all-shelves", "1207.7214"],
             vec!["cita", "import", "--all-shelves", "-"],
             vec!["cita", "remove", "--all-shelves", "Key"],

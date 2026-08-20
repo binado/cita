@@ -65,7 +65,7 @@ cita-bibliography ← cita-inspire-client   cita-documents
 - `cita-documents`: accepts a validated arXiv ID and atomically caches PDFs and
   safely extracts gzip-compressed TeX source packages beneath `.cita/files/arxiv`.
 - `cita`: CLI, parent discovery, sync reconciliation, derived-export policy,
-  whole-manifest editing policy, and scoped Git commits.
+  and whole-manifest editing policy.
 
 ## Key decisions
 
@@ -158,11 +158,11 @@ there is no crash-atomic transaction across shelves.
 ### Libraries and shelves
 
 Each registered shelf is an independent cita project with its own manifest,
-bibliography, identities, cache, and Git commits. `cita-library.toml` only maps
+bibliography, identities, and cache. `cita-library.toml` only maps
 stable names to library-relative paths. Paths cannot escape the root, overlap,
 nest, or alias through symlinks. The library root cannot itself contain
 `cita.toml` or `references.bib`. There is no aggregate bibliography, shared
-cache, cross-shelf uniqueness, or library-wide commit.
+cache, or cross-shelf uniqueness.
 
 Scope is an argument, not a command level. `cita library` covers shelf lifecycle
 only (`init`, `list`, `new`); every operation *inside* a shelf is the ordinary
@@ -203,13 +203,14 @@ are versionless and cache paths retain legacy arXiv archive directories.
 `cita list` filters with repeatable `--tag`, which requires every named tag, and
 shows a `Tags` column.
 
-### Git
+### Out of scope: Git orchestration
 
-`cita commit` validates consistency and stages only `cita.toml` and
-`references.bib`. Commit messages derive added, removed, and modified local keys
-and stored titles. If the HEAD manifest exists but is unreadable, warn on
-stderr and use `references: update bibliography`. A path missing from HEAD is
-expected absence; any other git failure is an error, never a first commit.
+cita guarantees diff-friendly, deterministically rendered files — sorted TOML
+and a byte-stable generated `references.bib` — written atomically with a clear
+commit point. Staging and committing those files is the caller's
+responsibility, not cita's; there is no `git` subprocess dependency anywhere in
+the binary. Do not reintroduce a `commit` command or any other Git
+orchestration.
 
 ## Error handling
 

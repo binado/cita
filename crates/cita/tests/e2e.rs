@@ -54,31 +54,6 @@ fn success(output: Output) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
-fn git(directory: &Path, args: &[&str]) -> Output {
-    Command::new("git")
-        .arg("-C")
-        .arg(directory)
-        .args(args)
-        .output()
-        .unwrap()
-}
-
-fn git_success(directory: &Path, args: &[&str]) -> String {
-    let output = git(directory, args);
-    assert!(
-        output.status.success(),
-        "stderr:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap()
-}
-
-fn init_git(directory: &Path) {
-    git_success(directory, &["init", "-q"]);
-    git_success(directory, &["config", "user.email", "cita@example.test"]);
-    git_success(directory, &["config", "user.name", "cita Test"]);
-}
-
 /// Slice `cita.toml` text down to one `[references.<key>]` entry, including
 /// any of its own nested subtables (e.g. `.inspire`), so assertions about
 /// one paper cannot accidentally match a sibling entry or the next section.
@@ -155,7 +130,6 @@ fn annotate(directory: &Path, key: &str, lines: &str) {
 #[ignore = "hits the live INSPIRE API; run with `cargo test --test e2e -- --ignored`"]
 fn e2e_seed_then_add_handpicked_inspire_papers() {
     let directory = tempfile::tempdir().unwrap();
-    init_git(directory.path());
 
     // 1. `init` creates a fresh schema-2 manifest and an empty bibliography.
     assert!(success(cita(directory.path(), &["init"])).contains("Initialized"));
@@ -279,8 +253,7 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
         );
     }
 
-    // 7. `remove` drops a managed record by provider id (not its local key),
-    //    and `commit` stages only the two generated artifacts.
+    // 7. `remove` drops a managed record by provider id, not its local key.
     let output = success(cita(directory.path(), &["remove", "inspire:51188"]));
     assert_eq!(output, "Removed Weinberg\n");
     let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
@@ -290,12 +263,4 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
         !bibliography.contains("A Model of Leptons"),
         "{bibliography}"
     );
-
-    success(cita(directory.path(), &["commit"]));
-    let committed = git_success(
-        directory.path(),
-        &["show", "--pretty=format:", "--name-only", "HEAD"],
-    );
-    assert!(committed.contains("cita.toml"), "{committed}");
-    assert!(committed.contains("references.bib"), "{committed}");
 }

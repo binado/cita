@@ -47,8 +47,7 @@ work as selectors.
 
 - `cita init [--path <directory>]` creates an empty schema-2 project in the
   current directory, or in the specified existing directory. Initialization
-  does not run Git, so malformed repository metadata or an unavailable Git
-  executable cannot prevent it. Commands run inside a nested project discover
+  runs no external programs. Commands run inside a nested project discover
   its nearest `cita.toml`. If only `references.bib` exists at the chosen
   location, initialization imports every standalone entry. Existing schema-2
   projects are validated; any other schema is explicitly unsupported. The
@@ -86,9 +85,6 @@ work as selectors.
   `--source` and `--url` are mutually exclusive. `--open` launches the returned
   target with the system default application. Without `--save`, an unmatched
   locator uses INSPIRE JSON only.
-- `cita commit` is an optional Git helper. It validates consistency and commits
-  only `cita.toml` and `references.bib`, leaving unrelated staged changes
-  intact. It refuses to run if either managed file is already staged.
 - `cita library init [--path <directory>]` creates an idempotent
   `cita-library.toml` registry in an existing directory. A library root cannot
   itself be a cita project.
@@ -100,7 +96,7 @@ work as selectors.
   cita project. Initialization completes before registration, so a registry
   write failure leaves a usable standalone shelf for a safe retry.
 - `-s/--shelf <name>` runs any of `add`, `import`, `remove`, `list`, `edit`,
-  `generate`, `export`, `sync`, `fetch`, and `commit` in that registered shelf
+  `generate`, `export`, `sync`, and `fetch` in that registered shelf
   instead of the project discovered from the current directory. Import and export
   paths remain relative to the directory where the user invoked cita, not to the
   shelf. A shelf export is named for the stable registered shelf name rather
@@ -110,8 +106,8 @@ work as selectors.
   order, continuing after shelf-specific failures, printing one result per
   shelf, and exiting unsuccessfully if any shelf failed. It is mutually
   exclusive with `--shelf`, and with `export --output`, which cannot name a file
-  for each shelf. The remaining commands are deliberately excluded: there is no
-  library-wide commit, and mutations stay per-shelf.
+  for each shelf. The remaining commands are deliberately excluded: mutations
+  stay per-shelf.
 - `cita completions <bash|elvish|fish|powershell|zsh>` prints a shell completion
   script to stdout, e.g. `cita completions zsh > ~/.zfunc/_cita`.
 
@@ -193,9 +189,9 @@ updating the previous import.
 
 Mutations validate and render the complete candidate in memory, atomically
 persist `references.bib` first, and persist `cita.toml` as the commit point.
-Downloaded PDFs and extracted source packages live under `.cita/files`;
-initialization adds
-`/.cita/files/` to the project root's `.gitignore` so the cache is not tracked.
+Downloaded PDFs and extracted source packages live under `.cita/files`; if you
+track the project in Git, add `/.cita/files/` to your own `.gitignore` so the
+cache is not tracked.
 
 A library is only a sorted registry of shelf names and relative paths. Each
 shelf has its own `cita.toml`, `references.bib`, `.cita/files` cache, identities,
@@ -215,7 +211,7 @@ the library root, overlap or nest, or alias one another through symlinks.
   writes.
 - `cita-documents`: validated arXiv PDF/source downloads, safe source
   extraction, and atomic caching.
-- `cita`: CLI wiring, discovery, selectors, and scoped Git commits.
+- `cita`: CLI wiring, discovery, and selectors.
 
 ## Development
 
