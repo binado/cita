@@ -5,8 +5,8 @@ use std::path::Path;
 
 pub(crate) fn remove(cwd: &Path, selectors: &[String]) -> Result<()> {
     let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
-    for item in manifest.remove_batch(selectors)? {
-        println!("Removed {}", item.key);
+    for (key, _) in manifest.remove_batch(selectors)? {
+        println!("Removed {key}");
     }
     Ok(())
 }

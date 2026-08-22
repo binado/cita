@@ -10,7 +10,14 @@ use std::{
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
-use crate::{BIBLIOGRAPHY_FILE, MANIFEST_FILE, SCHEMA};
+use crate::{BIBLIOGRAPHY_FILE, MANIFEST_FILE};
+
+/// Registry schema version, deliberately independent of the manifest's.
+///
+/// The registry only maps stable shelf names to relative paths and has no stake
+/// in how a shelf stores its references, so a manifest schema bump must not
+/// invalidate every existing `cita-library.toml`.
+const SCHEMA: u32 = 1;
 
 /// Name of the library registry.
 pub const LIBRARY_FILE: &str = "cita-library.toml";

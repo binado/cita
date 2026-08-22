@@ -1,4 +1,7 @@
-use crate::{ApiLiteratureRecord, InspireSnapshot, wire::SearchResponse};
+use crate::{
+    ApiLiteratureRecord, InspireSnapshot,
+    wire::{PROJECTION_FIELDS, SearchResponse},
+};
 use cita_bibliography::parse as parse_bibtex;
 use cita_core::{Locator, MetadataProvider, ProviderError, Reference, ReferenceSource};
 use reqwest::{StatusCode, header::RETRY_AFTER};
@@ -188,7 +191,8 @@ impl Client {
         json.query_pairs_mut()
             .append_pair("q", &query)
             .append_pair("format", "json")
-            .append_pair("size", &ids.len().to_string());
+            .append_pair("size", &ids.len().to_string())
+            .append_pair("fields", &PROJECTION_FIELDS.join(","));
         let mut bibtex = base;
         bibtex
             .query_pairs_mut()

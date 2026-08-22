@@ -1,7 +1,7 @@
 use super::{find_manifest, highlight_style};
 use crate::{Order, SortBy};
 use anyhow::Result;
-use cita_manifest::Manifest;
+use cita_manifest::{Entry, Manifest};
 use std::{
     io::{self, IsTerminal},
     path::Path,
@@ -13,34 +13,31 @@ struct Row {
     author: String,
     year_num: Option<i32>,
     year: String,
+    tags: String,
 }
 
-pub(crate) fn list(cwd: &Path, sort_by: SortBy, order: Order, wrap_title: bool) -> Result<()> {
+pub(crate) fn list(
+    cwd: &Path,
+    sort_by: SortBy,
+    order: Order,
+    wrap_title: bool,
+    tags: &[String],
+) -> Result<()> {
     let manifest = Manifest::load_verified(find_manifest(cwd)?)?;
     let mut rows = manifest
-        .projected()?
-        .into_iter()
-        .map(|item| {
-            let author = match item.reference.authors.first() {
-                Some(first) if item.reference.authors.len() > 1 => format!("{first} et al."),
-                Some(first) => first.clone(),
-                None => item
-                    .reference
-                    .collaborations
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "—".into()),
-            };
-            Row {
-                key: item.key,
-                title: item.reference.title,
-                author,
-                year_num: item.reference.year,
-                year: item
-                    .reference
-                    .year
-                    .map_or_else(|| "—".into(), |year| year.to_string()),
-            }
+        .references()
+        .iter()
+        // Repeated --tag narrows: an entry has to carry every named tag.
+        .filter(|(_, entry)| tags.iter().all(|tag| entry.tags.contains(tag)))
+        .map(|(key, entry)| Row {
+            key: key.clone(),
+            title: entry.title.clone(),
+            author: author(entry),
+            year_num: entry.year,
+            year: entry
+                .year
+                .map_or_else(|| "—".into(), |year| year.to_string()),
+            tags: entry.tags.iter().cloned().collect::<Vec<_>>().join(", "),
         })
         .collect::<Vec<_>>();
     match sort_by {
@@ -61,6 +58,20 @@ pub(crate) fn list(cwd: &Path, sort_by: SortBy, order: Order, wrap_title: bool) 
     print_rows(rows, wrap_title);
     Ok(())
 }
+
+/// The first author, a collaboration, or a placeholder.
+fn author(entry: &Entry) -> String {
+    match entry.authors.first() {
+        Some(first) if entry.authors.len() > 1 => format!("{first} et al."),
+        Some(first) => first.clone(),
+        None => entry
+            .collaborations
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "—".into()),
+    }
+}
+
 fn ordered(value: std::cmp::Ordering, order: Order) -> std::cmp::Ordering {
     if matches!(order, Order::Desc) {
         value.reverse()
@@ -73,28 +84,29 @@ fn print_rows(rows: Vec<Row>, wrap_title: bool) {
     if rows.is_empty() {
         return;
     }
-    let headers = ["Key", "Title", "Author", "Year"];
+    let headers = ["Key", "Title", "Author", "Year", "Tags"];
     let key_width = column_width(headers[0], rows.iter().map(|row| row.key.as_str()));
     let author_width = column_width(headers[2], rows.iter().map(|row| row.author.as_str()));
     let year_width = column_width(headers[3], rows.iter().map(|row| row.year.as_str()));
+    let tags_width = column_width(headers[4], rows.iter().map(|row| row.tags.as_str()));
     let title_width = terminal_size::terminal_size_of(io::stdout()).map(|(width, _)| {
         (width.0 as usize)
-            .saturating_sub(key_width + author_width + year_width + 6)
+            .saturating_sub(key_width + author_width + year_width + tags_width + 8)
             .max(10)
     });
     let displayed_title_width = title_width
         .unwrap_or_else(|| column_width(headers[1], rows.iter().map(|row| row.title.as_str())));
-    let header = format!(
-        "{:<kw$}  {:<tw$}  {:<aw$}  {:<yw$}",
-        headers[0],
-        headers[1],
-        headers[2],
-        headers[3],
-        kw = key_width,
-        tw = displayed_title_width,
-        aw = author_width,
-        yw = year_width
-    );
+    // Every column is padded so the grid lines up, then the line is trimmed:
+    // the rightmost column, and every continuation line of a wrapped title,
+    // would otherwise end in run-on padding.
+    let line = |key: &str, title: &str, author: &str, year: &str, tags: &str| {
+        format!(
+            "{key:<key_width$}  {title:<displayed_title_width$}  {author:<author_width$}  {year:<year_width$}  {tags:<tags_width$}"
+        )
+        .trim_end()
+        .to_owned()
+    };
+    let header = line(headers[0], headers[1], headers[2], headers[3], headers[4]);
     match highlight_style(io::stdout().is_terminal()) {
         Some(style) => println!("{style}{header}{style:#}"),
         None => println!("{header}"),
@@ -107,18 +119,21 @@ fn print_rows(rows: Vec<Row>, wrap_title: bool) {
         };
         for (index, title) in titles.into_iter().enumerate() {
             println!(
-                "{:<kw$}  {:<tw$}  {:<aw$}  {:<yw$}",
-                if index == 0 { row.key.as_str() } else { "" },
-                title,
-                if index == 0 { row.author.as_str() } else { "" },
-                if index == 0 { row.year.as_str() } else { "" },
-                kw = key_width,
-                tw = displayed_title_width,
-                aw = author_width,
-                yw = year_width
+                "{}",
+                line(
+                    first(&row.key, index),
+                    &title,
+                    first(&row.author, index),
+                    first(&row.year, index),
+                    first(&row.tags, index),
+                )
             );
         }
     }
+}
+/// A row's own value on its first line, blank on a wrapped continuation.
+fn first(value: &str, index: usize) -> &str {
+    if index == 0 { value } else { "" }
 }
 fn column_width<'a>(header: &str, values: impl Iterator<Item = &'a str>) -> usize {
     values.fold(header.chars().count(), |width, value| {

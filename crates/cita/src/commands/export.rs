@@ -1,10 +1,9 @@
 use super::find_manifest;
 use anyhow::{Context, Result, anyhow, bail};
 use cita_bibliography::insert_field;
-use cita_core::ReferenceSource;
 use cita_documents::arxiv_pdf_url;
 use cita_manifest::{
-    BIBLIOGRAPHY_FILE, LIBRARY_FILE, MANIFEST_FILE, Manifest, SourceSnapshot, atomic_write,
+    BIBLIOGRAPHY_FILE, Entry, LIBRARY_FILE, MANIFEST_FILE, Manifest, atomic_write,
 };
 use std::{
     fs,
@@ -49,18 +48,15 @@ pub(crate) fn export_outcome(
 }
 
 /// Add the derived arXiv PDF URL to one re-keyed entry that has an arXiv ID.
-fn derive_entry(key: &str, source: &SourceSnapshot, entry: String) -> Result<String> {
-    let reference = source
-        .project()
-        .with_context(|| format!("could not project `{key}`"))?;
-    // The projected identity already carries INSPIRE's curated arXiv ID, so one
-    // rule covers imported and INSPIRE snapshots alike.
-    let Some(arxiv) = reference.identifiers.arxiv.first() else {
-        return Ok(entry);
+fn derive_entry(key: &str, entry: &Entry, rendered: String) -> Result<String> {
+    // The stored arXiv ID is already canonical for INSPIRE and imported entries
+    // alike, so one rule covers both without parsing the BibTeX again.
+    let Some(arxiv) = entry.arxiv.as_deref() else {
+        return Ok(rendered);
     };
     let url = arxiv_pdf_url(arxiv)
         .with_context(|| format!("could not build an arXiv URL for `{key}`"))?;
-    Ok(insert_field(&entry, URL_FIELD, url.as_str())?)
+    Ok(insert_field(&rendered, URL_FIELD, url.as_str())?)
 }
 
 fn default_export_path(directory: &Path) -> Result<PathBuf> {

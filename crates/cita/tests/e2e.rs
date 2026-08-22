@@ -54,33 +54,8 @@ fn success(output: Output) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
-fn git(directory: &Path, args: &[&str]) -> Output {
-    Command::new("git")
-        .arg("-C")
-        .arg(directory)
-        .args(args)
-        .output()
-        .unwrap()
-}
-
-fn git_success(directory: &Path, args: &[&str]) -> String {
-    let output = git(directory, args);
-    assert!(
-        output.status.success(),
-        "stderr:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap()
-}
-
-fn init_git(directory: &Path) {
-    git_success(directory, &["init", "-q"]);
-    git_success(directory, &["config", "user.email", "cita@example.test"]);
-    git_success(directory, &["config", "user.name", "cita Test"]);
-}
-
 /// Slice `cita.toml` text down to one `[references.<key>]` entry, including
-/// any of its own nested subtables (e.g. `.identifiers`), so assertions about
+/// any of its own nested subtables (e.g. `.inspire`), so assertions about
 /// one paper cannot accidentally match a sibling entry or the next section.
 fn section<'a>(manifest: &'a str, key: &str) -> &'a str {
     let header = format!("[references.{key}]");
@@ -139,16 +114,27 @@ const PAPERS: [Paper; 4] = [
     },
 ];
 
+/// Insert user-owned lines at the top of one entry's table, the way an editor
+/// session would. Tags and notes never change the stored BibTeX, so the
+/// generated bibliography stays in sync without regenerating it.
+fn annotate(directory: &Path, key: &str, lines: &str) {
+    let path = directory.join("cita.toml");
+    let manifest = fs::read_to_string(&path).unwrap();
+    let header = format!("[references.{key}]\n");
+    let at = manifest.find(&header).unwrap() + header.len();
+    let (head, tail) = manifest.split_at(at);
+    fs::write(&path, format!("{head}{lines}{tail}")).unwrap();
+}
+
 #[test]
 #[ignore = "hits the live INSPIRE API; run with `cargo test --test e2e -- --ignored`"]
 fn e2e_seed_then_add_handpicked_inspire_papers() {
     let directory = tempfile::tempdir().unwrap();
-    init_git(directory.path());
 
-    // 1. `init` creates a fresh schema-1 manifest and an empty bibliography.
+    // 1. `init` creates a fresh schema-2 manifest and an empty bibliography.
     assert!(success(cita(directory.path(), &["init"])).contains("Initialized"));
     let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
-    assert!(manifest.starts_with("schema = 1"), "{manifest}");
+    assert!(manifest.starts_with("schema = 2"), "{manifest}");
     assert_eq!(
         fs::read_to_string(directory.path().join("references.bib")).unwrap(),
         ""
@@ -175,14 +161,11 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
     let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
     let seed_alpha_before = section(&manifest, "SeedAlpha").to_owned();
     let seed_beta_before = section(&manifest, "SeedBeta").to_owned();
-    assert!(
-        seed_alpha_before.contains("source = \"import\""),
-        "{manifest}"
-    );
-    assert!(
-        seed_beta_before.contains("source = \"import\""),
-        "{manifest}"
-    );
+    // An import is unmanaged: no provider sub-table, so `cita sync` never
+    // touches it.
+    assert!(!seed_alpha_before.contains("inspire"), "{manifest}");
+    assert!(!seed_beta_before.contains("inspire"), "{manifest}");
+    assert!(seed_alpha_before.contains("type = \"misc\""), "{manifest}");
 
     // 3. Progressively `add` each handpicked paper by its stable INSPIRE
     //    record id, checking the manifest after every command.
@@ -200,7 +183,11 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
             entry.contains(&format!("record_id = {}", paper.record_id)),
             "{entry}"
         );
-        assert!(entry.contains("source = \"inspire\""), "{entry}");
+        // Provenance is the presence of the provider sub-table.
+        assert!(
+            entry.contains(&format!("[references.{}.inspire]", paper.key)),
+            "{entry}"
+        );
         assert!(entry.contains(paper.title), "{entry}");
         match paper.arxiv {
             Some(id) => assert!(entry.contains(&format!("arxiv = \"{id}\"")), "{entry}"),
@@ -235,16 +222,29 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
         assert!(listed.contains(paper.key), "{listed}");
     }
 
-    // 6. `sync` refreshes every INSPIRE-managed record by stable id and must
-    //    leave the two imported seed entries byte-identical.
+    // 6. `sync` refreshes every INSPIRE-managed record by stable id. It must
+    //    leave the two imported seed entries byte-identical, and must carry
+    //    user-owned tags and notes on a managed entry through untouched.
+    annotate(
+        directory.path(),
+        "Ligo",
+        "tags = [\"gw\", \"reading-list\"]\nnotes = [\"Check the noise budget.\"]\n",
+    );
     let output = success(cita(directory.path(), &["sync"]));
     assert!(
-        output.contains("4 managed") && output.contains("2 imported"),
+        output.contains("4 managed") && output.contains("2 unmanaged"),
         "{output}"
     );
     let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
     assert_eq!(section(&manifest, "SeedAlpha"), seed_alpha_before);
     assert_eq!(section(&manifest, "SeedBeta"), seed_beta_before);
+    let ligo = section(&manifest, "Ligo");
+    assert!(ligo.contains("\"reading-list\""), "{ligo}");
+    assert!(ligo.contains("Check the noise budget."), "{ligo}");
+    assert!(
+        success(cita(directory.path(), &["list", "--tag", "gw"])).contains("Ligo"),
+        "{manifest}"
+    );
     for paper in &PAPERS {
         let entry = section(&manifest, paper.key);
         assert!(
@@ -253,8 +253,7 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
         );
     }
 
-    // 7. `remove` drops a managed record by provider id (not its local key),
-    //    and `commit` stages only the two generated artifacts.
+    // 7. `remove` drops a managed record by provider id, not its local key.
     let output = success(cita(directory.path(), &["remove", "inspire:51188"]));
     assert_eq!(output, "Removed Weinberg\n");
     let manifest = fs::read_to_string(directory.path().join("cita.toml")).unwrap();
@@ -264,12 +263,4 @@ fn e2e_seed_then_add_handpicked_inspire_papers() {
         !bibliography.contains("A Model of Leptons"),
         "{bibliography}"
     );
-
-    success(cita(directory.path(), &["commit"]));
-    let committed = git_success(
-        directory.path(),
-        &["show", "--pretty=format:", "--name-only", "HEAD"],
-    );
-    assert!(committed.contains("cita.toml"), "{committed}");
-    assert!(committed.contains("references.bib"), "{committed}");
 }

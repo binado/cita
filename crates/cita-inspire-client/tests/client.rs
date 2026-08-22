@@ -58,13 +58,13 @@ fn server(responses: Vec<String>) -> (String, thread::JoinHandle<Vec<String>>) {
 
 fn json_record(id: u64) -> String {
     format!(
-        r#"{{"id":"{id}","updated":"2026-01-01T00:00:00Z","metadata":{{"titles":[{{"title":"Title {id}"}}],"texkeys":["Key{id}"]}}}}"#
+        r#"{{"id":"{id}","updated":"2026-01-01T00:00:00Z","metadata":{{"titles":[{{"title":"Title {id}"}}],"texkeys":["Key{id}"],"document_type":["article"]}}}}"#
     )
 }
 
 fn json_record_with_doi(id: u64, doi: &str) -> String {
     format!(
-        r#"{{"id":"{id}","updated":"2026-01-01T00:00:00Z","metadata":{{"titles":[{{"title":"Title {id}"}}],"texkeys":["Key{id}"],"dois":[{{"value":"{doi}"}}]}}}}"#
+        r#"{{"id":"{id}","updated":"2026-01-01T00:00:00Z","metadata":{{"titles":[{{"title":"Title {id}"}}],"texkeys":["Key{id}"],"dois":[{{"value":"{doi}"}}],"document_type":["article"]}}}}"#
     )
 }
 
@@ -285,7 +285,7 @@ async fn rejects_a_record_whose_texkeys_match_no_bibtex_entry() {
 async fn stores_the_bibtex_matched_texkey_not_the_first_json_texkey() {
     let record_json = concat!(
         r#"{"id":"7","updated":"2026-01-01T00:00:00Z","metadata":{"titles":[{"title":"Title 7"}],"#,
-        r#""texkeys":["Wrong:2026","Right:2026"]}}"#
+        r#""texkeys":["Wrong:2026","Right:2026"],"document_type":["article"]}}"#
     );
     let search = format!(r#"{{"hits":{{"hits":[{record_json}]}}}}"#);
     let (base, handle) = server(vec![

@@ -1,12 +1,13 @@
 # cita
 
-cita is a Git-friendly bibliography CLI. It keeps authoritative source snapshots
-in `cita.toml` and deterministically generates the tracked `references.bib`.
-INSPIRE is the managed metadata provider: its records retain canonical
-identifiers selected from and cross-checked against INSPIRE's exact BibTeX and
-can be refreshed by stable record ID. Generic BibTeX ingestion is available
+cita is a Git-friendly reference manager. It keeps authoritative, readable
+reference fields in `cita.toml` — plus your own tags and notes — and
+deterministically generates the tracked `references.bib`. INSPIRE is the managed
+metadata provider: its records can be refreshed by stable record ID, and a
+refresh never touches what you wrote. Generic BibTeX ingestion is available
 through `cita import`, which preserves each standalone entry's exact source
-bytes.
+bytes, and `cita edit` adds references no provider knows about — a book, a
+thesis, a web page.
 
 Requires Rust 1.88 or newer.
 
@@ -20,7 +21,8 @@ cargo install cita
 cita init
 cita add https://arxiv.org/abs/1207.7214 doi:10.1016/j.physletb.2012.08.020
 cita import local-references.bib
-cita list
+cita edit                      # add tags and notes, or a provider-less reference
+cita list --tag reading-list
 cita sync
 cita fetch 1207.7214
 ```
@@ -43,12 +45,11 @@ work as selectors.
 
 ## Commands
 
-- `cita init [--path <directory>]` creates an empty schema-1 project in the
+- `cita init [--path <directory>]` creates an empty schema-2 project in the
   current directory, or in the specified existing directory. Initialization
-  does not run Git, so malformed repository metadata or an unavailable Git
-  executable cannot prevent it. Commands run inside a nested project discover
+  runs no external programs. Commands run inside a nested project discover
   its nearest `cita.toml`. If only `references.bib` exists at the chosen
-  location, initialization imports every standalone entry. Existing schema-1
+  location, initialization imports every standalone entry. Existing schema-2
   projects are validated; any other schema is explicitly unsupported. The
   target directory must already exist, and invalid existing content is rejected
   without rewriting the managed files.
@@ -56,11 +57,17 @@ work as selectors.
   or stdin.
 - `cita add [--key K] <locator>...` resolves INSPIRE JSON and authoritative
   BibTeX. `--key` keeps an independent local key and accepts one locator.
-- `cita sync` refreshes only INSPIRE snapshots by stable record ID and leaves
-  imported entries byte-for-byte unchanged.
+- `cita sync` refreshes only INSPIRE-managed entries by stable record ID. It
+  leaves unmanaged entries byte-for-byte unchanged, and leaves the `tags` and
+  `notes` on a managed entry exactly as you wrote them.
 - `cita remove <selector>...` removes a batch atomically.
-- `cita list [--sort-by key|title|author|year] [--order asc|desc]` displays
-  source-neutral projections.
+- `cita list [--sort-by key|title|author|year] [--order asc|desc] [--tag <TAG>]`
+  lists stored references. `--tag` is repeatable and narrows: an entry has to
+  carry every tag named.
+- `cita edit` opens the whole manifest in `$VISUAL`, `$EDITOR`, or `vi`. This is
+  where you add tags and notes, and the only way to create a reference no
+  provider knows about. A rejected edit is re-opened with the reasons as `#`
+  comments above your own text; save it back unchanged to give up.
 - `cita generate` repairs a missing or edited `references.bib` from the
   authoritative manifest.
 - `cita export [-o/--output <file>]` writes a derived BibTeX file for tools that
@@ -78,9 +85,6 @@ work as selectors.
   `--source` and `--url` are mutually exclusive. `--open` launches the returned
   target with the system default application. Without `--save`, an unmatched
   locator uses INSPIRE JSON only.
-- `cita commit` is an optional Git helper. It validates consistency and commits
-  only `cita.toml` and `references.bib`, leaving unrelated staged changes
-  intact. It refuses to run if either managed file is already staged.
 - `cita library init [--path <directory>]` creates an idempotent
   `cita-library.toml` registry in an existing directory. A library root cannot
   itself be a cita project.
@@ -91,10 +95,10 @@ work as selectors.
   import an existing standalone `references.bib`, or adopt an existing verified
   cita project. Initialization completes before registration, so a registry
   write failure leaves a usable standalone shelf for a safe retry.
-- `-s/--shelf <name>` runs any of `add`, `import`, `remove`, `list`, `generate`,
-  `export`, `sync`, `fetch`, and `commit` in that registered shelf instead of
-  the project discovered from the current directory. Import and export paths
-  remain relative to the directory where the user invoked cita, not to the
+- `-s/--shelf <name>` runs any of `add`, `import`, `remove`, `list`, `edit`,
+  `generate`, `export`, `sync`, and `fetch` in that registered shelf
+  instead of the project discovered from the current directory. Import and export
+  paths remain relative to the directory where the user invoked cita, not to the
   shelf. A shelf export is named for the stable registered shelf name rather
   than the shelf directory, so importing each file into Zotero yields one
   collection per shelf.
@@ -102,8 +106,8 @@ work as selectors.
   order, continuing after shelf-specific failures, printing one result per
   shelf, and exiting unsuccessfully if any shelf failed. It is mutually
   exclusive with `--shelf`, and with `export --output`, which cannot name a file
-  for each shelf. The remaining commands are deliberately excluded: there is no
-  library-wide commit, and mutations stay per-shelf.
+  for each shelf. The remaining commands are deliberately excluded: mutations
+  stay per-shelf.
 - `cita completions <bash|elvish|fish|powershell|zsh>` prints a shell completion
   script to stdout, e.g. `cita completions zsh > ~/.zfunc/_cita`.
 
@@ -113,17 +117,74 @@ are written to stderr. For example, choose a specific PDF viewer on macOS with
 
 ## Storage rules
 
-`cita.toml` is the sole authority. Each sorted local key contains one tagged
-source snapshot (`inspire` or `import`). Snapshots are strictly validated and
-duplicate normalized DOI, arXiv, or provider identities are rejected across all
-sources.
+`cita.toml` is the sole authority. Each sorted local key holds one entry:
 
-The projected `Reference` intentionally contains only the fields Cita needs for
-selection and display: title, authors, collaborations, year, and DOI/arXiv/
-provider identifiers. The authoritative BibTeX remains available in the source
-snapshot for all other bibliographic data.
+```toml
+schema = 2
 
-`references.bib` behaves like a lockfile: entries are sorted by local key,
+[references.Higgs2012]
+type = "article"
+title = "Observation of a new particle in the search for the SM Higgs boson"
+authors = ["Georges Aad", "Brad Abbott", "Dale Charles Abbott"]
+collaborations = ["ATLAS"]
+year = 2012
+doi = "10.1016/j.physletb.2012.08.020"
+arxiv = "1207.7214"
+tags = [
+    "atlas",
+    "higgs",
+]
+notes = ["Superseded for the mass measurement by 1503.07589."]
+bibtex = """
+@article{ATLAS:2012yve,
+    title = "{Observation of a new particle}",
+    author = "Aad, Georges and others",
+    eprint = "1207.7214"
+}"""
+
+[references.Higgs2012.inspire]
+record_id = 1124337
+updated = "2026-06-26T15:56:33.515824+00:00"
+
+[references.Rovelli2004]
+type = "book"
+title = "Quantum Gravity"
+authors = ["Carlo Rovelli"]
+year = 2004
+tags = ["reading-list"]
+```
+
+The structured fields are authoritative. They are seeded once, when the reference
+is added or imported, and are never re-derived afterwards. `tags` and `notes` are
+yours: no command rewrites them. `bibtex` is the exact entry a provider or an
+import supplied — immutable, never generated from the fields above it, and
+absent entirely for a reference no provider knows about.
+
+For a managed entry, `type`, `authors`, `collaborations`, and `year` come
+straight from INSPIRE's curated JSON record, not from `bibtex` — note above how
+`type` is `"article"` (INSPIRE's `document_type`) while the stored `bibtex`
+starts `@article{...}` only by coincidence, and how `authors` lists real names
+(capped at 10) rather than the BibTeX rendering's `"Aad, Georges and others"`.
+An imported entry has no such record to draw on, so its `type` and `authors`
+come from the BibTeX file itself.
+
+An entry with an `inspire` sub-table is *managed*: `cita sync` refreshes its
+bibliographic fields by stable record ID. An entry without one is unmanaged and
+is never touched by a provider. `cita edit` enforces the same line, refusing a
+change to a managed entry's provider-owned fields, or to any `bibtex`, and naming
+the field it refused.
+
+Entries are strictly validated, and duplicate normalized DOI, arXiv, or provider
+identities are rejected across every entry.
+
+Schema 2 is a hard break: a schema-1 `cita.toml` is rejected outright and there
+is no migration, because it stored opaque BibTeX with no structured fields to
+read. To recover, delete `cita.toml` and run `cita init`, which rebuilds from
+`references.bib` — then re-run `cita add` for anything you want managed again,
+since a BibTeX entry carries no INSPIRE record ID.
+
+`references.bib` holds the entries that have BibTeX, not every reference, and
+behaves like a lockfile: entries are sorted by local key,
 separated by one blank line, and end with one newline. Preserved field bytes are
 unchanged; only the citation-key token may be re-keyed. Every normal command
 checks its exact bytes against the manifest and reports drift. Use `cita
@@ -137,9 +198,9 @@ updating the previous import.
 
 Mutations validate and render the complete candidate in memory, atomically
 persist `references.bib` first, and persist `cita.toml` as the commit point.
-Downloaded PDFs and extracted source packages live under `.cita/files`;
-initialization adds
-`/.cita/files/` to the project root's `.gitignore` so the cache is not tracked.
+Downloaded PDFs and extracted source packages live under `.cita/files`; if you
+track the project in Git, add `/.cita/files/` to your own `.gitignore` so the
+cache is not tracked.
 
 A library is only a sorted registry of shelf names and relative paths. Each
 shelf has its own `cita.toml`, `references.bib`, `.cita/files` cache, identities,
@@ -150,15 +211,16 @@ the library root, overlap or nest, or alias one another through symlinks.
 ## Workspace
 
 - `cita-core`: locators, neutral `Reference` vocabulary, and provider traits.
-- `cita-bibliography`: standalone BibTeX snapshot projection, raw-entry
-  preservation, re-keying, and `biblatex`-based generic rendering.
+- `cita-bibliography`: standalone BibTeX snapshot projection at ingest,
+  raw-entry preservation, re-keying, and `biblatex`-based generic rendering.
 - `cita-inspire-client`: typed INSPIRE JSON metadata, authoritative BibTeX
   snapshots, and stable-ID refreshes.
-- `cita-manifest`: schema-1 shelf and library validation, identity indexes,
-  deterministic TOML, path safety, output verification, and coordinated writes.
+- `cita-manifest`: schema-2 entries, shelf and library validation, identity
+  indexes, deterministic TOML, path safety, output verification, and coordinated
+  writes.
 - `cita-documents`: validated arXiv PDF/source downloads, safe source
   extraction, and atomic caching.
-- `cita`: CLI wiring, discovery, selectors, and scoped Git commits.
+- `cita`: CLI wiring, discovery, and selectors.
 
 ## Development
 

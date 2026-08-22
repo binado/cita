@@ -1,12 +1,10 @@
 use super::{add_message, ensure_cache_layout, find_manifest, highlight_style, inspire_client};
 use anyhow::{Context, Result};
-use cita_core::{Locator, MetadataProvider, Reference, ReferenceSource};
+use cita_core::{Locator, MetadataProvider};
 use cita_documents::{
     ArtifactKind, DocumentStore, Error as DocumentError, FetchOutcome, FetchPolicy, arxiv_pdf_url,
 };
-use cita_manifest::{
-    AddOutcome, ConflictPolicy, KeyRequest, Manifest, PendingReference, SourceSnapshot,
-};
+use cita_manifest::{AddOutcome, ConflictPolicy, Entry, KeyRequest, Manifest, PendingReference};
 use std::{
     fmt,
     io::{self, IsTerminal},
@@ -16,7 +14,7 @@ use std::{
 #[derive(Clone)]
 struct Selected {
     key: String,
-    reference: Reference,
+    arxiv: Option<String>,
     manifest_path: PathBuf,
     save_outcome: Option<AddOutcome>,
 }
@@ -24,11 +22,13 @@ struct Selected {
 async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
     let path = find_manifest(cwd)?;
     let mut manifest = Manifest::load_verified(&path)?;
-    if let Some(item) = manifest.find(selector)? {
-        let save_outcome = save.then(|| AddOutcome::Existing(item.key.clone()));
+    if let Some((key, entry)) = manifest.find(selector) {
+        let key = key.to_owned();
+        let arxiv = entry.arxiv.clone();
+        let save_outcome = save.then(|| AddOutcome::Existing(key.clone()));
         return Ok(Selected {
-            key: item.key,
-            reference: item.reference,
+            key,
+            arxiv,
             manifest_path: path,
             save_outcome,
         });
@@ -40,12 +40,13 @@ async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
     if save {
         let record = client.resolve(&locator).await?;
         let key = record.texkey.clone();
-        let reference = record.project()?;
+        let entry = Entry::from_inspire(record)?;
+        let arxiv = entry.arxiv.clone();
         let outcome = manifest
             .add_batch(
                 vec![PendingReference {
                     key: KeyRequest::Suggested(key),
-                    source: SourceSnapshot::inspire(record),
+                    entry,
                 }],
                 ConflictPolicy::Skip,
             )?
@@ -59,7 +60,7 @@ async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
         };
         Ok(Selected {
             key,
-            reference,
+            arxiv,
             manifest_path: path,
             save_outcome: Some(outcome),
         })
@@ -67,7 +68,7 @@ async fn select(cwd: &Path, selector: &str, save: bool) -> Result<Selected> {
         let reference = client.resolve_reference(&locator).await?;
         Ok(Selected {
             key: selector.into(),
-            reference,
+            arxiv: reference.identifiers.arxiv.into_iter().next(),
             manifest_path: path,
             save_outcome: None,
         })
@@ -105,10 +106,8 @@ pub(crate) async fn fetch(cwd: &Path, selector: &str, options: FetchOptions) -> 
         );
     }
     let arxiv = selected
-        .reference
-        .identifiers
         .arxiv
-        .first()
+        .as_deref()
         .ok_or_else(|| anyhow::anyhow!("reference `{}` has no arXiv eprint", selected.key))?;
     let url = arxiv_pdf_url(arxiv)?.to_string();
     let target = if options.return_url {

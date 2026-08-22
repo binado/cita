@@ -1,5 +1,4 @@
 mod commands;
-mod git;
 
 use anyhow::{Context, Result};
 use clap::{Args, CommandFactory, Parser, Subcommand};
@@ -26,14 +25,14 @@ enum Command {
     Remove(RemoveArgs),
     /// List stored references
     List(ListArgs),
+    /// Edit the whole manifest in $VISUAL, $EDITOR, or vi
+    Edit(ShelfArg),
     /// Regenerate a missing or edited references.bib
     Generate(ScopeArgs),
     /// Write a derived BibTeX export with arXiv PDF URLs, for tools like Zotero
     Export(ExportArgs),
     /// Fetch or resolve a reference's arXiv PDF or source package
     Fetch(FetchArgs),
-    /// Commit the managed files; refuses to run if either managed file is already staged
-    Commit(ShelfArg),
     /// Manage a multi-project cita library
     Library {
         #[command(subcommand)]
@@ -124,6 +123,9 @@ struct ListArgs {
     /// Do not wrap long titles to the terminal width
     #[arg(long)]
     no_wrap_title: bool,
+    /// Show only references carrying this tag; repeat to require every tag
+    #[arg(long = "tag", value_name = "TAG")]
+    tags: Vec<String>,
     #[command(flatten)]
     scope: ShelfArg,
 }
@@ -274,10 +276,15 @@ async fn run() -> Result<RunOutcome> {
             sort_by,
             order,
             no_wrap_title,
+            tags,
             scope,
         })) => {
             let target = commands::resolve_target(&cwd, scope.shelf.as_deref())?;
-            commands::list(&target.directory, sort_by, order, !no_wrap_title)?
+            commands::list(&target.directory, sort_by, order, !no_wrap_title, &tags)?
+        }
+        Some(Command::Edit(scope)) => {
+            let target = commands::resolve_target(&cwd, scope.shelf.as_deref())?;
+            commands::edit(&target.directory)?
         }
         Some(Command::Generate(scope)) => {
             if scope.all_shelves {
@@ -303,10 +310,6 @@ async fn run() -> Result<RunOutcome> {
             let target = commands::resolve_target(&cwd, args.scope.shelf.as_deref())?;
             let (selector, options) = args.into_options();
             commands::fetch(&target.directory, &selector, options).await?
-        }
-        Some(Command::Commit(scope)) => {
-            let target = commands::resolve_target(&cwd, scope.shelf.as_deref())?;
-            git::commit(&commands::find_manifest(&target.directory)?)?
         }
         Some(Command::Library { command }) => match command {
             LibraryCommand::Init(args) => commands::init_library(&cwd, args.path.as_deref())?,
@@ -395,7 +398,6 @@ mod tests {
             vec!["cita", "library", "generate"],
             vec!["cita", "library", "export"],
             vec!["cita", "library", "sync"],
-            vec!["cita", "library", "commit"],
         ] {
             assert!(Cli::try_parse_from(args).is_err());
         }
@@ -409,12 +411,12 @@ mod tests {
             vec!["cita", "import", "-s", "paper", "-"],
             vec!["cita", "remove", "-s", "paper", "Key"],
             vec!["cita", "list", "-s", "paper"],
+            vec!["cita", "edit", "-s", "paper"],
             vec!["cita", "generate", "-s", "paper"],
             vec!["cita", "export", "-s", "paper"],
             vec!["cita", "export", "-s", "paper", "-o", "x.bib"],
             vec!["cita", "sync", "-s", "paper"],
             vec!["cita", "fetch", "-s", "paper", "Key"],
-            vec!["cita", "commit", "-s", "paper"],
         ] {
             assert!(Cli::try_parse_from(args.clone()).is_ok(), "{args:?}");
         }
@@ -430,12 +432,11 @@ mod tests {
             assert!(Cli::try_parse_from(args.clone()).is_ok(), "{args:?}");
         }
         for args in [
-            // A library-wide commit is deliberately absent.
-            vec!["cita", "commit", "--all-shelves"],
             vec!["cita", "add", "--all-shelves", "1207.7214"],
             vec!["cita", "import", "--all-shelves", "-"],
             vec!["cita", "remove", "--all-shelves", "Key"],
             vec!["cita", "list", "--all-shelves"],
+            vec!["cita", "edit", "--all-shelves"],
             vec!["cita", "fetch", "--all-shelves", "Key"],
             // One shelf or every shelf, never both.
             vec!["cita", "sync", "-s", "paper", "--all-shelves"],
@@ -444,6 +445,34 @@ mod tests {
         ] {
             assert!(Cli::try_parse_from(args.clone()).is_err(), "{args:?}");
         }
+    }
+
+    #[test]
+    fn list_accepts_repeatable_tag_filters() {
+        for args in [
+            vec!["cita", "list", "--tag", "higgs"],
+            vec!["cita", "list", "--tag", "higgs", "--tag", "atlas"],
+            vec![
+                "cita",
+                "list",
+                "--tag",
+                "higgs",
+                "--sort-by",
+                "year",
+                "-s",
+                "paper",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args.clone()).is_ok(), "{args:?}");
+        }
+        // A tag is a value, never a bare positional or a comma-joined list.
+        assert!(Cli::try_parse_from(["cita", "list", "--tag"]).is_err());
+        assert!(Cli::try_parse_from(["cita", "list", "higgs"]).is_err());
+        let cli = Cli::try_parse_from(["cita", "list", "--tag", "a", "--tag", "b"]).unwrap();
+        let Some(Command::List(args)) = cli.command else {
+            unreachable!()
+        };
+        assert_eq!(args.tags, ["a", "b"]);
     }
 
     #[test]

@@ -13,28 +13,28 @@ pub(crate) async fn sync(cwd: &Path) -> Result<()> {
 pub(crate) struct SyncOutcome {
     changed: bool,
     managed: usize,
-    imported: usize,
+    unmanaged: usize,
 }
 
 impl SyncOutcome {
     fn synced_message(self, lead: &str, include_left: bool) -> String {
         if include_left {
             format!(
-                "{lead} {} managed references; left {} imported unchanged",
-                self.managed, self.imported
+                "{lead} {} managed references; left {} unmanaged unchanged",
+                self.managed, self.unmanaged
             )
         } else {
             format!(
-                "{lead} {} managed references; {} imported unchanged",
-                self.managed, self.imported
+                "{lead} {} managed references; {} unmanaged unchanged",
+                self.managed, self.unmanaged
             )
         }
     }
 
     fn already_message(self, lead: &str) -> String {
         format!(
-            "{lead}: {} managed, {} imported",
-            self.managed, self.imported
+            "{lead}: {} managed, {} unmanaged",
+            self.managed, self.unmanaged
         )
     }
 
@@ -65,13 +65,13 @@ pub(crate) async fn sync_outcome(cwd: &Path) -> Result<SyncOutcome> {
     let mut manifest = Manifest::load_verified(find_manifest(cwd)?)?;
     let ids = manifest.inspire_record_ids();
     let managed = ids.len();
-    let imported = manifest.references().len() - managed;
+    let unmanaged = manifest.references().len() - managed;
     let provider_ids = ids.iter().map(u64::to_string).collect::<Vec<_>>();
     let refreshed = inspire_client()?.refresh(&provider_ids).await?;
     let changed = manifest.replace_inspire(refreshed)?;
     Ok(SyncOutcome {
         changed,
         managed,
-        imported,
+        unmanaged,
     })
 }
